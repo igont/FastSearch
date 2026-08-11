@@ -1,0 +1,8 @@
+[package]
+name = "fastsearch-d2-tantivy-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tantivy = "=0.26.1"
