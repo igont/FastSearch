@@ -176,6 +176,30 @@ fn complete_scan_validates_all_snapshots_before_mutating_and_rolls_back_as_one_t
     assert_record(&store, "reference:replacement", false);
     assert_eq!(store.lifecycle_status().state_generation(), 1);
     assert_eq!(store.lifecycle_status().freshness(), IndexFreshness::Stale);
+    let ledger = Connection::open(&path)
+        .expect("open ledger connection")
+        .query_row(
+            "SELECT source_key, file_hash FROM state_source_snapshots",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .expect("accepted ledger remains durable");
+    assert_eq!(
+        ledger,
+        ("13:docs/guide.mdF".to_owned(), "file:guide-v1".to_owned())
+    );
+    let membership = Connection::open(&path)
+        .expect("open membership connection")
+        .query_row(
+            "SELECT source_key, record_id FROM state_source_memberships",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .expect("accepted membership remains durable");
+    assert_eq!(
+        membership,
+        ("13:docs/guide.mdF".to_owned(), "guide:accepted".to_owned())
+    );
     drop(store);
     fs::remove_file(path).expect("remove database");
 }
