@@ -1,0 +1,5 @@
+No Rust compiler diagnostic was required for the causal RED.
+
+The RED is an intentional runtime assertion after the spike compiles successfully; see
+`red-command.txt` and `red-observation.md`. Tool progress output is not retained because it is
+environment-dependent and is regenerated under ignored `target/d1-markdown-tsv-evidence/`.

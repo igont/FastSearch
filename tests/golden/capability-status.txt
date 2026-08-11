@@ -1,0 +1,5 @@
+Source=Mock
+State=Mock
+LexicalRetrieval=Mock
+VectorRetrieval=Unavailable
+CodeMaps=Unavailable

@@ -1,0 +1,9 @@
+[package]
+name = "fastsearch-d3-sqlite-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fastsearch = { path = "../.." }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
