@@ -1,13 +1,13 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     CanonicalRecord, ContentHash, ErrorKind, FastSearchError, IndexFreshness, LifecycleStatus,
-    RecordKind, SourceLocator, SourceSelector, StableId,
+    RecordKind, SourceLocator, SourceSelector, SourceSnapshot, StableId,
 };
-use crate::ports::StateStore;
+use crate::ports::{StateChange, StateChangeSet, StateStore};
 
 /// Внутренний SQLite-владелец durable canonical records.
 pub struct SqliteStateStore {
@@ -56,6 +56,16 @@ impl SqliteStateStore {
                     related_id TEXT NOT NULL,
                     PRIMARY KEY (record_id, position)
                 );
+                CREATE TABLE IF NOT EXISTS state_source_snapshots (
+                    source_key TEXT PRIMARY KEY,
+                    file_hash TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS state_source_memberships (
+                    source_key TEXT NOT NULL REFERENCES state_source_snapshots(source_key) ON DELETE CASCADE,
+                    record_id TEXT NOT NULL REFERENCES state_records(id) ON DELETE CASCADE,
+                    PRIMARY KEY (source_key, record_id),
+                    UNIQUE (record_id)
+                );
                 ",
             )
             .map_err(state_failure)?;
@@ -99,6 +109,59 @@ impl SqliteStateStore {
             )
             .map_err(state_failure)?;
         u64::try_from(value).map_err(|_| state_failure("stored generation is outside u64"))
+    }
+
+    fn existing_source_records(
+        &self,
+        source_key: &str,
+    ) -> Result<BTreeMap<StableId, ContentHash>, FastSearchError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT r.id, r.content_hash
+                 FROM state_source_memberships AS m
+                 JOIN state_records AS r ON r.id = m.record_id
+                 WHERE m.source_key = ?1
+                 ORDER BY r.id",
+            )
+            .map_err(state_failure)?;
+        statement
+            .query_map([source_key], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(state_failure)?
+            .map(|row| {
+                let (id, hash) = row.map_err(state_failure)?;
+                Ok((
+                    StableId::parse(id).map_err(|error| state_failure(error.message()))?,
+                    ContentHash::parse(hash).map_err(|error| state_failure(error.message()))?,
+                ))
+            })
+            .collect()
+    }
+
+    fn reject_cross_source_ids(
+        &self,
+        source_key: &str,
+        records: &[CanonicalRecord],
+    ) -> Result<(), FastSearchError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT source_key FROM state_source_memberships WHERE record_id = ?1")
+            .map_err(state_failure)?;
+        for record in records {
+            let owner = statement
+                .query_row([record.id().as_str()], |row| row.get::<_, String>(0))
+                .optional()
+                .map_err(state_failure)?;
+            if owner.as_deref().is_some_and(|owner| owner != source_key) {
+                return Err(FastSearchError::new(
+                    ErrorKind::DuplicateStableId,
+                    "snapshot record is already owned by another source locator",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -188,6 +251,76 @@ impl StateStore for SqliteStateStore {
         }
         transaction.commit().map_err(state_failure)?;
         Ok(removed)
+    }
+
+    fn apply_snapshot(
+        &mut self,
+        snapshot: SourceSnapshot,
+    ) -> Result<StateChangeSet, FastSearchError> {
+        let records = snapshot.records();
+        let mut ids = BTreeSet::new();
+        if records
+            .iter()
+            .any(|record| !ids.insert(record.id().as_str()))
+        {
+            return Err(FastSearchError::new(
+                ErrorKind::DuplicateStableId,
+                "snapshot contains duplicate stable IDs",
+            ));
+        }
+
+        let source_key = source_key(snapshot.locator());
+        self.reject_cross_source_ids(&source_key, records)?;
+        let previous = self.existing_source_records(&source_key)?;
+        let current_ids = records
+            .iter()
+            .map(|record| record.id().clone())
+            .collect::<BTreeSet<_>>();
+        let mut changes = records
+            .iter()
+            .map(|record| match previous.get(record.id()) {
+                None => StateChange::Added,
+                Some(hash) if hash == record.content_hash() => StateChange::Unchanged,
+                Some(_) => StateChange::Changed,
+            })
+            .collect::<Vec<_>>();
+        changes.extend(
+            previous
+                .keys()
+                .filter(|id| !current_ids.contains(*id))
+                .map(|_| StateChange::Deleted),
+        );
+        let logical_change = changes
+            .iter()
+            .any(|change| *change != StateChange::Unchanged);
+
+        let transaction = self.connection.transaction().map_err(state_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO state_source_snapshots (source_key, file_hash) VALUES (?1, ?2)
+                 ON CONFLICT(source_key) DO UPDATE SET file_hash = excluded.file_hash",
+                params![source_key, snapshot.file_hash().as_str()],
+            )
+            .map_err(state_failure)?;
+        for id in previous.keys() {
+            transaction
+                .execute("DELETE FROM state_records WHERE id = ?1", [id.as_str()])
+                .map_err(state_failure)?;
+        }
+        for record in records {
+            write_record(&transaction, record)?;
+            transaction
+                .execute(
+                    "INSERT INTO state_source_memberships (source_key, record_id) VALUES (?1, ?2)",
+                    params![source_key, record.id().as_str()],
+                )
+                .map_err(state_failure)?;
+        }
+        if logical_change {
+            increment_generation(&transaction)?;
+        }
+        transaction.commit().map_err(state_failure)?;
+        Ok(StateChangeSet::new(changes, self.generation()?))
     }
 
     fn lifecycle_status(&self) -> LifecycleStatus {
@@ -341,4 +474,33 @@ fn state_failure(error: impl std::fmt::Display) -> FastSearchError {
 fn storage_position(position: usize) -> Result<i64, FastSearchError> {
     i64::try_from(position)
         .map_err(|_| state_failure("record component position exceeds SQLite range"))
+}
+
+fn source_key(locator: &SourceLocator) -> String {
+    fn append_component(key: &mut String, value: &str) {
+        key.push_str(&value.len().to_string());
+        key.push(':');
+        key.push_str(value);
+    }
+
+    let mut key = String::new();
+    append_component(&mut key, locator.path());
+    match locator.selector() {
+        SourceSelector::MarkdownHeading { heading_path } => {
+            key.push('M');
+            for heading in heading_path {
+                append_component(&mut key, heading);
+            }
+        }
+        SourceSelector::RegistryRow { row } => {
+            key.push('R');
+            append_component(&mut key, &row.get().to_string());
+        }
+        SourceSelector::CodeSymbol { symbol } => {
+            key.push('C');
+            append_component(&mut key, symbol);
+        }
+        SourceSelector::WholeFile => key.push('F'),
+    }
+    key
 }
