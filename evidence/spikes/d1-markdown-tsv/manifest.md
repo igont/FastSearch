@@ -15,14 +15,14 @@ powershell -ExecutionPolicy Bypass -File spikes/d1-markdown-tsv/run.ps1 -Mode gr
 
 `red` deliberately supplies one shared identity and one shared content hash to two unlike
 fixtures. It must fail `assert_ne!`; `red-command.txt` records exit `101` and
-`red-run.stderr.txt` records the causal assertion. `green` supplies deterministic, distinct
+`red-observation.md` records the causal assertion. `green` supplies deterministic, distinct
 stable identifiers and SHA-256 values of the two fixture files; it must exit `0`.
 
 ## Contract classification
 
 | Evidence | Affected contract/path | Category | TODO / backflow | A revision | Superseded / rerun | Verdict |
 |---|---|---|---|---|---|---|
-| `red-command.txt`, `red-run.stderr.txt` | candidate record translation in `spikes/d1-markdown-tsv/main.rs`; public check through `fastsearch::domain::{CanonicalRecord, StableId, SourceLocator, ContentHash}` | `adapter-only/internal` | `TODO[D1-ADAPTER-NORMALIZATION]`: the future source adapter must parse real Markdown/TSV and derive accepted stable IDs, locators, metadata and content hashes before calling `CanonicalRecord::new`; this TODO does not alter the public A contract. | `01e557899e5be846bd59f233edf81270dda89da0` | `ACCEPTED`; rerun only if A revision changes | causal RED: shared identity is rejected by the oracle |
+| `red-command.txt`, `red-observation.md` | candidate record translation in `spikes/d1-markdown-tsv/main.rs`; public check through `fastsearch::domain::{CanonicalRecord, StableId, SourceLocator, ContentHash}` | `adapter-only/internal` | `TODO[D1-ADAPTER-NORMALIZATION]`: the future source adapter must parse real Markdown/TSV and derive accepted stable IDs, locators, metadata and content hashes before calling `CanonicalRecord::new`; this TODO does not alter the public A contract. | `01e557899e5be846bd59f233edf81270dda89da0` | `ACCEPTED`; rerun only if A revision changes | causal RED: shared identity is rejected by the oracle |
 | `green-command.txt`, `green-run.stdout.txt` | same public record boundary; readonly source `src/domain/record.rs` | `adapter-only/internal` | same exact future TODO; no A2 backflow and no replan | `01e557899e5be846bd59f233edf81270dda89da0` | `ACCEPTED`; rerun only if A revision changes | `подходит с ограничениями` |
 
 ## Observations
