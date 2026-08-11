@@ -96,6 +96,81 @@ impl Default for MockRuntime {
     }
 }
 
+/// Protocol-independent facade for every mock-facing surface.
+pub struct MockFacade {
+    runtime: MockRuntime,
+}
+
+impl MockFacade {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            runtime: MockRuntime::new(),
+        }
+    }
+
+    /// Executes the accepted mock search flow and renders its observable result.
+    pub fn render_mock_search(&self, text: &str) -> Result<String, FastSearchError> {
+        let query = SearchQuery::new(text, Default::default())?;
+        let response = self.search(&query)?;
+
+        Ok(format!(
+            "{}\n{}",
+            render_response(&query, &response),
+            render_status(&self.status())
+        ))
+    }
+
+    #[must_use]
+    pub const fn source_port(&self) -> &dyn SourcePort {
+        self.runtime.source_port()
+    }
+
+    #[must_use]
+    pub fn state_store(&mut self) -> &mut dyn StateStore {
+        self.runtime.state_store()
+    }
+
+    #[must_use]
+    pub const fn lexical_retrieval(&self) -> &dyn LexicalRetrieval {
+        self.runtime.lexical_retrieval()
+    }
+
+    #[must_use]
+    pub fn expected_record(&self) -> CanonicalRecord {
+        self.runtime.expected_record()
+    }
+
+    #[must_use]
+    pub fn query(&self) -> SearchQuery {
+        self.runtime.query()
+    }
+}
+
+impl Default for MockFacade {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentSurface for MockFacade {
+    fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
+        self.runtime.search(query)
+    }
+
+    fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
+        self.runtime.get(id)
+    }
+
+    fn related(&self, query: &RelatedQuery) -> Result<Vec<CanonicalRecord>, FastSearchError> {
+        self.runtime.related(query)
+    }
+
+    fn status(&self) -> Vec<CapabilityStatus> {
+        self.runtime.status()
+    }
+}
+
 impl AgentSurface for MockRuntime {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
         self.lexical.search(query)
@@ -136,4 +211,34 @@ fn fixture_record() -> CanonicalRecord {
         ContentHash::parse("fixture-hash-v1").expect("constant mock hash is valid"),
     )
     .expect("constant mock record is valid")
+}
+
+fn render_response(query: &SearchQuery, response: &SearchResponse) -> String {
+    let mut lines = vec![
+        format!("query={}", query.text()),
+        format!("hits={}", response.hits().len()),
+    ];
+
+    if let Some(hit) = response.hits().first() {
+        lines.push(format!("channel={:?}", hit.channel()));
+        lines.push(format!("score={}", hit.score()));
+        lines.push(format!("record={}", hit.record().id().as_str()));
+    }
+
+    lines.join("\n")
+}
+
+fn render_status(statuses: &[CapabilityStatus]) -> String {
+    statuses
+        .iter()
+        .map(|status| match status.state() {
+            crate::domain::CapabilityState::Available { backend } => {
+                format!("{:?}={backend:?}", status.capability())
+            }
+            crate::domain::CapabilityState::Unavailable { .. } => {
+                format!("{:?}=Unavailable", status.capability())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
