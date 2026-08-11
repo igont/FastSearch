@@ -2,6 +2,9 @@
 //!
 //! На этом этапе crate намеренно не предоставляет поисковые возможности.
 
+pub mod domain;
+pub mod ports;
+
 /// Возвращает наблюдаемый статус минимального каркаса приложения.
 #[must_use]
 pub const fn scaffold_status() -> &'static str {
@@ -20,3 +23,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod contract_tests;
