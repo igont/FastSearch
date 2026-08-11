@@ -1,0 +1,5 @@
+query=stable-id:guide
+hits=1
+channel=Exact
+score=1
+record=stable-id:guide

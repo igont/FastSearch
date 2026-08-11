@@ -1,0 +1,2 @@
+capability=CodeMaps
+error=CapabilityUnavailable

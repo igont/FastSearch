@@ -1,3 +1,6 @@
+// Each integration test compiles this reusable module independently.
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 
 use fastsearch::domain::{
@@ -6,6 +9,8 @@ use fastsearch::domain::{
     SearchResponse, SourceLocator, StableId,
 };
 use fastsearch::ports::{AgentSurface, LexicalRetrieval, SourcePort, StateStore};
+
+pub mod golden;
 
 /// Минимальная тестовая граница, которую могут реализовать будущие runtime mocks.
 pub trait PortContractFixture {
@@ -169,12 +174,8 @@ impl StateStore for MemoryState {
 struct ExactLexical(CanonicalRecord);
 
 impl LexicalRetrieval for ExactLexical {
-    fn search(&self, _query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        Ok(SearchResponse::new(vec![SearchHit::new(
-            self.0.clone(),
-            RetrievalChannel::Exact,
-            1.0,
-        )]))
+    fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
+        Ok(search_response(&self.0, query))
     }
 }
 
@@ -182,7 +183,7 @@ struct ReferenceAgent(CanonicalRecord);
 
 impl AgentSurface for ReferenceAgent {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        ExactLexical(self.0.clone()).search(query)
+        Ok(search_response(&self.0, query))
     }
 
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
@@ -215,6 +216,18 @@ impl AgentSurface for ReferenceAgent {
                 "reference fixture has no code maps",
             ),
         ]
+    }
+}
+
+fn search_response(record: &CanonicalRecord, query: &SearchQuery) -> SearchResponse {
+    if query.text() == "missing" {
+        SearchResponse::default()
+    } else {
+        SearchResponse::new(vec![SearchHit::new(
+            record.clone(),
+            RetrievalChannel::Exact,
+            1.0,
+        )])
     }
 }
 
