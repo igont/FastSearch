@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fastsearch::adapters::state::SqliteStateStore;
 use fastsearch::domain::{
-    CanonicalRecord, ContentHash, ErrorKind, FileHash, RecordKind, SourceLocator, SourceSnapshot,
-    StableId,
+    CanonicalRecord, ContentHash, ErrorKind, FileHash, IndexFreshness, RecordKind, SourceLocator,
+    SourceSnapshot, StableId,
 };
 use fastsearch::ports::{StateChange, StateStore};
 use rusqlite::Connection;
@@ -34,11 +34,59 @@ fn record(id: &str, content_hash: &str) -> CanonicalRecord {
 }
 
 fn snapshot(path: &str, hash: &str, records: Vec<CanonicalRecord>) -> SourceSnapshot {
-    SourceSnapshot::new(
-        SourceLocator::whole_file(path).unwrap(),
-        FileHash::parse(hash).unwrap(),
-        records,
-    )
+    snapshot_at(SourceLocator::whole_file(path).unwrap(), hash, records)
+}
+
+fn snapshot_at(
+    locator: SourceLocator,
+    hash: &str,
+    records: Vec<CanonicalRecord>,
+) -> SourceSnapshot {
+    SourceSnapshot::new(locator, FileHash::parse(hash).unwrap(), records)
+}
+
+#[test]
+fn source_ownership_uses_the_full_locator_including_selector() {
+    let path = database_path("full-locator");
+    let whole_file = SourceLocator::whole_file("docs/guide.md").unwrap();
+    let section = SourceLocator::markdown("docs/guide.md", ["Guide"]).unwrap();
+    let whole_record = record("guide:whole", "record:whole-v1");
+    let section_record = record("guide:section", "record:section-v1");
+    let mut store = SqliteStateStore::open(&path).unwrap();
+
+    assert_eq!(
+        store
+            .apply_snapshot(snapshot_at(
+                whole_file,
+                "file:whole-v1",
+                vec![whole_record.clone()],
+            ))
+            .unwrap()
+            .changes(),
+        &[StateChange::Added]
+    );
+    assert_eq!(
+        store
+            .apply_snapshot(snapshot_at(
+                section.clone(),
+                "file:section-v1",
+                vec![section_record],
+            ))
+            .unwrap()
+            .changes(),
+        &[StateChange::Added]
+    );
+    assert_eq!(
+        store
+            .apply_snapshot(snapshot_at(section, "file:section-v2", Vec::new()))
+            .unwrap()
+            .changes(),
+        &[StateChange::Deleted]
+    );
+    assert_record(&store, "guide:whole", Some(whole_record));
+    assert_record(&store, "guide:section", None);
+    drop(store);
+    fs::remove_file(path).unwrap();
 }
 
 fn assert_record(store: &SqliteStateStore, id: &str, expected: Option<CanonicalRecord>) {
@@ -184,6 +232,21 @@ fn failed_snapshot_transaction_rolls_back_records_ledger_and_generation() {
     assert_record(&store, "guide:accepted", Some(accepted.clone()));
     assert_record(&store, "guide:replacement", None);
     assert_eq!(store.lifecycle_status().state_generation(), 1);
+    assert_eq!(store.lifecycle_status().freshness(), IndexFreshness::Stale);
+    let ledger = Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT file_hash FROM state_source_snapshots", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap();
+    assert_eq!(ledger, "file-v1");
+    let memberships = Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM state_source_memberships", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    assert_eq!(memberships, 1);
     assert_eq!(
         store
             .apply_snapshot(snapshot("docs/guide.md", "file-v1", vec![accepted]))
