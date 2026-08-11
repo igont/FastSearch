@@ -3,7 +3,8 @@ use std::num::NonZeroUsize;
 
 use crate::domain::{
     BackendKind, CanonicalRecord, Capability, CapabilityState, CapabilityStatus, ContentHash,
-    ErrorKind, FastSearchError, RecordKind, SearchMode, SearchQuery, SourceLocator, StableId,
+    ErrorKind, FastSearchError, RecordKind, SearchMode, SearchQuery, SourceLocator, SourceSelector,
+    StableId,
 };
 use crate::ports::{
     AgentSurface, CodeMapPort, LexicalRetrieval, SourcePort, StateStore, SymbolPort,
@@ -48,6 +49,10 @@ fn canonical_record_preserves_identity_locator_content_metadata_relations_and_ha
 
     assert_eq!(record.id().as_str(), "TDR-42#search-boundary");
     assert_eq!(record.locator().path(), "docs/search.md");
+    assert_eq!(
+        record.searchable_content(),
+        "Exact lookup is distinct from full-text retrieval."
+    );
     assert_eq!(record.metadata().get("alignment"), Some(&"A1".to_owned()));
     assert_eq!(record.relations()[0].as_str(), "TDR-17");
     assert_eq!(record.content_hash().as_str(), "sha256:abc123");
@@ -62,6 +67,14 @@ fn registry_rows_and_code_symbols_have_precise_source_locators() {
 
     assert_eq!(row.path(), "registry.tsv");
     assert_eq!(symbol.path(), "src/lib.rs");
+    assert!(matches!(
+        row.selector(),
+        SourceSelector::RegistryRow { row } if row.get() == 7
+    ));
+    assert!(matches!(
+        symbol.selector(),
+        SourceSelector::CodeSymbol { symbol } if symbol == "fastsearch::scaffold_status"
+    ));
 }
 
 #[test]
