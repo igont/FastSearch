@@ -17,14 +17,14 @@ pub fn assert_golden_flow(
     let happy_response = fixture.agent().search(&happy_query).unwrap();
     assert_eq!(
         render_response(&happy_query, &happy_response),
-        happy_golden.trim()
+        normalized_golden(happy_golden)
     );
 
     let no_hit_query = SearchQuery::new(no_hit_query.trim(), Default::default()).unwrap();
     let no_hit_response = fixture.agent().search(&no_hit_query).unwrap();
     assert_eq!(
         render_response(&no_hit_query, &no_hit_response),
-        no_hit_golden.trim()
+        normalized_golden(no_hit_golden)
     );
 
     let id = fixture.expected_record().id().clone();
@@ -37,10 +37,14 @@ pub fn assert_golden_flow(
     );
     assert_eq!(
         "capability=CodeMaps\nerror=CapabilityUnavailable",
-        unavailable_golden.trim()
+        normalized_golden(unavailable_golden)
     );
 
-    assert_eq!(render_status(fixture), status_golden.trim());
+    assert_eq!(render_status(fixture), normalized_golden(status_golden));
+}
+
+fn normalized_golden(golden: &str) -> String {
+    golden.trim().replace("\r\n", "\n")
 }
 
 fn render_response(query: &SearchQuery, response: &fastsearch::domain::SearchResponse) -> String {
