@@ -1,31 +1,19 @@
 use std::process::ExitCode;
 
-use fastsearch::application::MockFacade;
+use fastsearch::application::{CliError, execute_cli};
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let Some(command) = args.next() else {
-        eprintln!("usage: fastsearch mock-search <query>");
-        return ExitCode::from(2);
-    };
-
-    let Some(query) = args.next() else {
-        eprintln!("usage: fastsearch mock-search <query>");
-        return ExitCode::from(2);
-    };
-
-    if command != "mock-search" || args.next().is_some() {
-        eprintln!("usage: fastsearch mock-search <query>");
-        return ExitCode::from(2);
-    }
-
-    match MockFacade::new().render_mock_search(&query) {
+    match execute_cli(std::env::args().skip(1).collect()) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("mock-search failed: {error}");
+        Err(CliError::Usage) => {
+            eprintln!("{}", CliError::usage());
+            ExitCode::from(2)
+        }
+        Err(CliError::Runtime(message)) => {
+            eprintln!("fastsearch failed: {message}");
             ExitCode::from(1)
         }
     }
