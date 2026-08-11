@@ -52,6 +52,16 @@ impl StateStore for MockState {
         ))
     }
 
+    fn reconcile_snapshots(
+        &mut self,
+        _snapshots: &[SourceSnapshot],
+    ) -> Result<crate::ports::StateChangeSet, FastSearchError> {
+        Err(FastSearchError::new(
+            ErrorKind::StateFailure,
+            "mock state does not reconcile source snapshots",
+        ))
+    }
+
     fn put(&mut self, record: CanonicalRecord) -> Result<(), FastSearchError> {
         self.records.insert(record.id().clone(), record);
         Ok(())

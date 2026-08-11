@@ -71,6 +71,16 @@ pub trait StateStore {
             "state adapter does not apply snapshots",
         ))
     }
+    /// Atomically reconciles the complete set of successfully scanned sources.
+    fn reconcile_snapshots(
+        &mut self,
+        _snapshots: &[SourceSnapshot],
+    ) -> Result<StateChangeSet, FastSearchError> {
+        Err(FastSearchError::new(
+            crate::domain::ErrorKind::StateFailure,
+            "state adapter does not reconcile source snapshots",
+        ))
+    }
 }
 
 /// Выполняет exact/lexical retrieval без привязки к конкретному индексу.
