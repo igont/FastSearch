@@ -127,7 +127,7 @@ fn exact_phrase_no_hit_mutation_reopen_degrade_and_rebuild_are_observable() {
     let duplicate = reopened
         .apply_projection(&[technical.clone(), technical.clone()], 9)
         .unwrap_err();
-    assert_eq!(duplicate.kind(), &ErrorKind::DuplicateStableId);
+    assert_eq!(duplicate.kind(), &ErrorKind::ProjectionFailure);
     assert_eq!(
         reopened.lifecycle_status().freshness(),
         IndexFreshness::Degraded

@@ -286,7 +286,7 @@ fn validate_unique_ids(records: &[CanonicalRecord]) -> Result<(), FastSearchErro
     for record in records {
         if !ids.insert(record.id().as_str()) {
             return Err(FastSearchError::new(
-                ErrorKind::DuplicateStableId,
+                ErrorKind::ProjectionFailure,
                 "projection input contains a duplicate stable identifier",
             ));
         }
