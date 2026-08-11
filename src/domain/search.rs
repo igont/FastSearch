@@ -1,4 +1,4 @@
-use super::{CanonicalRecord, ErrorKind, FastSearchError, StableId};
+use super::{CanonicalRecord, ErrorKind, FastSearchError, IndexFreshness, StableId};
 
 /// Режим представления результата; ranking реализуется adapters позднее.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -82,16 +82,28 @@ impl SearchHit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SearchResponse {
     hits: Vec<SearchHit>,
+    freshness: IndexFreshness,
 }
 
 impl SearchResponse {
     #[must_use]
     pub fn new(hits: Vec<SearchHit>) -> Self {
-        Self { hits }
+        Self {
+            hits,
+            freshness: IndexFreshness::NotConfigured,
+        }
+    }
+    #[must_use]
+    pub fn with_freshness(hits: Vec<SearchHit>, freshness: IndexFreshness) -> Self {
+        Self { hits, freshness }
     }
     #[must_use]
     pub fn hits(&self) -> &[SearchHit] {
         &self.hits
+    }
+    #[must_use]
+    pub const fn freshness(&self) -> IndexFreshness {
+        self.freshness
     }
 }
 

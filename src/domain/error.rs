@@ -13,6 +13,9 @@ pub enum ErrorKind {
     CapabilityUnavailable { capability: Capability },
     NotFound,
     StateFailure,
+    SourceFailure,
+    ProjectionFailure,
+    DuplicateStableId,
 }
 
 /// Структурированная ошибка FastSearch без привязки к транспортному формату.

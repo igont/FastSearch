@@ -26,6 +26,65 @@ pub enum CapabilityState {
     Unavailable { reason: String },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IndexFreshness {
+    #[default]
+    NotConfigured,
+    Current,
+    Stale,
+    Degraded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LifecycleStatus {
+    freshness: IndexFreshness,
+    state_generation: u64,
+    projection_generation: Option<u64>,
+    detail: String,
+}
+
+impl LifecycleStatus {
+    #[must_use]
+    pub fn not_configured(detail: impl Into<String>) -> Self {
+        Self {
+            freshness: IndexFreshness::NotConfigured,
+            state_generation: 0,
+            projection_generation: None,
+            detail: detail.into(),
+        }
+    }
+    #[must_use]
+    pub fn new(
+        freshness: IndexFreshness,
+        state_generation: u64,
+        projection_generation: Option<u64>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            freshness,
+            state_generation,
+            projection_generation,
+            detail: detail.into(),
+        }
+    }
+    #[must_use]
+    pub const fn freshness(&self) -> IndexFreshness {
+        self.freshness
+    }
+    #[must_use]
+    pub const fn state_generation(&self) -> u64 {
+        self.state_generation
+    }
+    #[must_use]
+    pub const fn projection_generation(&self) -> Option<u64> {
+        self.projection_generation
+    }
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
 /// Статус одной capability для CLI, будущего agent surface и tests.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilityStatus {
