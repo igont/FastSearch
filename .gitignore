@@ -1,0 +1,23 @@
+# Codex dynamic-tree runtime
+.agents/*
+!.agents/archive/
+.agents/archive/*
+!.agents/archive/*.zip
+
+# Rust build output
+/target/
+
+# FastSearch disposable local state
+/.cfknowledge/
+
+# Local configuration and secrets
+/.env
+/.env.*
+/*.local.toml
+
+# IDE and operating-system files
+/.idea/
+/.vscode/
+*.iml
+.DS_Store
+Thumbs.db
