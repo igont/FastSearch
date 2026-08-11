@@ -1,0 +1,2 @@
+﻿powershell -ExecutionPolicy Bypass -File spikes/d1-markdown-tsv/run.ps1 -Mode green
+exit=0
