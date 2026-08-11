@@ -9,3 +9,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "fastsearch"
 path = "src/main.rs"
+
+[dependencies]
+tantivy = "=0.26.1"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+sha2 = "=0.10.9"

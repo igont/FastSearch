@@ -49,6 +49,27 @@ impl ContentHash {
     }
 }
 
+/// Хеш исходного файла; не заменяет record hash канонической записи.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileHash(String);
+
+impl FileHash {
+    pub fn parse(value: impl Into<String>) -> Result<Self, FastSearchError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "file hash must not be blank",
+            ));
+        }
+        Ok(Self(value))
+    }
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Вид источника одной канонической записи.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordKind {
@@ -137,6 +158,41 @@ impl SourceLocator {
     #[must_use]
     pub const fn selector(&self) -> &SourceSelector {
         &self.selector
+    }
+}
+
+/// Наблюдаемый снимок одного исходного файла до state/lexical projections.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceSnapshot {
+    locator: SourceLocator,
+    file_hash: FileHash,
+    records: Vec<CanonicalRecord>,
+}
+
+impl SourceSnapshot {
+    #[must_use]
+    pub const fn new(
+        locator: SourceLocator,
+        file_hash: FileHash,
+        records: Vec<CanonicalRecord>,
+    ) -> Self {
+        Self {
+            locator,
+            file_hash,
+            records,
+        }
+    }
+    #[must_use]
+    pub const fn locator(&self) -> &SourceLocator {
+        &self.locator
+    }
+    #[must_use]
+    pub const fn file_hash(&self) -> &FileHash {
+        &self.file_hash
+    }
+    #[must_use]
+    pub fn records(&self) -> &[CanonicalRecord] {
+        &self.records
     }
 }
 
