@@ -1,14 +1,16 @@
 //! Filesystem boundary for read-only document sources.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::domain::{ErrorKind, FastSearchError};
+use sha2::{Digest, Sha256};
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
+use crate::domain::{
+    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
+    SourceSnapshot, StableId,
+};
+
 const EXCLUDED_DIRECTORIES: &[&str] = &[
     ".agents",
     ".cfknowledge",
@@ -20,10 +22,6 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
     "vendor",
 ];
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScannedSourceKind {
     Markdown,
@@ -31,10 +29,6 @@ enum ScannedSourceKind {
 }
 
 /// A verified filesystem source awaiting B2/B3 parsing.
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 #[derive(Debug)]
 struct ScannedSource {
     path: PathBuf,
@@ -43,10 +37,6 @@ struct ScannedSource {
     kind: ScannedSourceKind,
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
     let root = root
         .canonicalize()
@@ -65,10 +55,15 @@ fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
     Ok(sources)
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
+/// Reads canonical Markdown snapshots from the verified source root.
+pub fn markdown_snapshots(root: &Path) -> Result<Vec<SourceSnapshot>, FastSearchError> {
+    scan_sources(root)?
+        .iter()
+        .filter(|source| source.kind == ScannedSourceKind::Markdown)
+        .map(parse_markdown_source)
+        .collect()
+}
+
 fn scan_directory(
     root: &Path,
     directory: &Path,
@@ -111,10 +106,6 @@ fn scan_directory(
     Ok(())
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 fn read_source(
     root: &Path,
     path: PathBuf,
@@ -151,10 +142,6 @@ fn read_source(
     })
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 fn source_kind(path: &Path) -> Option<ScannedSourceKind> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("md") => Some(ScannedSourceKind::Markdown),
@@ -163,20 +150,289 @@ fn source_kind(path: &Path) -> Option<ScannedSourceKind> {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
+fn parse_markdown_source(source: &ScannedSource) -> Result<SourceSnapshot, FastSearchError> {
+    if source.kind != ScannedSourceKind::Markdown {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "expected Markdown source",
+        ));
+    }
+    if !source.path.is_absolute() {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "Markdown source path must remain canonical and absolute",
+        ));
+    }
+    let document = std::str::from_utf8(&source.bytes)
+        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
+    let document = normalize_document(document);
+    let frontmatter = parse_frontmatter(&document)?;
+    let mut sections = Vec::new();
+    let mut headings = Vec::new();
+    let mut current: Option<MarkdownSection> = None;
+
+    for line in frontmatter.markdown.lines() {
+        if let Some((level, heading)) = markdown_heading(line)? {
+            if let Some(section) = current.take() {
+                sections.push(section);
+            }
+            headings.truncate(level.saturating_sub(1));
+            headings.push(heading.clone());
+            current = Some(MarkdownSection {
+                headings: headings.clone(),
+                title: heading,
+                body: Vec::new(),
+            });
+        } else if let Some(section) = &mut current {
+            section.body.push(line.to_owned());
+        }
+    }
+    if let Some(section) = current {
+        sections.push(section);
+    }
+
+    let records = sections
+        .into_iter()
+        .map(|section| {
+            canonical_markdown_record(
+                &source.locator,
+                &frontmatter.metadata,
+                &frontmatter.relations,
+                section,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    let locator = SourceLocator::whole_file(&source.locator)
+        .map_err(|error| source_contract_failure(error.message()))?;
+    let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
+        .map_err(|error| source_contract_failure(error.message()))?;
+    Ok(SourceSnapshot::new(locator, file_hash, records))
+}
+
+#[derive(Debug)]
+struct MarkdownSection {
+    headings: Vec<String>,
+    title: String,
+    body: Vec<String>,
+}
+
+#[derive(Debug)]
+struct MarkdownFrontmatter {
+    metadata: BTreeMap<String, String>,
+    relations: Vec<StableId>,
+    markdown: String,
+}
+
+fn canonical_markdown_record(
+    path: &str,
+    metadata: &BTreeMap<String, String>,
+    relations: &[StableId],
+    section: MarkdownSection,
+) -> Result<Option<CanonicalRecord>, FastSearchError> {
+    let content = section.body.join("\n").trim().to_owned();
+    if content.is_empty() {
+        return Ok(None);
+    }
+    let heading_path = section.headings.join("/");
+    let id = StableId::parse(format!("markdown:{path}#{heading_path}"))
+        .map_err(|error| source_contract_failure(error.message()))?;
+    let locator = SourceLocator::markdown(path, section.headings.iter().cloned())
+        .map_err(|error| source_contract_failure(error.message()))?;
+    let content_hash = ContentHash::parse(markdown_record_hash(
+        path,
+        &section.headings,
+        &section.title,
+        &content,
+        metadata,
+        relations,
+    ))
+    .map_err(|error| source_contract_failure(error.message()))?;
+    CanonicalRecord::new(
+        id,
+        RecordKind::MarkdownSection,
+        locator,
+        section.title,
+        content,
+        metadata.clone(),
+        relations.to_vec(),
+        content_hash,
+    )
+    .map(Some)
+    .map_err(|error| source_contract_failure(error.message()))
+}
+
+fn normalize_document(document: &str) -> String {
+    document
+        .strip_prefix('\u{feff}')
+        .unwrap_or(document)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+}
+
+fn parse_frontmatter(document: &str) -> Result<MarkdownFrontmatter, FastSearchError> {
+    let Some(after_open) = document.strip_prefix("---\n") else {
+        return Ok(MarkdownFrontmatter {
+            metadata: BTreeMap::new(),
+            relations: Vec::new(),
+            markdown: document.to_owned(),
+        });
+    };
+    let (frontmatter, markdown) = after_open
+        .strip_prefix("---\n")
+        .map(|markdown| ("", markdown))
+        .or_else(|| (after_open == "---").then_some(("", "")))
+        .or_else(|| after_open.split_once("\n---\n"))
+        .or_else(|| {
+            after_open
+                .strip_suffix("\n---")
+                .map(|frontmatter| (frontmatter, ""))
+        })
+        .ok_or_else(|| {
+            FastSearchError::new(
+                ErrorKind::SourceFailure,
+                "unterminated Markdown frontmatter",
+            )
+        })?;
+    let mut metadata = BTreeMap::new();
+    let mut relations = Vec::new();
+    let mut relations_seen = false;
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line.split_once(':').ok_or_else(|| {
+            FastSearchError::new(
+                ErrorKind::SourceFailure,
+                "malformed Markdown frontmatter entry",
+            )
+        })?;
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() || !is_plain_scalar(value) {
+            return Err(FastSearchError::new(
+                ErrorKind::SourceFailure,
+                "frontmatter requires non-empty UTF-8 scalar key: value entries",
+            ));
+        }
+        if key == "relations" {
+            if relations_seen {
+                return Err(FastSearchError::new(
+                    ErrorKind::SourceFailure,
+                    "duplicate frontmatter key: relations",
+                ));
+            }
+            relations_seen = true;
+            relations = value
+                .split(',')
+                .map(str::trim)
+                .map(|relation| {
+                    StableId::parse(relation.to_owned()).map_err(|_| {
+                        FastSearchError::new(
+                            ErrorKind::SourceFailure,
+                            "frontmatter relations must be comma-separated non-empty StableIds",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+        } else if metadata.insert(key.to_owned(), value.to_owned()).is_some() {
+            return Err(FastSearchError::new(
+                ErrorKind::SourceFailure,
+                format!("duplicate frontmatter key: {key}"),
+            ));
+        }
+    }
+    Ok(MarkdownFrontmatter {
+        metadata,
+        relations,
+        markdown: markdown.to_owned(),
+    })
+}
+
+fn is_plain_scalar(value: &str) -> bool {
+    !value.starts_with(['[', '{', '|', '>'])
+}
+
+fn markdown_heading(line: &str) -> Result<Option<(usize, String)>, FastSearchError> {
+    let level = line.bytes().take_while(|byte| *byte == b'#').count();
+    if level == 0 {
+        return Ok(None);
+    }
+    let Some(rest) = line.get(level..) else {
+        return Ok(None);
+    };
+    if level > 6 || !rest.starts_with(char::is_whitespace) {
+        return Ok(None);
+    }
+    let heading = rest.trim().trim_end_matches('#').trim();
+    if heading.is_empty() {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "Markdown heading must not be blank",
+        ));
+    }
+    Ok(Some((level, heading.to_owned())))
+}
+
+fn markdown_record_hash(
+    path: &str,
+    headings: &[String],
+    title: &str,
+    content: &str,
+    metadata: &BTreeMap<String, String>,
+    relations: &[StableId],
+) -> String {
+    let mut fields = vec![
+        "markdown".to_owned(),
+        path.to_owned(),
+        headings.len().to_string(),
+    ];
+    fields.extend(headings.iter().cloned());
+    fields.extend([
+        title.to_owned(),
+        content.to_owned(),
+        metadata.len().to_string(),
+    ]);
+    for (key, value) in metadata {
+        fields.extend([key.clone(), value.clone()]);
+    }
+    fields.push(relations.len().to_string());
+    fields.extend(
+        relations
+            .iter()
+            .map(|relation| relation.as_str().to_owned()),
+    );
+    versioned_hash("record", fields.iter().map(String::as_str))
+}
+
+fn versioned_hash<'a>(scope: &str, fields: impl IntoIterator<Item = &'a str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fastsearch:sha256:v1\0");
+    update_hash_field(&mut hasher, scope);
+    for field in fields {
+        update_hash_field(&mut hasher, field);
+    }
+    format!("sha256:v1:{:x}", hasher.finalize())
+}
+
+fn update_hash_field(hasher: &mut Sha256, field: &str) {
+    hasher.update((field.len() as u64).to_be_bytes());
+    hasher.update(field.as_bytes());
+}
+
+fn source_contract_failure(message: &str) -> FastSearchError {
+    FastSearchError::new(ErrorKind::SourceFailure, message)
+}
+
 #[derive(Default)]
 struct RootExclusions {
     files: Vec<String>,
     directories: Vec<String>,
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 impl RootExclusions {
     fn read(root: &Path) -> Result<Self, FastSearchError> {
         let path = root.join(".gitignore");
@@ -202,10 +458,6 @@ impl RootExclusions {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 fn parse_root_gitignore_literal(line: &str) -> Result<(String, bool), FastSearchError> {
     let line = line.strip_prefix('/').unwrap_or(line);
     let is_directory = line.ends_with('/');
@@ -223,10 +475,6 @@ fn parse_root_gitignore_literal(line: &str) -> Result<(String, bool), FastSearch
     Ok((literal.to_owned(), is_directory))
 }
 
-#[allow(
-    dead_code,
-    reason = "B1 private scanner seam is test-covered and consumed by B2 parser."
-)]
 fn source_failure(context: &str, error: std::io::Error) -> FastSearchError {
     FastSearchError::new(ErrorKind::SourceFailure, format!("{context}: {error}"))
 }
@@ -237,9 +485,9 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::domain::ErrorKind;
+    use crate::domain::{ErrorKind, RecordKind, SourceSelector};
 
-    use super::{ScannedSourceKind, scan_sources};
+    use super::{ScannedSourceKind, markdown_snapshots, scan_sources};
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
@@ -332,6 +580,120 @@ mod tests {
         );
         fs::remove_dir(fixture.path().join("outside-junction")).expect("remove junction");
         fs::remove_dir_all(outside).expect("remove outside sentinel");
+    }
+
+    #[test]
+    fn markdown_parser_returns_expected_section_records_with_frontmatter_metadata_and_heading_locators()
+     {
+        let fixture = Fixture::new();
+        fixture.write(
+            "docs/guide.md",
+            "\u{feff}---\r\nalignment: CURRENT\r\nrelations: TDR-17, TDR-42\r\n# comment\r\nowner: Search team\r\n---\r\n\r\n# Руководство \r\nОбщий текст, не входящий в дочерние разделы.\r\n\r\n## Текущий поиск\r\n  русская фраза  \r\n\r\n### Детали\r\nТолько детали.\r\n\r\n## Пустой\r\n",
+        );
+        let snapshot = markdown_snapshots(fixture.path())
+            .expect("Markdown fixture must parse")
+            .pop()
+            .expect("one Markdown snapshot");
+
+        assert_eq!(snapshot.locator().path(), "docs/guide.md");
+        assert_eq!(
+            snapshot.file_hash().as_str(),
+            "sha256:v1:049137aac37fc6c181cf7578aae0edd86febfbf709551bae0478d72ded30ce5b"
+        );
+        assert_eq!(
+            snapshot.records().len(),
+            3,
+            "only sections with own body are records"
+        );
+
+        let guide = &snapshot.records()[0];
+        assert_eq!(guide.id().as_str(), "markdown:docs/guide.md#Руководство");
+        assert_eq!(
+            guide.searchable_content(),
+            "Общий текст, не входящий в дочерние разделы."
+        );
+
+        let current = &snapshot.records()[1];
+        assert_eq!(
+            current.id().as_str(),
+            "markdown:docs/guide.md#Руководство/Текущий поиск"
+        );
+        assert_eq!(current.kind(), RecordKind::MarkdownSection);
+        assert_eq!(current.title(), "Текущий поиск");
+        assert_eq!(current.searchable_content(), "русская фраза");
+        assert_eq!(
+            current.metadata().get("alignment").map(String::as_str),
+            Some("CURRENT")
+        );
+        assert_eq!(
+            current.metadata().get("owner").map(String::as_str),
+            Some("Search team")
+        );
+        assert_eq!(
+            current
+                .relations()
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>(),
+            ["TDR-17", "TDR-42"]
+        );
+        assert_eq!(
+            current.content_hash().as_str(),
+            "sha256:v1:2cfb1043a39b4505f3ea19fec06303d418d97ecd24dcadfe151949bbe56a6175"
+        );
+        assert_eq!(
+            current.locator().selector(),
+            &SourceSelector::MarkdownHeading {
+                heading_path: vec!["Руководство".to_owned(), "Текущий поиск".to_owned()]
+            }
+        );
+
+        let details = &snapshot.records()[2];
+        assert_eq!(
+            details.id().as_str(),
+            "markdown:docs/guide.md#Руководство/Текущий поиск/Детали"
+        );
+        assert_eq!(details.searchable_content(), "Только детали.");
+        assert_eq!(
+            details.content_hash().as_str(),
+            "sha256:v1:5fde02ced3c5d848eb99d67ba424a2c3a59a43b83fa71a8ab7190c3ad274de60"
+        );
+    }
+
+    #[test]
+    fn markdown_parser_rejects_invalid_frontmatter_without_partial_snapshot() {
+        for (name, invalid, expected_message) in [
+            (
+                "duplicate.md",
+                "---\nowner: team\nowner: duplicate\n---\n# Broken\ntext",
+                "duplicate frontmatter key",
+            ),
+            (
+                "malformed.md",
+                "---\nowner\n---\n# Broken\ntext",
+                "malformed Markdown frontmatter entry",
+            ),
+            (
+                "non-scalar.md",
+                "---\ntags: [a, b]\n---\n# Broken\ntext",
+                "scalar key: value",
+            ),
+            (
+                "unterminated.md",
+                "---\nowner: team\n# Broken\ntext",
+                "unterminated Markdown frontmatter",
+            ),
+        ] {
+            let fixture = Fixture::new();
+            fixture.write("valid.md", "# Valid\ntext");
+            fixture.write(name, invalid);
+
+            let error = markdown_snapshots(fixture.path())
+                .expect_err("one invalid Markdown source rejects the complete snapshot call");
+
+            assert_eq!(error.kind(), &ErrorKind::SourceFailure);
+            assert!(error.message().contains(expected_message));
+        }
     }
 
     #[cfg(windows)]
