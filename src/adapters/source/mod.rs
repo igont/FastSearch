@@ -1,7 +1,8 @@
 //! Filesystem boundary for read-only document sources.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -10,6 +11,7 @@ use crate::domain::{
     CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
     SourceSnapshot, StableId,
 };
+use crate::ports::SourcePort;
 
 const EXCLUDED_DIRECTORIES: &[&str] = &[
     ".agents",
@@ -57,10 +59,71 @@ fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
 
 /// Reads canonical Markdown snapshots from the verified source root.
 pub fn markdown_snapshots(root: &Path) -> Result<Vec<SourceSnapshot>, FastSearchError> {
+    collect_snapshots(root, Some(ScannedSourceKind::Markdown))
+}
+
+/// Read-only filesystem implementation of the source boundary.
+#[derive(Debug)]
+pub struct FilesystemSource {
+    root: PathBuf,
+}
+
+impl FilesystemSource {
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    fn snapshots(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
+        let snapshots = collect_snapshots(&self.root, None)?;
+        ensure_unique_snapshot_ids(&snapshots)?;
+        Ok(snapshots)
+    }
+}
+
+impl SourcePort for FilesystemSource {
+    fn records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
+        let snapshots = self.snapshots()?;
+        let mut records = Vec::new();
+        for snapshot in snapshots {
+            for record in snapshot.records() {
+                records.push(record.clone());
+            }
+        }
+        Ok(records)
+    }
+
+    fn snapshot(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
+        self.snapshots()
+    }
+}
+
+fn ensure_unique_snapshot_ids(snapshots: &[SourceSnapshot]) -> Result<(), FastSearchError> {
+    let mut ids = BTreeSet::new();
+    for snapshot in snapshots {
+        for record in snapshot.records() {
+            if !ids.insert(record.id().as_str()) {
+                return Err(FastSearchError::new(
+                    ErrorKind::DuplicateStableId,
+                    "source snapshots contain duplicate stable IDs",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_snapshots(
+    root: &Path,
+    kind: Option<ScannedSourceKind>,
+) -> Result<Vec<SourceSnapshot>, FastSearchError> {
     scan_sources(root)?
         .iter()
-        .filter(|source| source.kind == ScannedSourceKind::Markdown)
-        .map(parse_markdown_source)
+        .filter(|source| kind.is_none_or(|expected| source.kind == expected))
+        .map(|source| match source.kind {
+            ScannedSourceKind::Markdown => parse_markdown_source(source),
+            ScannedSourceKind::Tsv => parse_tsv_source(source),
+        })
         .collect()
 }
 
@@ -210,6 +273,116 @@ fn parse_markdown_source(source: &ScannedSource) -> Result<SourceSnapshot, FastS
     let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
         .map_err(|error| source_contract_failure(error.message()))?;
     Ok(SourceSnapshot::new(locator, file_hash, records))
+}
+
+fn parse_tsv_source(source: &ScannedSource) -> Result<SourceSnapshot, FastSearchError> {
+    if source.kind != ScannedSourceKind::Tsv {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "expected TSV source",
+        ));
+    }
+    if !source.path.is_absolute() {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "TSV source path must remain canonical and absolute",
+        ));
+    }
+    let document = std::str::from_utf8(&source.bytes)
+        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
+    let document = normalize_document(document);
+    let mut lines = document.lines().enumerate();
+    let Some((_, header)) = lines.next() else {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "TSV source requires a header row",
+        ));
+    };
+    let headers = parse_tsv_header(header)?;
+    let records = lines
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| parse_tsv_record(&source.locator, index + 1, &headers, line))
+        .collect::<Result<Vec<_>, _>>()?;
+    let locator = SourceLocator::whole_file(&source.locator)
+        .map_err(|error| source_contract_failure(error.message()))?;
+    let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
+        .map_err(|error| source_contract_failure(error.message()))?;
+    Ok(SourceSnapshot::new(locator, file_hash, records))
+}
+
+fn parse_tsv_header(header: &str) -> Result<Vec<String>, FastSearchError> {
+    let headers = header
+        .split('\t')
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if headers.len() < 2 || headers.iter().any(|header| header.is_empty()) {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "TSV header requires nonblank title and metadata columns",
+        ));
+    }
+    let unique = headers.iter().skip(1).collect::<BTreeSet<_>>();
+    if unique.len() != headers.len() - 1 || headers.iter().skip(1).any(|header| header == "format")
+    {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "TSV metadata headers must be unique and must not override format",
+        ));
+    }
+    Ok(headers)
+}
+
+fn parse_tsv_record(
+    path: &str,
+    row: usize,
+    headers: &[String],
+    line: &str,
+) -> Result<CanonicalRecord, FastSearchError> {
+    let cells = line.split('\t').map(str::trim).collect::<Vec<_>>();
+    if cells.len() != headers.len() {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "TSV data row does not match header arity",
+        ));
+    }
+    let title = cells[0];
+    if title.is_empty() {
+        return Err(FastSearchError::new(
+            ErrorKind::SourceFailure,
+            "TSV data row title must not be blank",
+        ));
+    }
+    let row = NonZeroUsize::new(row).ok_or_else(|| {
+        FastSearchError::new(ErrorKind::SourceFailure, "TSV row number must be non-zero")
+    })?;
+    let content = cells.join("\t");
+    let metadata = std::iter::once(("format".to_owned(), "tsv".to_owned()))
+        .chain(
+            headers
+                .iter()
+                .skip(1)
+                .zip(cells.iter().skip(1))
+                .map(|(header, cell)| (header.clone(), (*cell).to_owned())),
+        )
+        .collect::<BTreeMap<_, _>>();
+    let id = StableId::parse(format!("registry:{path}#row={row}"))
+        .map_err(|error| source_contract_failure(error.message()))?;
+    let locator = SourceLocator::registry_row(path, row)
+        .map_err(|error| source_contract_failure(error.message()))?;
+    let content_hash = ContentHash::parse(tsv_record_hash(path, row, title, &content, &metadata))
+        .map_err(|error| source_contract_failure(error.message()))?;
+    CanonicalRecord::new(
+        id,
+        RecordKind::RegistryRow,
+        locator,
+        title,
+        content,
+        metadata,
+        Vec::new(),
+        content_hash,
+    )
+    .map_err(|error| source_contract_failure(error.message()))
 }
 
 #[derive(Debug)]
@@ -408,6 +581,28 @@ fn markdown_record_hash(
     versioned_hash("record", fields.iter().map(String::as_str))
 }
 
+fn tsv_record_hash(
+    path: &str,
+    row: NonZeroUsize,
+    title: &str,
+    content: &str,
+    metadata: &BTreeMap<String, String>,
+) -> String {
+    let mut fields = vec![
+        "registry".to_owned(),
+        path.to_owned(),
+        row.to_string(),
+        title.to_owned(),
+        content.to_owned(),
+        metadata.len().to_string(),
+    ];
+    for (key, value) in metadata {
+        fields.extend([key.clone(), value.clone()]);
+    }
+    fields.push("0".to_owned());
+    versioned_hash("record", fields.iter().map(String::as_str))
+}
+
 fn versioned_hash<'a>(scope: &str, fields: impl IntoIterator<Item = &'a str>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"fastsearch:sha256:v1\0");
@@ -486,8 +681,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::domain::{ErrorKind, RecordKind, SourceSelector};
+    use crate::ports::SourcePort;
 
-    use super::{ScannedSourceKind, markdown_snapshots, scan_sources};
+    use super::{FilesystemSource, ScannedSourceKind, markdown_snapshots, scan_sources};
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
@@ -694,6 +890,121 @@ mod tests {
             assert_eq!(error.kind(), &ErrorKind::SourceFailure);
             assert!(error.message().contains(expected_message));
         }
+    }
+
+    #[test]
+    fn filesystem_source_returns_deterministic_markdown_and_tsv_records() {
+        let fixture = Fixture::new();
+        fixture.write("docs/guide.md", "# Guide\nMarkdown body");
+        fixture.write(
+            "registry.tsv",
+            "id\ttitle\tstatus\n2433\tTechnical entry\tcurrent\n",
+        );
+
+        let source = FilesystemSource::new(fixture.path());
+        let snapshots = source.snapshot().expect("combined fixture must parse");
+        let records = source.records().expect("combined records must parse");
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[1].locator().path(), "registry.tsv");
+        assert_eq!(
+            snapshots[1].file_hash().as_str(),
+            "sha256:v1:66d7796440424a405e8d426be285e89753d3066510fb477071cc124bea11ce32"
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.id().as_str())
+                .collect::<Vec<_>>(),
+            [
+                "markdown:docs/guide.md#Guide",
+                "registry:registry.tsv#row=2"
+            ]
+        );
+        let registry = &records[1];
+        assert_eq!(registry.kind(), RecordKind::RegistryRow);
+        assert_eq!(registry.title(), "2433");
+        assert_eq!(
+            registry.searchable_content(),
+            "2433\tTechnical entry\tcurrent"
+        );
+        assert_eq!(
+            registry.metadata().get("format").map(String::as_str),
+            Some("tsv")
+        );
+        assert_eq!(
+            registry.metadata().get("title").map(String::as_str),
+            Some("Technical entry")
+        );
+        assert_eq!(
+            registry.metadata().get("status").map(String::as_str),
+            Some("current")
+        );
+        assert_eq!(registry.relations(), []);
+        assert_eq!(
+            registry.locator().selector(),
+            &SourceSelector::RegistryRow {
+                row: 2.try_into().expect("non-zero row")
+            }
+        );
+        assert_eq!(
+            registry.content_hash().as_str(),
+            "sha256:v1:acbf4ea95bff0fc3e7641c553cbc19e8237c95c83a0043902e90348f235d819a"
+        );
+    }
+
+    #[test]
+    fn filesystem_source_rejects_malformed_tsv_without_partial_result() {
+        for (name, registry, expected_message) in [
+            (
+                "blank-header",
+                "id\t\n2433\tentry",
+                "nonblank title and metadata columns",
+            ),
+            (
+                "duplicate-header",
+                "id\tstatus\tstatus\n2433\tcurrent\tagain",
+                "headers must be unique",
+            ),
+            (
+                "reserved-header",
+                "id\tformat\n2433\tspoofed",
+                "must not override format",
+            ),
+            (
+                "wrong-arity",
+                "id\tstatus\n2433",
+                "does not match header arity",
+            ),
+            (
+                "blank-title",
+                "id\tstatus\n\tcurrent",
+                "title must not be blank",
+            ),
+        ] {
+            let fixture = Fixture::new();
+            fixture.write("valid.md", "# Valid\ntext");
+            fixture.write("registry.tsv", registry);
+
+            let error = FilesystemSource::new(fixture.path())
+                .records()
+                .expect_err(name);
+
+            assert_eq!(error.kind(), &ErrorKind::SourceFailure);
+            assert!(error.message().contains(expected_message));
+        }
+    }
+
+    #[test]
+    fn filesystem_source_rejects_duplicate_stable_ids() {
+        let fixture = Fixture::new();
+        fixture.write("duplicate.md", "# Repeated\nfirst\n# Repeated\nsecond");
+
+        let error = FilesystemSource::new(fixture.path())
+            .records()
+            .expect_err("duplicate records must never be silently overwritten");
+
+        assert_eq!(error.kind(), &ErrorKind::DuplicateStableId);
     }
 
     #[cfg(windows)]
