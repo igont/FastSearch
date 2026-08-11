@@ -173,12 +173,9 @@ impl TantivyLexical {
                 ))
             })
             .collect::<Result<Vec<_>, FastSearchError>>()?;
-        hits.sort_by(|left, right| {
-            left.record()
-                .id()
-                .as_str()
-                .cmp(right.record().id().as_str())
-        });
+        if channel == RetrievalChannel::Lexical {
+            rank_lexical_hits(&mut hits, query.mode());
+        }
         Ok(SearchResponse::with_freshness(hits, marker.freshness))
     }
 }
@@ -320,6 +317,39 @@ fn ascii_tokens(value: &str) -> Vec<String> {
 
 fn is_quoted(query: &str) -> bool {
     query.len() >= 2 && query.starts_with('"') && query.ends_with('"')
+}
+
+fn rank_lexical_hits(hits: &mut [SearchHit], mode: crate::domain::SearchMode) {
+    hits.sort_by(|left, right| {
+        lexical_mode_preference(right.record(), mode)
+            .cmp(&lexical_mode_preference(left.record(), mode))
+            .then_with(|| {
+                finite_relevance(right.score()).total_cmp(&finite_relevance(left.score()))
+            })
+            .then_with(|| {
+                left.record()
+                    .id()
+                    .as_str()
+                    .cmp(right.record().id().as_str())
+            })
+    });
+}
+
+fn lexical_mode_preference(record: &CanonicalRecord, mode: crate::domain::SearchMode) -> bool {
+    match mode {
+        crate::domain::SearchMode::Balanced => false,
+        crate::domain::SearchMode::Current => {
+            matches!(record.metadata().get("alignment"), Some(value) if value == "CURRENT")
+                || matches!(record.metadata().get("lifecycle"), Some(value) if value == "current")
+        }
+        crate::domain::SearchMode::Design => {
+            matches!(record.metadata().get("alignment"), Some(value) if value == "DESIGN")
+        }
+    }
+}
+
+fn finite_relevance(score: f64) -> f64 {
+    if score.is_finite() { score } else { 0.0 }
 }
 
 fn projection_error(error: impl std::fmt::Display) -> FastSearchError {
