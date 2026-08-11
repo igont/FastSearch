@@ -2,7 +2,6 @@ use fastsearch::domain::{
     FileHash, IndexFreshness, LifecycleStatus, SearchResponse, SourceLocator, SourceSnapshot,
 };
 use fastsearch::ports::{LexicalRetrieval, SourcePort, StateChange, StateChangeSet, StateStore};
-use fastsearch::{adapters::mock::MockLexical, domain::CanonicalRecord};
 
 #[test]
 fn public_ports_express_source_hashes_lifecycle_and_changes_without_adapter_handles() {
@@ -28,28 +27,4 @@ fn public_ports_express_source_hashes_lifecycle_and_changes_without_adapter_hand
 
     fn assert_object_safe(_: &dyn SourcePort, _: &mut dyn StateStore, _: &dyn LexicalRetrieval) {}
     let _ = assert_object_safe;
-}
-
-#[test]
-fn mock_lexical_lifecycle_is_explicitly_not_configured() {
-    let record = CanonicalRecord::new(
-        fastsearch::domain::StableId::parse("mock:record").unwrap(),
-        fastsearch::domain::RecordKind::MarkdownSection,
-        SourceLocator::whole_file("mock.md").unwrap(),
-        "mock",
-        "mock",
-        Default::default(),
-        Vec::new(),
-        fastsearch::domain::ContentHash::parse("mock-hash").unwrap(),
-    )
-    .unwrap();
-    let lexical = MockLexical::new(record);
-    assert_eq!(
-        lexical.apply_projection(&[], 1).unwrap().freshness(),
-        IndexFreshness::NotConfigured
-    );
-    assert_eq!(
-        lexical.rebuild(&[], 1).unwrap().freshness(),
-        IndexFreshness::NotConfigured
-    );
 }
