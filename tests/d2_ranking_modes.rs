@@ -73,12 +73,13 @@ fn phrase_ranking_is_mode_specific_stable_and_exact_remains_dominant() {
             ("normativity".into(), "mandatory".into()),
         ]),
     );
-    let current = record(
-        "z-current",
-        BTreeMap::from([
-            ("alignment".into(), "CURRENT".into()),
-            ("lifecycle".into(), "current".into()),
-        ]),
+    let current_alignment = record(
+        "y-current-alignment",
+        BTreeMap::from([("alignment".into(), "CURRENT".into())]),
+    );
+    let current_lifecycle = record(
+        "z-current-lifecycle",
+        BTreeMap::from([("lifecycle".into(), "current".into())]),
     );
     let technical = CanonicalRecord::new(
         StableId::parse("registry-2433").unwrap(),
@@ -98,7 +99,8 @@ fn phrase_ranking_is_mode_specific_stable_and_exact_remains_dominant() {
                 design.clone(),
                 neutral.clone(),
                 unknown.clone(),
-                current.clone(),
+                current_alignment.clone(),
+                current_lifecycle.clone(),
                 technical,
             ],
             1,
@@ -110,19 +112,37 @@ fn phrase_ranking_is_mode_specific_stable_and_exact_remains_dominant() {
         ids(&index
             .search(&SearchQuery::new(phrase, SearchMode::Balanced).unwrap())
             .unwrap()),
-        vec!["a-design", "b-neutral", "c-unknown", "z-current"]
+        vec![
+            "a-design",
+            "b-neutral",
+            "c-unknown",
+            "y-current-alignment",
+            "z-current-lifecycle"
+        ]
     );
     assert_eq!(
         ids(&index
             .search(&SearchQuery::new(phrase, SearchMode::Current).unwrap())
             .unwrap()),
-        vec!["z-current", "a-design", "b-neutral", "c-unknown"]
+        vec![
+            "y-current-alignment",
+            "z-current-lifecycle",
+            "a-design",
+            "b-neutral",
+            "c-unknown"
+        ]
     );
     assert_eq!(
         ids(&index
             .search(&SearchQuery::new(phrase, SearchMode::Design).unwrap())
             .unwrap()),
-        vec!["a-design", "b-neutral", "c-unknown", "z-current"]
+        vec![
+            "a-design",
+            "b-neutral",
+            "c-unknown",
+            "y-current-alignment",
+            "z-current-lifecycle"
+        ]
     );
 
     for mode in [
