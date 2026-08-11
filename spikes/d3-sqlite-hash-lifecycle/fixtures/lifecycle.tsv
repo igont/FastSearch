@@ -1,0 +1,4 @@
+stable_id	content_hash	payload
+markdown:synthetic/d3-lifecycle.md#State	sha256:7b3d0a12fb49b07319fc69f17d940ac70c3e8741f39d6a311359ce8205375d31	payload-v1
+markdown:synthetic/d3-lifecycle.md#State	sha256:0cbfa847619d688226855278706687a40d82dd74d8ab8ba7cef414309ebfb1d6	payload-v2
+markdown:synthetic/d3-lifecycle.md#State	sha256:9067a4303ee542c96bd4a7c73e81f1a43fbbebcb9a103d739d1be6603cdc6557	payload-v3
