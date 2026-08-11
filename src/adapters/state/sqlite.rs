@@ -140,6 +140,45 @@ impl SqliteStateStore {
             .collect()
     }
 
+    fn existing_records(&self) -> Result<BTreeMap<StableId, ContentHash>, FastSearchError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, content_hash FROM state_records ORDER BY id")
+            .map_err(state_failure)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(state_failure)?
+            .map(|row| {
+                let (id, hash) = row.map_err(state_failure)?;
+                Ok((
+                    StableId::parse(id).map_err(|error| state_failure(error.message()))?,
+                    ContentHash::parse(hash).map_err(|error| state_failure(error.message()))?,
+                ))
+            })
+            .collect()
+    }
+
+    fn existing_memberships(&self) -> Result<BTreeSet<(String, StableId)>, FastSearchError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT source_key, record_id FROM state_source_memberships ORDER BY source_key, record_id")
+            .map_err(state_failure)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(state_failure)?
+            .map(|row| {
+                let (source_key, record_id) = row.map_err(state_failure)?;
+                StableId::parse(record_id)
+                    .map(|record_id| (source_key, record_id))
+                    .map_err(|error| state_failure(error.message()))
+            })
+            .collect()
+    }
+
     fn reject_cross_source_ids(
         &self,
         source_key: &str,
@@ -315,6 +354,87 @@ impl StateStore for SqliteStateStore {
                     params![source_key, record.id().as_str()],
                 )
                 .map_err(state_failure)?;
+        }
+        if logical_change {
+            increment_generation(&transaction)?;
+        }
+        transaction.commit().map_err(state_failure)?;
+        Ok(StateChangeSet::new(changes, self.generation()?))
+    }
+
+    fn reconcile_snapshots(
+        &mut self,
+        snapshots: &[SourceSnapshot],
+    ) -> Result<StateChangeSet, FastSearchError> {
+        let mut source_keys = BTreeSet::new();
+        let mut incoming = BTreeMap::new();
+        let mut incoming_memberships = BTreeSet::new();
+        for snapshot in snapshots {
+            let source_key = source_key(snapshot.locator());
+            if !source_keys.insert(source_key.clone()) {
+                return Err(FastSearchError::new(
+                    ErrorKind::StateFailure,
+                    "complete scan contains duplicate source locators",
+                ));
+            }
+            for record in snapshot.records() {
+                if incoming.insert(record.id().clone(), record).is_some() {
+                    return Err(FastSearchError::new(
+                        ErrorKind::DuplicateStableId,
+                        "complete scan contains duplicate stable IDs",
+                    ));
+                }
+                incoming_memberships.insert((source_key.clone(), record.id().clone()));
+            }
+        }
+
+        let existing = self.existing_records()?;
+        let existing_memberships = self.existing_memberships()?;
+        let mut changes = Vec::with_capacity(incoming.len() + existing.len());
+        for snapshot in snapshots {
+            for record in snapshot.records() {
+                changes.push(match existing.get(record.id()) {
+                    None => StateChange::Added,
+                    Some(hash) if hash == record.content_hash() => StateChange::Unchanged,
+                    Some(_) => StateChange::Changed,
+                });
+            }
+        }
+        changes.extend(
+            existing
+                .keys()
+                .filter(|id| !incoming.contains_key(*id))
+                .map(|_| StateChange::Deleted),
+        );
+        let logical_change = changes
+            .iter()
+            .any(|change| *change != StateChange::Unchanged)
+            || existing_memberships != incoming_memberships;
+
+        let transaction = self.connection.transaction().map_err(state_failure)?;
+        transaction
+            .execute("DELETE FROM state_source_snapshots", [])
+            .map_err(state_failure)?;
+        transaction
+            .execute("DELETE FROM state_records", [])
+            .map_err(state_failure)?;
+        for snapshot in snapshots {
+            let source_key = source_key(snapshot.locator());
+            transaction
+                .execute(
+                    "INSERT INTO state_source_snapshots (source_key, file_hash) VALUES (?1, ?2)",
+                    params![source_key, snapshot.file_hash().as_str()],
+                )
+                .map_err(state_failure)?;
+            for record in snapshot.records() {
+                write_record(&transaction, record)?;
+                transaction
+                    .execute(
+                        "INSERT INTO state_source_memberships (source_key, record_id) VALUES (?1, ?2)",
+                        params![source_key, record.id().as_str()],
+                    )
+                    .map_err(state_failure)?;
+            }
         }
         if logical_change {
             increment_generation(&transaction)?;
