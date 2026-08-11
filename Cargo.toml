@@ -1,0 +1,11 @@
+[package]
+name = "fastsearch"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fastsearch"
+path = "src/main.rs"
