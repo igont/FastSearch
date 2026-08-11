@@ -24,6 +24,14 @@ pub trait PortContractFixture {
 
 /// Проверяет общие наблюдаемые контракты source/state/lexical/agent без knowledge о реализации.
 pub fn assert_contract_oracle(fixture: &mut impl PortContractFixture) {
+    assert_contract_oracle_for_backend(fixture, BackendKind::Mock);
+}
+
+/// Проверяет контракт при явно заданном backend, не смешивая capability с его реализацией.
+pub fn assert_contract_oracle_for_backend(
+    fixture: &mut impl PortContractFixture,
+    expected_backend: BackendKind,
+) {
     let expected = fixture.expected_record();
     let id = expected.id().clone();
     let query = fixture.query();
@@ -49,9 +57,9 @@ pub fn assert_contract_oracle(fixture: &mut impl PortContractFixture) {
     );
 
     let statuses = fixture.agent().status();
-    assert_available(&statuses, Capability::Source);
-    assert_available(&statuses, Capability::State);
-    assert_available(&statuses, Capability::LexicalRetrieval);
+    assert_available(&statuses, Capability::Source, expected_backend);
+    assert_available(&statuses, Capability::State, expected_backend);
+    assert_available(&statuses, Capability::LexicalRetrieval, expected_backend);
     let vector = statuses
         .iter()
         .find(|status| status.capability() == Capability::VectorRetrieval)
@@ -76,14 +84,18 @@ fn assert_exact_hit(response: SearchResponse, expected: &CanonicalRecord) {
     assert_eq!(hit.score(), 1.0);
 }
 
-fn assert_available(statuses: &[CapabilityStatus], capability: Capability) {
+fn assert_available(
+    statuses: &[CapabilityStatus],
+    capability: Capability,
+    expected_backend: BackendKind,
+) {
     assert!(statuses.iter().any(|status| {
         status.capability() == capability
             && matches!(
                 status.state(),
                 CapabilityState::Available {
-                    backend: BackendKind::Mock
-                }
+                    backend
+                } if *backend == expected_backend
             )
     }));
 }
@@ -112,7 +124,10 @@ impl ReferenceFixture {
             source: StaticSource(record.clone()),
             state: MemoryState::default(),
             lexical: ExactLexical(record.clone()),
-            agent: ReferenceAgent(record.clone()),
+            agent: ReferenceAgent {
+                record: record.clone(),
+                backend: BackendKind::Mock,
+            },
             record,
             query,
         }
@@ -179,15 +194,18 @@ impl LexicalRetrieval for ExactLexical {
     }
 }
 
-struct ReferenceAgent(CanonicalRecord);
+struct ReferenceAgent {
+    record: CanonicalRecord,
+    backend: BackendKind,
+}
 
 impl AgentSurface for ReferenceAgent {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        Ok(search_response(&self.0, query))
+        Ok(search_response(&self.record, query))
     }
 
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
-        Ok((id == self.0.id()).then(|| self.0.clone()))
+        Ok((id == self.record.id()).then(|| self.record.clone()))
     }
 
     fn related(
@@ -204,9 +222,9 @@ impl AgentSurface for ReferenceAgent {
 
     fn status(&self) -> Vec<CapabilityStatus> {
         vec![
-            CapabilityStatus::available(Capability::Source, BackendKind::Mock),
-            CapabilityStatus::available(Capability::State, BackendKind::Mock),
-            CapabilityStatus::available(Capability::LexicalRetrieval, BackendKind::Mock),
+            CapabilityStatus::available(Capability::Source, self.backend),
+            CapabilityStatus::available(Capability::State, self.backend),
+            CapabilityStatus::available(Capability::LexicalRetrieval, self.backend),
             CapabilityStatus::unavailable(
                 Capability::VectorRetrieval,
                 "reference fixture has no vector retrieval",

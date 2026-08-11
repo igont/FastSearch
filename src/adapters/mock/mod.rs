@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::domain::{
-    CanonicalRecord, Capability, ErrorKind, FastSearchError, RelatedQuery, RetrievalChannel,
-    SearchHit, SearchQuery, SearchResponse, StableId,
+    CanonicalRecord, Capability, ErrorKind, FastSearchError, LifecycleStatus, RelatedQuery,
+    RetrievalChannel, SearchHit, SearchQuery, SearchResponse, SourceSnapshot, StableId,
 };
 use crate::ports::{
     CodeMapPort, LexicalRetrieval, SourcePort, StateStore, SymbolPort, VectorRetrieval,
@@ -25,6 +25,9 @@ impl SourcePort for MockSource {
     fn records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
         Ok(vec![self.record.clone()])
     }
+    fn snapshot(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Default)]
@@ -35,6 +38,18 @@ pub struct MockState {
 impl StateStore for MockState {
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
         Ok(self.records.get(id).cloned())
+    }
+    fn lifecycle_status(&self) -> LifecycleStatus {
+        LifecycleStatus::not_configured("mock state")
+    }
+    fn apply_snapshot(
+        &mut self,
+        _snapshot: SourceSnapshot,
+    ) -> Result<crate::ports::StateChangeSet, FastSearchError> {
+        Err(FastSearchError::new(
+            ErrorKind::StateFailure,
+            "mock state does not apply source snapshots",
+        ))
     }
 
     fn put(&mut self, record: CanonicalRecord) -> Result<(), FastSearchError> {
@@ -61,6 +76,23 @@ impl MockLexical {
 impl LexicalRetrieval for MockLexical {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
         Ok(exact_response(&self.record, query))
+    }
+    fn lifecycle_status(&self) -> LifecycleStatus {
+        LifecycleStatus::not_configured("mock lexical")
+    }
+    fn apply_projection(
+        &self,
+        _records: &[CanonicalRecord],
+        _state_generation: u64,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        Ok(LifecycleStatus::not_configured("mock lexical"))
+    }
+    fn rebuild(
+        &self,
+        _records: &[CanonicalRecord],
+        _state_generation: u64,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        Ok(LifecycleStatus::not_configured("mock lexical"))
     }
 }
 

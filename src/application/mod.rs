@@ -7,7 +7,8 @@ use crate::adapters::mock::{
 };
 use crate::domain::{
     BackendKind, CanonicalRecord, Capability, CapabilityStatus, ContentHash, FastSearchError,
-    RecordKind, RelatedQuery, SearchQuery, SearchResponse, SourceLocator, StableId,
+    LifecycleStatus, RecordKind, RelatedQuery, SearchQuery, SearchResponse, SourceLocator,
+    StableId,
 };
 use crate::ports::{
     AgentSurface, CodeMapPort, LexicalRetrieval, SourcePort, StateStore, SymbolPort,
@@ -169,6 +170,9 @@ impl AgentSurface for MockFacade {
     fn status(&self) -> Vec<CapabilityStatus> {
         self.runtime.status()
     }
+    fn index_status(&self) -> LifecycleStatus {
+        LifecycleStatus::not_configured("mock facade")
+    }
 }
 
 impl AgentSurface for MockRuntime {
@@ -195,6 +199,9 @@ impl AgentSurface for MockRuntime {
             ),
             CapabilityStatus::unavailable(Capability::CodeMaps, "mock runtime has no code maps"),
         ]
+    }
+    fn index_status(&self) -> LifecycleStatus {
+        LifecycleStatus::not_configured("mock runtime")
     }
 }
 
