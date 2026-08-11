@@ -76,6 +76,8 @@ fn complete_scan_reconciles_every_source_and_empty_scan_removes_the_corpus() {
     );
     assert_eq!(store.lifecycle_status().state_generation(), 1);
 
+    drop(store);
+    let mut store = SqliteStateStore::open(&path).expect("reopen durable state");
     assert_eq!(
         store
             .reconcile_snapshots(&initial)
