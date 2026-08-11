@@ -2,6 +2,8 @@
 //!
 //! На этом этапе crate намеренно не предоставляет поисковые возможности.
 
+pub mod adapters;
+pub mod application;
 pub mod domain;
 pub mod ports;
 
