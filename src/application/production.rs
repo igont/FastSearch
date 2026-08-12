@@ -601,6 +601,8 @@ impl PathGuards {
         let runs = match open_directory_without_delete_share(runs) {
             Ok(handle) => handle,
             Err(error) => {
+                // SAFETY: `service` was returned as a valid owned HANDLE by
+                // `open_directory_without_delete_share` and is closed exactly once here.
                 unsafe { CloseHandle(service) };
                 return Err(error);
             }
@@ -612,6 +614,8 @@ impl PathGuards {
 #[cfg(windows)]
 impl Drop for PathGuards {
     fn drop(&mut self) {
+        // SAFETY: both fields are distinct valid owned HANDLEs acquired by
+        // `PathGuards::acquire`; Drop runs once and transfers neither handle.
         unsafe {
             CloseHandle(self.runs);
             CloseHandle(self.service);
@@ -626,6 +630,9 @@ fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearch
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
+    // SAFETY: `wide` is a live NUL-terminated UTF-16 buffer for the duration
+    // of the call; all optional pointers are null and the returned HANDLE is
+    // validated against INVALID_HANDLE_VALUE before ownership is accepted.
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
