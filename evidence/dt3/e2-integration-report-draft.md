@@ -6,6 +6,8 @@ Production boundary проверяет service root до первой запис
 
 Lifecycle-oracle включает перенос сырого DT2 SQLite state, отсутствие ошибочного `get` до rebuild, переход к Current после rebuild, отказ настроенного E5 после Current без потери authority/ложных hits и последующее восстановление провайдера. Authoritative release JSON фиксирует измеренную product revision, отношение evidence-only candidate, SHA-256 бинарника, toolchain, exit code и digest семантического вывода каждого из 20 процессов; рабочий путь содержит пробелы. Входы привязаны к logical identities и SHA-256 inventories относительных locators: deterministic document fixture и точный текущий `src` contour из 21 файла.
 
+Windows runtime удерживает handles service/runs без `FILE_SHARE_DELETE`, поэтому после открытия каталоги нельзя заменить junction-ом до завершения runtime; record-time reparse checks остаются дополнительной защитой. Release runner измеряет отдельный new-process startup+SQLite/Tantivy reopen+query gate `<=750 ms`, а не чистый in-process warm query `<=500 ms`. Обе наблюдавшиеся серии сохранены; исходный ошибочный 500-ms verdict и сырые значения зафиксированы отдельным диагностическим evidence.
+
 Структурная навигация сообщает только синтаксические Rust/Python declaration facts и явные `.cfmap.md` relations. Она не заявляет compiler-resolved definition, references, type inference или call graph.
 
 ## Остаточные границы
