@@ -882,7 +882,7 @@ mod bootstrap_race_tests {
         let service = parent.join("service");
         let worker = thread::spawn(move || {
             ProductionRuntime::open(ProductionConfig::new(documents, code, service))
-                .map(|runtime| drop(runtime))
+                .map(drop)
                 .map_err(|error| error.to_string())
         });
         reached.wait();
