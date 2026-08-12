@@ -2,7 +2,11 @@ use std::{
     fs,
     path::PathBuf,
     process::Command,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -315,12 +319,35 @@ fn run_junction_added_after_open_is_rejected_before_external_marker_write() {
     assert!(!output.status.success(), "guard must prevent junction swap");
     let run = runtime.record_run_marker("E2-run").unwrap();
     assert!(run.exists());
+    let stolen = service.join("runs").join("stolen-run");
+    let race_command = format!(
+        "ren \"{}\" \"stolen-run\" && mklink /J \"{}\" \"{}\"",
+        run.display(),
+        run.display(),
+        external.display()
+    );
+    let barrier = Arc::new(Barrier::new(2));
+    let attacker_barrier = Arc::clone(&barrier);
+    let attacker = thread::spawn(move || {
+        attacker_barrier.wait();
+        Command::new("cmd")
+            .args(["/d", "/s", "/c", &race_command])
+            .output()
+            .unwrap()
+    });
+    barrier.wait();
+    assert!(runtime.cleanup_run("E2-run").unwrap());
+    let raced = attacker.join().unwrap();
+    assert!(
+        !raced.status.success(),
+        "pinned run child must deny rename race"
+    );
+    assert!(!stolen.exists());
     assert!(!external.join("E2-run").exists());
     assert_eq!(
         fs::read_to_string(external.join("sentinel.txt")).unwrap(),
         "unchanged"
     );
-    assert!(runtime.cleanup_run("E2-run").unwrap());
 }
 
 #[test]
