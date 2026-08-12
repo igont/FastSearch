@@ -199,3 +199,72 @@ fn stale_map_refuses_related_navigation() {
         &fastsearch::domain::ErrorKind::StateFailure
     );
 }
+
+#[test]
+fn map_to_symbol_replay_keeps_identity_provenance_and_order_after_rename_reopen_and_delete() {
+    let f = Fixture::new();
+    f.write(
+        "code/navigator.rs",
+        "pub fn stable_navigation() {}\npub fn later() {}\n",
+    );
+    let symbols = SymbolSource::new(
+        LogicalRootId::parse("code-fastsearch").unwrap(),
+        f.0.join("code"),
+    )
+    .records()
+    .unwrap();
+    let stable = symbols
+        .iter()
+        .find(|record| record.title() == "stable_navigation")
+        .unwrap()
+        .id()
+        .clone();
+    let later = symbols
+        .iter()
+        .find(|record| record.title() == "later")
+        .unwrap()
+        .id()
+        .clone();
+    f.write(
+        "maps/navigation.cfmap.md",
+        &map(&[later.clone(), stable.clone()]),
+    );
+    let source = CodeMapSource::new(f.0.join("maps"));
+    let before_maps = source.records().unwrap();
+    let before_id = before_maps[0].id().clone();
+    let expected = related_ids(&before_maps, &symbols, &before_id);
+
+    fs::rename(
+        f.0.join("maps/navigation.cfmap.md"),
+        f.0.join("maps/renamed.cfmap.md"),
+    )
+    .unwrap();
+    let renamed_maps = source.records().unwrap();
+    let renamed_id = renamed_maps[0].id().clone();
+    assert_ne!(renamed_id, before_id);
+    assert_eq!(related_ids(&renamed_maps, &symbols, &renamed_id), expected);
+
+    fs::remove_file(f.0.join("maps/renamed.cfmap.md")).unwrap();
+    assert!(source.records().unwrap().is_empty());
+    f.write("maps/renamed.cfmap.md", &map(&[later, stable]));
+    let reopened_maps = source.records().unwrap();
+    assert_eq!(reopened_maps[0].id(), &renamed_id);
+    assert_eq!(related_ids(&reopened_maps, &symbols, &renamed_id), expected);
+}
+
+fn related_ids(
+    maps: &[fastsearch::domain::CanonicalRecord],
+    symbols: &[fastsearch::domain::CanonicalRecord],
+    map_id: &StableId,
+) -> Vec<String> {
+    CodeMapRelated::new([maps, symbols].concat())
+        .unwrap()
+        .related_maps(&RelatedQuery::new(map_id.clone()))
+        .unwrap()
+        .into_iter()
+        .map(|record| {
+            assert!(record.metadata().contains_key("relation_provenance"));
+            record.id().as_str().to_owned()
+        })
+        .collect()
+}
