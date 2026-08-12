@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
@@ -16,6 +19,10 @@ const HEADER_START: &str = "---\n";
 const HEADER_END: &str = "---\n";
 const AUTO_START: &str = "<!-- cfmap:auto:start -->";
 const AUTO_END: &str = "<!-- cfmap:auto:end -->";
+const MAX_MAP_BYTES: u64 = 1_048_576;
+const MAX_DERIVED_BODY_BYTES: usize = 65_536;
+const MAX_MAP_FILES: usize = 1_024;
+const MAX_MAP_DEPTH: usize = 16;
 
 /// Result of a regeneration request. CURATED files are deliberately untouched.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,7 +47,7 @@ impl CodeMapSource {
     pub fn snapshots(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
         let root = canonical_root(&self.root)?;
         let mut paths = Vec::new();
-        collect_map_paths(&root, &root, &mut paths)?;
+        collect_map_paths(&root, &root, 0, &mut paths)?;
         paths.sort();
         paths
             .into_iter()
@@ -59,6 +66,9 @@ impl CodeMapSource {
                 "derived map body must not contain cfmap region markers",
             ));
         }
+        if derived_body.len() > MAX_DERIVED_BODY_BYTES {
+            return Err(invalid("derived map body exceeds the configured limit"));
+        }
         let root = canonical_root(&self.root)?;
         let path = contained_map_path(&root, locator)?;
         let original =
@@ -72,8 +82,7 @@ impl CodeMapSource {
         let updated = format!("{}{}{}", &original[..start], replacement, &original[end..]);
         // The complete replacement is constructed and validated before the prior authority is touched.
         parse_map_text(locator, &updated)?;
-        fs::write(&path, updated)
-            .map_err(|error| source_failure("write regenerated map", error))?;
+        replace_map_atomically(&path, updated.as_bytes())?;
         Ok(RegenerationOutcome::UpdatedAuto)
     }
 }
@@ -118,8 +127,12 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FastSearchError> {
 fn collect_map_paths(
     root: &Path,
     directory: &Path,
+    depth: usize,
     paths: &mut Vec<PathBuf>,
 ) -> Result<(), FastSearchError> {
+    if depth > MAX_MAP_DEPTH {
+        return Err(invalid("map directory depth exceeds the configured limit"));
+    }
     for entry in
         fs::read_dir(directory).map_err(|error| source_failure("read map directory", error))?
     {
@@ -132,7 +145,7 @@ fn collect_map_paths(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_map_paths(root, &path, paths)?;
+            collect_map_paths(root, &path, depth + 1, paths)?;
         } else if file_type.is_file()
             && path
                 .file_name()
@@ -145,6 +158,10 @@ fn collect_map_paths(
             if canonical.strip_prefix(root).is_err() {
                 return Err(invalid("map escapes configured root"));
             }
+            if paths.len() == MAX_MAP_FILES {
+                return Err(invalid("map file count exceeds the configured limit"));
+            }
+            ensure_bounded_map(&canonical)?;
             paths.push(canonical);
         }
     }
@@ -168,6 +185,7 @@ fn contained_map_path(root: &Path, locator: &str) -> Result<PathBuf, FastSearchE
     if candidate.strip_prefix(root).is_err() {
         return Err(invalid("map locator escapes configured root"));
     }
+    ensure_bounded_map(&candidate)?;
     Ok(candidate)
 }
 
@@ -177,6 +195,7 @@ fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearch
         .map_err(|_| invalid("map escapes configured root"))?
         .to_string_lossy()
         .replace('\\', "/");
+    ensure_bounded_map(path)?;
     let bytes = fs::read(path).map_err(|error| source_failure("read map", error))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| invalid("map must be UTF-8"))?;
     let parsed = parse_map_text(&locator, text)?;
@@ -317,6 +336,44 @@ fn map_title(body: &str) -> Result<String, FastSearchError> {
 
 fn hex_digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn ensure_bounded_map(path: &Path) -> Result<(), FastSearchError> {
+    let metadata =
+        fs::metadata(path).map_err(|error| source_failure("read map metadata", error))?;
+    if metadata.len() > MAX_MAP_BYTES {
+        return Err(invalid("map exceeds the configured size limit"));
+    }
+    Ok(())
+}
+
+fn replace_map_atomically(path: &Path, bytes: &[u8]) -> Result<(), FastSearchError> {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid("map has no parent directory"))?;
+    let temporary = parent.join(format!(
+        ".cfmap-replace-{}-{}",
+        std::process::id(),
+        NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| source_failure("create map replacement", error))?;
+        file.write_all(bytes)
+            .map_err(|error| source_failure("write map replacement", error))?;
+        file.sync_all()
+            .map_err(|error| source_failure("sync map replacement", error))?;
+        fs::rename(&temporary, path)
+            .map_err(|error| source_failure("replace map atomically", error))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 fn invalid(message: impl Into<String>) -> FastSearchError {
     FastSearchError::new(ErrorKind::InvalidContent, message)

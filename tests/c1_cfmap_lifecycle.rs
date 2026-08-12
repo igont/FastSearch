@@ -137,3 +137,60 @@ fn missing_auto_source_is_stale_and_failed_regeneration_leaves_prior_file_recove
     assert_eq!(error.kind(), &ErrorKind::InvalidContent);
     assert_eq!(fixture.read("stale.cfmap.md"), before);
 }
+
+#[test]
+fn oversized_map_and_regeneration_are_rejected_before_any_write() {
+    let fixture = Fixture::new();
+    fixture.write("architecture.md", "# Navigation\n");
+    fixture.write("navigation.cfmap.md", AUTO);
+    let source = CodeMapSource::new(&fixture.root);
+    let before = fixture.read("navigation.cfmap.md");
+
+    let oversized_body = "x".repeat(65_537);
+    assert_eq!(
+        source
+            .regenerate("navigation.cfmap.md", &oversized_body)
+            .unwrap_err()
+            .kind(),
+        &ErrorKind::InvalidContent
+    );
+    assert_eq!(fixture.read("navigation.cfmap.md"), before);
+    fixture.write(
+        "oversized.cfmap.md",
+        &format!(
+            "---\ncfmap: v1\nmode: CURATED\n---\n# Big\n{}",
+            "x".repeat(1_048_576)
+        ),
+    );
+    assert_eq!(
+        source.snapshots().unwrap_err().kind(),
+        &ErrorKind::InvalidContent
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn regeneration_rejects_a_map_link_that_resolves_outside_the_configured_root() {
+    let fixture = Fixture::new();
+    let outside = fixture
+        .root
+        .parent()
+        .unwrap()
+        .join(format!("fastsearch-c1-outside-{}", std::process::id()));
+    fs::write(&outside, AUTO).unwrap();
+    if std::os::windows::fs::symlink_file(&outside, fixture.root.join("linked.cfmap.md")).is_err() {
+        let _ = fs::remove_file(outside);
+        return;
+    }
+    let source = CodeMapSource::new(&fixture.root);
+
+    assert_eq!(
+        source
+            .regenerate("linked.cfmap.md", "must not escape")
+            .unwrap_err()
+            .kind(),
+        &ErrorKind::InvalidContent
+    );
+    assert_eq!(fs::read_to_string(&outside).unwrap(), AUTO);
+    let _ = fs::remove_file(outside);
+}
