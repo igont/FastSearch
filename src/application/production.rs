@@ -111,16 +111,8 @@ impl ProductionRuntime {
         let document_root = canonical_directory(&config.document_root, "document root")?;
         let code_root = canonical_directory(&config.code_root, "code root")?;
         validate_service_path_before_write(&document_root, &code_root, &config.service_root)?;
-        fs::create_dir_all(&config.service_root)
-            .map_err(|error| failure(ErrorKind::StateFailure, "create service root", error))?;
-        ensure_no_reparse_points(&config.service_root)?;
-        let service_root = canonical_directory(&config.service_root, "service root")?;
+        let (service_root, path_guards) = securely_create_and_pin_service(&config.service_root)?;
         validate_service_containment(&document_root, &code_root, &service_root)?;
-        let runs_root = service_root.join("runs");
-        fs::create_dir_all(&runs_root)
-            .map_err(|error| failure(ErrorKind::StateFailure, "create runs root", error))?;
-        ensure_no_reparse_points(&runs_root)?;
-        let path_guards = PathGuards::acquire(&service_root, &runs_root)?;
         let vector_configured = config.e5_root.is_some();
         let model_root = config
             .e5_root
@@ -683,43 +675,105 @@ impl RunDirectoryGuard {
 }
 
 #[cfg(windows)]
-struct PathGuards {
-    service: HANDLE,
-    runs: HANDLE,
-}
+struct PathGuards(Vec<HANDLE>);
 
 #[cfg(windows)]
-impl PathGuards {
-    fn acquire(service: &Path, runs: &Path) -> Result<Self, FastSearchError> {
-        let service = open_directory_without_delete_share(service)?;
-        let runs = match open_directory_without_delete_share(runs) {
-            Ok(handle) => handle,
-            Err(error) => {
-                // SAFETY: `service` was returned as a valid owned HANDLE by
-                // `open_directory_without_delete_share` and is closed exactly once here.
-                unsafe { CloseHandle(service) };
-                return Err(error);
-            }
-        };
-        Ok(Self { service, runs })
+fn securely_create_and_pin_service(
+    requested: &Path,
+) -> Result<(PathBuf, PathGuards), FastSearchError> {
+    let absolute = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))?
+            .join(requested)
+    };
+    let mut missing = Vec::new();
+    let mut ancestor = absolute.as_path();
+    while !ancestor.exists() {
+        missing.push(
+            ancestor
+                .file_name()
+                .ok_or_else(|| {
+                    FastSearchError::new(
+                        ErrorKind::InvalidContent,
+                        "service root has no existing ancestor",
+                    )
+                })?
+                .to_os_string(),
+        );
+        ancestor = ancestor.parent().ok_or_else(|| {
+            FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "service root has no existing ancestor",
+            )
+        })?;
     }
+    let mut current = ancestor.to_path_buf();
+    let mut handles = vec![open_directory_without_delete_share(&current)?];
+    for component in missing.into_iter().rev() {
+        current.push(component);
+        fs::create_dir(&current).map_err(|error| {
+            failure(
+                ErrorKind::StateFailure,
+                "create pinned service directory",
+                error,
+            )
+        })?;
+        handles.push(open_directory_without_delete_share(&current)?);
+    }
+    let service = current.canonicalize().map_err(|error| {
+        failure(
+            ErrorKind::SourceFailure,
+            "canonicalize pinned service root",
+            error,
+        )
+    })?;
+    let runs = service.join("runs");
+    if !runs.exists() {
+        fs::create_dir(&runs)
+            .map_err(|error| failure(ErrorKind::StateFailure, "create pinned runs root", error))?;
+    }
+    handles.push(open_directory_without_delete_share(&runs)?);
+    Ok((service, PathGuards(handles)))
 }
 
 #[cfg(windows)]
 impl Drop for PathGuards {
     fn drop(&mut self) {
-        // SAFETY: both fields are distinct valid owned HANDLEs acquired by
-        // `PathGuards::acquire`; Drop runs once and transfers neither handle.
-        unsafe {
-            CloseHandle(self.runs);
-            CloseHandle(self.service);
+        for handle in self.0.drain(..).rev() {
+            // SAFETY: every HANDLE is owned by this guard vector and drained exactly once.
+            unsafe { CloseHandle(handle) };
         }
     }
 }
 
 #[cfg(windows)]
 fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearchError> {
-    open_directory_handle(path, FILE_LIST_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS)
+    let handle = open_directory_handle(
+        path,
+        FILE_LIST_DIRECTORY,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+    )?;
+    let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
+    // SAFETY: `handle` is valid and the output buffer is live and correctly sized.
+    let inspected = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileAttributeTagInfo,
+            (&raw mut attributes).cast(),
+            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    };
+    if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        // SAFETY: handle ownership has not escaped and is closed exactly once here.
+        unsafe { CloseHandle(handle) };
+        return Err(FastSearchError::new(
+            ErrorKind::InvalidContent,
+            "service bootstrap encountered a reparse point",
+        ));
+    }
+    Ok(handle)
 }
 
 #[cfg(windows)]
@@ -761,10 +815,16 @@ fn open_directory_handle(
 struct PathGuards;
 
 #[cfg(not(windows))]
-impl PathGuards {
-    fn acquire(_service: &Path, _runs: &Path) -> Result<Self, FastSearchError> {
-        Ok(Self)
-    }
+fn securely_create_and_pin_service(
+    requested: &Path,
+) -> Result<(PathBuf, PathGuards), FastSearchError> {
+    fs::create_dir_all(requested)
+        .map_err(|error| failure(ErrorKind::StateFailure, "create service root", error))?;
+    ensure_no_reparse_points(requested)?;
+    let service = canonical_directory(requested, "service root")?;
+    fs::create_dir_all(service.join("runs"))
+        .map_err(|error| failure(ErrorKind::StateFailure, "create runs root", error))?;
+    Ok((service, PathGuards))
 }
 
 fn failure(kind: ErrorKind, context: &str, error: std::io::Error) -> FastSearchError {

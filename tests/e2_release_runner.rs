@@ -39,6 +39,7 @@ fn validate_runner(
     document: &Path,
     code: &Path,
     work: &Path,
+    runtime_document: &Path,
     output: &Path,
 ) -> std::process::Output {
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -58,6 +59,8 @@ fn validate_runner(
             code.to_str().unwrap(),
             "-WorkRoot",
             work.to_str().unwrap(),
+            "-RuntimeDocumentRoot",
+            runtime_document.to_str().unwrap(),
             "-OutputJson",
             output.to_str().unwrap(),
             "-ValidateOnly",
@@ -86,6 +89,7 @@ fn release_runner_rejects_two_way_overlap_and_junction_before_write() {
         &document,
         &nested_code,
         &temp.child("disjoint-work"),
+        &temp.child("disjoint-runtime"),
         &temp.child("overlap.json"),
     );
     assert!(!overlap.status.success());
@@ -99,8 +103,13 @@ fn release_runner_rejects_two_way_overlap_and_junction_before_write() {
         .output()
         .unwrap();
     assert!(linked.status.success());
-    let junction_result =
-        validate_runner(&document, &code, &junction, &temp.child("junction.json"));
+    let junction_result = validate_runner(
+        &document,
+        &code,
+        &junction,
+        &temp.child("junction-runtime"),
+        &temp.child("junction.json"),
+    );
     assert!(!junction_result.status.success());
     assert!(String::from_utf8_lossy(&junction_result.stderr).contains("reparse point"));
     assert_eq!(
@@ -108,4 +117,19 @@ fn release_runner_rejects_two_way_overlap_and_junction_before_write() {
         "unchanged"
     );
     assert!(!external.join("owner.marker").exists());
+
+    let old_work = temp.child("old-inside-work");
+    let old_pattern = validate_runner(
+        &document,
+        &code,
+        &old_work,
+        &old_work.join("scaled-document-root"),
+        &temp.child("old-pattern.json"),
+    );
+    assert!(!old_pattern.status.success());
+    assert!(String::from_utf8_lossy(&old_pattern.stderr).contains("pairwise disjoint"));
+    assert!(
+        !old_work.exists(),
+        "old inside-WorkRoot pattern must fail before write"
+    );
 }

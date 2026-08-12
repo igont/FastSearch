@@ -350,6 +350,50 @@ fn run_junction_added_after_open_is_rejected_before_external_marker_write() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn service_bootstrap_race_never_writes_sqlite_or_index_through_junction() {
+    let temp = Temp::new();
+    let documents = temp.child("bootstrap-documents");
+    let code = temp.child("bootstrap-code");
+    fs::create_dir_all(&documents).unwrap();
+    fs::create_dir_all(&code).unwrap();
+    fs::write(documents.join("safe.md"), "# Safe").unwrap();
+    fs::write(code.join("safe.rs"), "pub fn safe() {}").unwrap();
+
+    for attempt in 0..32 {
+        let service = temp.child(&format!("service-{attempt}"));
+        let external = temp.child(&format!("external-{attempt}"));
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("sentinel.txt"), "unchanged").unwrap();
+        let command = format!(
+            "for /L %i in (1,1,200) do @if exist \"{}\" (rmdir /S /Q \"{}\" & mklink /J \"{}\" \"{}\" & exit /B) else @ping -n 1 -w 1 127.0.0.1 >nul",
+            service.display(),
+            service.display(),
+            service.display(),
+            external.display()
+        );
+        let attacker = thread::spawn(move || {
+            Command::new("cmd")
+                .args(["/d", "/s", "/c", &command])
+                .output()
+                .unwrap()
+        });
+        let runtime = ProductionRuntime::open(ProductionConfig::new(&documents, &code, &service));
+        let attacked = attacker.join().unwrap();
+        if let Ok(runtime) = runtime {
+            assert!(!attacked.status.success() || !service.is_symlink());
+            drop(runtime);
+        }
+        assert_eq!(
+            fs::read_to_string(external.join("sentinel.txt")).unwrap(),
+            "unchanged"
+        );
+        assert!(!external.join("state.sqlite").exists());
+        assert!(!external.join("lexical").exists());
+    }
+}
+
 #[test]
 fn parameterized_cli_reopens_in_separate_process_and_has_no_alternate_provider_route() {
     let temp = Temp::new();
