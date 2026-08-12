@@ -1,0 +1,6 @@
+# Approved complete-cache manifest lock, canonical line: locator|bytes|SHA256 plus LF.
+# Values are SHA256 of the complete sorted line set; the runner separately emits every
+# observed line and rejects any count or canonical-root difference.
+multilingual-e5-small|43|9C80551E7F08186B2E04D0F887D1939A7C3696DB421F8CFEF38CB40A2B623BAE
+bge-m3|30|D18ECCF568BE4B90E6A2EF8E0F1182BCD24FFC2FA554DFFF421EDA3D14E4AF42
+qwen3-embedding-0.6b|12|A9BF4CA7F61B84F76F3BC50D8699BC3E9D74C3F8C4A8431BB72A9EA7FF0E66BE
