@@ -14,6 +14,9 @@ use std::{
 #[cfg(windows)]
 use std::{mem::size_of, os::windows::ffi::OsStrExt};
 
+#[cfg(all(test, windows))]
+use std::sync::{Arc, Barrier, OnceLock};
+
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
@@ -688,38 +691,21 @@ fn securely_create_and_pin_service(
             .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))?
             .join(requested)
     };
-    let mut missing = Vec::new();
-    let mut ancestor = absolute.as_path();
-    while !ancestor.exists() {
-        missing.push(
-            ancestor
-                .file_name()
-                .ok_or_else(|| {
-                    FastSearchError::new(
-                        ErrorKind::InvalidContent,
-                        "service root has no existing ancestor",
-                    )
-                })?
-                .to_os_string(),
-        );
-        ancestor = ancestor.parent().ok_or_else(|| {
-            FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "service root has no existing ancestor",
-            )
-        })?;
-    }
-    let mut current = ancestor.to_path_buf();
-    let mut handles = vec![open_directory_without_delete_share(&current)?];
-    for component in missing.into_iter().rev() {
-        current.push(component);
-        fs::create_dir(&current).map_err(|error| {
-            failure(
-                ErrorKind::StateFailure,
-                "create pinned service directory",
-                error,
-            )
-        })?;
+    let mut current = PathBuf::new();
+    let mut handles = Vec::new();
+    for component in absolute.components() {
+        current.push(component.as_os_str());
+        if current.exists() {
+            bootstrap_before_existing_component(&current);
+        } else {
+            fs::create_dir(&current).map_err(|error| {
+                failure(
+                    ErrorKind::StateFailure,
+                    "create pinned service directory",
+                    error,
+                )
+            })?;
+        }
         handles.push(open_directory_without_delete_share(&current)?);
     }
     let service = current.canonicalize().map_err(|error| {
@@ -737,6 +723,33 @@ fn securely_create_and_pin_service(
     handles.push(open_directory_without_delete_share(&runs)?);
     Ok((service, PathGuards(handles)))
 }
+
+#[cfg(all(test, windows))]
+#[derive(Clone)]
+struct BootstrapHook {
+    target: PathBuf,
+    reached: Arc<Barrier>,
+    resume: Arc<Barrier>,
+}
+
+#[cfg(all(test, windows))]
+static BOOTSTRAP_HOOK: OnceLock<Mutex<Option<BootstrapHook>>> = OnceLock::new();
+
+#[cfg(all(test, windows))]
+fn bootstrap_before_existing_component(path: &Path) {
+    let hook = BOOTSTRAP_HOOK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone();
+    if let Some(hook) = hook.filter(|hook| hook.target == path) {
+        hook.reached.wait();
+        hook.resume.wait();
+    }
+}
+
+#[cfg(not(all(test, windows)))]
+fn bootstrap_before_existing_component(_path: &Path) {}
 
 #[cfg(windows)]
 impl Drop for PathGuards {
@@ -829,4 +842,80 @@ fn securely_create_and_pin_service(
 
 fn failure(kind: ErrorKind, context: &str, error: std::io::Error) -> FastSearchError {
     FastSearchError::new(kind, format!("{context}: {error}"))
+}
+
+#[cfg(all(test, windows))]
+mod bootstrap_race_tests {
+    use super::*;
+    use std::{process::Command, thread, time::SystemTime};
+
+    #[test]
+    fn existing_parent_swap_is_denied_or_detected_before_external_state_write() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fastsearch-bootstrap-hook-{nonce}"));
+        let documents = root.join("documents");
+        let code = root.join("code");
+        let parent = root.join("existing-parent");
+        let displaced = root.join("displaced-parent");
+        let external = root.join("external");
+        fs::create_dir_all(&documents).unwrap();
+        fs::create_dir_all(&code).unwrap();
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(documents.join("safe.md"), "# Safe").unwrap();
+        fs::write(code.join("safe.rs"), "pub fn safe() {}").unwrap();
+        fs::write(external.join("sentinel.txt"), "unchanged").unwrap();
+
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        *BOOTSTRAP_HOOK
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = Some(BootstrapHook {
+            target: parent.clone(),
+            reached: Arc::clone(&reached),
+            resume: Arc::clone(&resume),
+        });
+        let service = parent.join("service");
+        let worker = thread::spawn(move || {
+            ProductionRuntime::open(ProductionConfig::new(documents, code, service))
+                .map(drop)
+                .map_err(|error| error.to_string())
+        });
+        reached.wait();
+        let command = format!(
+            "ren \"{}\" \"{}\" && mklink /J \"{}\" \"{}\"",
+            parent.display(),
+            displaced.file_name().unwrap().to_string_lossy(),
+            parent.display(),
+            external.display()
+        );
+        let attack = Command::new("cmd")
+            .args(["/d", "/s", "/c", &command])
+            .output()
+            .unwrap();
+        resume.wait();
+        let result = worker.join().unwrap();
+        *BOOTSTRAP_HOOK.get().unwrap().lock().unwrap() = None;
+
+        assert!(
+            !attack.status.success() || result.is_err(),
+            "successful parent swap must be detected by no-follow component open"
+        );
+        assert_eq!(
+            fs::read_to_string(external.join("sentinel.txt")).unwrap(),
+            "unchanged"
+        );
+        assert!(!external.join("state.sqlite").exists());
+        assert!(!external.join("lexical").exists());
+        drop(result);
+        let _ = fs::remove_dir(&parent);
+        if displaced.exists() {
+            let _ = fs::rename(&displaced, &parent);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
 }
