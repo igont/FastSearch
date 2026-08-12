@@ -128,6 +128,14 @@ fn one_production_composition_indexes_reopens_fuses_and_resolves_map_to_symbol()
     let exact_run = runtime.record_run_marker("E2-run-001").unwrap();
     assert!(!runtime.cleanup_run("E2-run-002").unwrap());
     assert!(exact_run.exists());
+    let unknown = exact_run.join("unknown.tmp");
+    fs::write(&unknown, "must survive refused cleanup").unwrap();
+    assert!(runtime.cleanup_run("E2-run-001").is_err());
+    assert_eq!(
+        fs::read_to_string(&unknown).unwrap(),
+        "must survive refused cleanup"
+    );
+    fs::remove_file(unknown).unwrap();
     assert!(runtime.cleanup_run("E2-run-001").unwrap());
     assert!(!exact_run.exists());
     assert!(runtime.record_run_marker("../escape").is_err());

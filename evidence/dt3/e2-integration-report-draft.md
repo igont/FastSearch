@@ -2,6 +2,10 @@
 
 E2 связывает принятые document/vector/map/symbol adapters через единственную production-композицию и E1 fusion. Пути document root, code root, service root и optional local E5 root являются параметрами CLI; машинные пути не входят в публичную identity.
 
+Production boundary проверяет service root до первой записи: внутри source разрешён только точный `.cfknowledge/<run>`, отдельный изолированный root разрешён, существующие reparse points запрещены. Cleanup ограничен точным marker-owned run-каталогом, отказывается удалять неизвестное содержимое и не выполняет рекурсивное удаление.
+
+Lifecycle-oracle включает перенос сырого DT2 SQLite state, отсутствие ошибочного `get` до rebuild, переход к Current после rebuild, отказ настроенного E5 после Current без потери authority/ложных hits и последующее восстановление провайдера. Authoritative release JSON фиксирует product revision, SHA-256 бинарника, toolchain, exit code и digest семантического вывода каждого из 20 процессов; рабочий путь содержит пробелы.
+
 Структурная навигация сообщает только синтаксические Rust/Python declaration facts и явные `.cfmap.md` relations. Она не заявляет compiler-resolved definition, references, type inference или call graph.
 
 ## Остаточные границы

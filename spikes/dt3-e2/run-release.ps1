@@ -53,7 +53,29 @@ function Invoke-Measured {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
+    # Windows PowerShell 5.1 has no ProcessStartInfo.ArgumentList. Encode each
+    # argv element with the documented CommandLineToArgvW backslash/quote rules.
+    $encoded = foreach ($argument in $Arguments) {
+        if ($argument -notmatch '[\s"]') { $argument; continue }
+        $builder = [System.Text.StringBuilder]::new('"')
+        $slashes = 0
+        foreach ($character in $argument.ToCharArray()) {
+            if ($character -eq '\') { $slashes++; continue }
+            if ($character -eq '"') {
+                [void]$builder.Append(('\' * ($slashes * 2 + 1)))
+                [void]$builder.Append('"')
+                $slashes = 0
+                continue
+            }
+            [void]$builder.Append(('\' * $slashes))
+            $slashes = 0
+            [void]$builder.Append($character)
+        }
+        [void]$builder.Append(('\' * ($slashes * 2)))
+        [void]$builder.Append('"')
+        $builder.ToString()
+    }
+    $start.Arguments = $encoded -join ' '
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $start
     [void]$process.Start()
@@ -79,6 +101,9 @@ function Invoke-Measured {
     if ($Label -like 'cold-*' -or $Label -like 'vector-cold-*') {
         if ($stdoutText -notmatch 'freshness=Current' -or $stdoutText -notmatch 'CodeMaps=Real' -or $stdoutText -notmatch 'Symbols=Real') {
             throw "$Label semantic status assertion failed"
+        }
+        if ($Label -like 'vector-cold-*' -and $stdoutText -notmatch 'VectorRetrieval=Real') {
+            throw "$Label real vector provider assertion failed"
         }
     } else {
         if ($stdoutText -notmatch 'hits=[1-9]') { throw "$Label semantic search assertion failed" }
