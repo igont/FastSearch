@@ -1,10 +1,10 @@
 use crate::{
-    application::RealRuntime,
-    domain::{CapabilityState, SearchMode, SearchQuery, StableId},
+    application::{ProductionConfig, ProductionRuntime, RealRuntime},
+    domain::{CapabilityState, RelatedQuery, SearchMode, SearchQuery, StableId},
     ports::AgentSurface,
 };
 
-const USAGE: &str = "usage:\n  fastsearch init <source> <service>\n  fastsearch index update <source> <service>\n  fastsearch index rebuild <source> <service>\n  fastsearch search <source> <service> <balanced|current|design> <query>\n  fastsearch get <source> <service> <stable-id>\n  fastsearch status <source> <service>";
+const USAGE: &str = "usage:\n  fastsearch init <documents> <code> <service> [e5-root]\n  fastsearch index update <documents> <code> <service> [e5-root]\n  fastsearch index rebuild <documents> <code> <service> [e5-root]\n  fastsearch search <documents> <code> <service> <balanced|current|design> <query> [e5-root]\n  fastsearch get <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch related <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch status <documents> <code> <service> [e5-root]";
 
 pub enum CliError {
     Usage,
@@ -20,7 +20,64 @@ impl CliError {
 
 /// Runs the single real document CLI composition.
 pub fn execute_cli(arguments: Vec<String>) -> Result<String, CliError> {
+    if let [index, action, source, service, flag] = arguments.as_slice()
+        && index == "index"
+        && action == "update"
+        && flag == "--test-fail-projection"
+    {
+        let mut runtime = open(source, service)?;
+        runtime
+            .index_with_test_projection_failure()
+            .map_err(runtime_error)?;
+        unreachable!("the controlled projection fault always fails")
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--test-fail-projection")
+    {
+        return Err(CliError::Usage);
+    }
     match arguments.as_slice() {
+        [command, documents, code, service] if command == "init" => {
+            let runtime = open_production(documents, code, service, None)?;
+            Ok(render_status(&runtime))
+        }
+        [command, documents, code, service, e5] if command == "init" => {
+            let runtime = open_production(documents, code, service, Some(e5))?;
+            Ok(render_status(&runtime))
+        }
+        [index, action, documents, code, service]
+            if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
+        {
+            execute_production_index(action, documents, code, service, None)
+        }
+        [index, action, documents, code, service, e5]
+            if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
+        {
+            execute_production_index(action, documents, code, service, Some(e5))
+        }
+        [command, documents, code, service, mode, query] if command == "search" => {
+            execute_production_search(documents, code, service, mode, query, None)
+        }
+        [command, documents, code, service, mode, query, e5] if command == "search" => {
+            execute_production_search(documents, code, service, mode, query, Some(e5))
+        }
+        [command, documents, code, service, id] if command == "get" || command == "related" => {
+            execute_production_record(command, documents, code, service, id, None)
+        }
+        [command, documents, code, service, id, e5] if command == "get" || command == "related" => {
+            execute_production_record(command, documents, code, service, id, Some(e5))
+        }
+        [command, documents, code, service] if command == "status" => {
+            let runtime = open_production(documents, code, service, None)?;
+            Ok(render_status(&runtime))
+        }
+        [command, documents, code, service, e5] if command == "status" => {
+            let runtime = open_production(documents, code, service, Some(e5))?;
+            Ok(render_status(&runtime))
+        }
+        // Backward-compatible DT2 document-only commands remain accepted, but are
+        // not advertised as the DT3 production surface.
         [command, source, service] if command == "init" => {
             let runtime = open(source, service)?;
             Ok(render_status(&runtime))
@@ -29,15 +86,6 @@ pub fn execute_cli(arguments: Vec<String>) -> Result<String, CliError> {
             let mut runtime = open(source, service)?;
             runtime.index().map_err(runtime_error)?;
             Ok(render_status(&runtime))
-        }
-        [index, action, source, service, flag]
-            if index == "index" && action == "update" && flag == "--test-fail-projection" =>
-        {
-            let mut runtime = open(source, service)?;
-            runtime
-                .index_with_test_projection_failure()
-                .map_err(runtime_error)?;
-            unreachable!("the controlled projection fault always fails")
         }
         [index, action, source, service] if index == "index" && action == "rebuild" => {
             let mut runtime = open(source, service)?;
@@ -61,6 +109,77 @@ pub fn execute_cli(arguments: Vec<String>) -> Result<String, CliError> {
             Ok(render_status(&runtime))
         }
         _ => Err(CliError::Usage),
+    }
+}
+
+fn open_production(
+    documents: &str,
+    code: &str,
+    service: &str,
+    e5: Option<&String>,
+) -> Result<ProductionRuntime, CliError> {
+    let config = ProductionConfig::new(documents, code, service);
+    let config = match e5 {
+        Some(root) => config.with_e5_root(root),
+        None => config,
+    };
+    ProductionRuntime::open(config).map_err(runtime_error)
+}
+
+fn execute_production_index(
+    action: &str,
+    documents: &str,
+    code: &str,
+    service: &str,
+    e5: Option<&String>,
+) -> Result<String, CliError> {
+    let mut runtime = open_production(documents, code, service, e5)?;
+    if action == "rebuild" {
+        runtime.rebuild().map_err(runtime_error)?;
+    } else {
+        runtime.index().map_err(runtime_error)?;
+    }
+    Ok(render_status(&runtime))
+}
+
+fn execute_production_search(
+    documents: &str,
+    code: &str,
+    service: &str,
+    mode: &str,
+    text: &str,
+    e5: Option<&String>,
+) -> Result<String, CliError> {
+    let mut runtime = open_production(documents, code, service, e5)?;
+    // A CLI search is a process boundary. Reconcile before querying so the
+    // in-memory local-E5 projection is rebuilt from the same committed authority
+    // as lexical/maps/symbols instead of reporting a false cross-process Current.
+    runtime.index().map_err(runtime_error)?;
+    let query = SearchQuery::new(text, parse_mode(mode)?).map_err(runtime_error)?;
+    Ok(render_search(
+        &runtime.search(&query).map_err(runtime_error)?,
+    ))
+}
+
+fn execute_production_record(
+    command: &str,
+    documents: &str,
+    code: &str,
+    service: &str,
+    id: &str,
+    e5: Option<&String>,
+) -> Result<String, CliError> {
+    let runtime = open_production(documents, code, service, e5)?;
+    let id = StableId::parse(id).map_err(runtime_error)?;
+    if command == "related" {
+        let records = runtime
+            .related(&RelatedQuery::new(id))
+            .map_err(runtime_error)?;
+        Ok(render_records(&records))
+    } else {
+        Ok(render_get(
+            runtime.get(&id).map_err(runtime_error)?.as_ref(),
+        ))
     }
 }
 
@@ -140,4 +259,14 @@ fn render_get(record: Option<&crate::domain::CanonicalRecord>) -> String {
             )
         },
     )
+}
+
+fn render_records(records: &[crate::domain::CanonicalRecord]) -> String {
+    let mut lines = vec![format!("records={}", records.len())];
+    lines.extend(
+        records
+            .iter()
+            .map(|record| format!("record={}\ttitle={}", record.id().as_str(), record.title())),
+    );
+    lines.join("\n")
 }
