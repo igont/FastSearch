@@ -9,6 +9,7 @@ use crate::domain::{
 };
 
 mod cli;
+pub mod fusion;
 
 pub use cli::{CliError, execute_cli};
 
