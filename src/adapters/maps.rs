@@ -1,11 +1,8 @@
-//! Versioned `.cfmap.md` admission and safe AUTO-region regeneration.
+//! Versioned read-only `.cfmap.md` admission.
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
@@ -17,21 +14,11 @@ use crate::ports::SourcePort;
 
 const HEADER_START: &str = "---\n";
 const HEADER_END: &str = "---\n";
-const AUTO_START: &str = "<!-- cfmap:auto:start -->";
-const AUTO_END: &str = "<!-- cfmap:auto:end -->";
 const MAX_MAP_BYTES: u64 = 1_048_576;
-const MAX_DERIVED_BODY_BYTES: usize = 65_536;
 const MAX_MAP_FILES: usize = 1_024;
 const MAX_MAP_DEPTH: usize = 16;
 
-/// Result of a regeneration request. CURATED files are deliberately untouched.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RegenerationOutcome {
-    UpdatedAuto,
-    PreservedCurated,
-}
-
-/// Read-only source and bounded writer for a single configured map root.
+/// Read-only source for a single configured map root.
 #[derive(Debug)]
 pub struct CodeMapSource {
     root: PathBuf,
@@ -53,37 +40,6 @@ impl CodeMapSource {
             .into_iter()
             .map(|path| parse_map_file(&root, &path))
             .collect()
-    }
-
-    /// Replaces only the delimited AUTO body after full validation; invalid input never writes.
-    pub fn regenerate(
-        &self,
-        locator: &str,
-        derived_body: &str,
-    ) -> Result<RegenerationOutcome, FastSearchError> {
-        if derived_body.contains(AUTO_START) || derived_body.contains(AUTO_END) {
-            return Err(invalid(
-                "derived map body must not contain cfmap region markers",
-            ));
-        }
-        if derived_body.len() > MAX_DERIVED_BODY_BYTES {
-            return Err(invalid("derived map body exceeds the configured limit"));
-        }
-        let root = canonical_root(&self.root)?;
-        let path = contained_map_path(&root, locator)?;
-        let original =
-            fs::read_to_string(&path).map_err(|error| source_failure("read map", error))?;
-        let parsed = parse_map_text(locator, &original)?;
-        if parsed.mode == MapMode::Curated {
-            return Ok(RegenerationOutcome::PreservedCurated);
-        }
-        let (start, end) = auto_region(&original)?;
-        let replacement = format!("{AUTO_START}\n{derived_body}\n{AUTO_END}");
-        let updated = format!("{}{}{}", &original[..start], replacement, &original[end..]);
-        // The complete replacement is constructed and validated before the prior authority is touched.
-        parse_map_text(locator, &updated)?;
-        replace_map_atomically(&path, updated.as_bytes())?;
-        Ok(RegenerationOutcome::UpdatedAuto)
     }
 }
 
@@ -168,27 +124,6 @@ fn collect_map_paths(
     Ok(())
 }
 
-fn contained_map_path(root: &Path, locator: &str) -> Result<PathBuf, FastSearchError> {
-    let relative = Path::new(locator);
-    if !locator.ends_with(".cfmap.md")
-        || relative.is_absolute()
-        || !relative
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-    {
-        return Err(invalid("map locator must be a contained .cfmap.md path"));
-    }
-    let candidate = root
-        .join(relative)
-        .canonicalize()
-        .map_err(|error| source_failure("canonicalize map", error))?;
-    if candidate.strip_prefix(root).is_err() {
-        return Err(invalid("map locator escapes configured root"));
-    }
-    ensure_bounded_map(&candidate)?;
-    Ok(candidate)
-}
-
 fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearchError> {
     let locator = path
         .strip_prefix(root)
@@ -203,7 +138,7 @@ fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearch
         && parsed
             .source
             .as_ref()
-            .is_some_and(|source| !referenced_source_exists(root, source))
+            .is_some_and(|source| !referenced_source_is_current(root, source))
     {
         "STALE"
     } else {
@@ -284,46 +219,44 @@ fn parse_map_text(locator: &str, text: &str) -> Result<ParsedMap, FastSearchErro
     if mode == MapMode::Auto && source.is_none() {
         return Err(invalid("AUTO cfmap requires source"));
     }
+    if let Some(source) = &source {
+        let locator = source.split('#').next().unwrap_or_default();
+        if locator.is_empty()
+            || !Path::new(locator)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err(invalid(
+                "AUTO cfmap source must be a contained relative locator",
+            ));
+        }
+    }
     if mode == MapMode::Curated && (source.is_some() || fields.contains_key("generation")) {
         return Err(invalid(
             "CURATED cfmap cannot declare generated source or generation",
         ));
     }
     map_title(&body)?;
-    if mode == MapMode::Auto {
-        auto_region(text)?;
-    }
     if locator.is_empty() {
         return Err(invalid("map locator must not be empty"));
     }
     Ok(ParsedMap { mode, source, body })
 }
 
-fn auto_region(text: &str) -> Result<(usize, usize), FastSearchError> {
-    if text.match_indices(AUTO_START).count() != 1 || text.match_indices(AUTO_END).count() != 1 {
-        return Err(invalid("AUTO cfmap requires exactly one generated region"));
-    }
-    let start = text
-        .find(AUTO_START)
-        .ok_or_else(|| invalid("AUTO cfmap requires one generated region"))?;
-    let after_start = start + AUTO_START.len();
-    let end_start = text[after_start..]
-        .find(AUTO_END)
-        .map(|offset| after_start + offset)
-        .ok_or_else(|| invalid("AUTO cfmap generated region is not terminated"))?;
-    if text[..start].contains(AUTO_END) {
-        return Err(invalid("AUTO cfmap requires exactly one generated region"));
-    }
-    Ok((start, end_start + AUTO_END.len()))
-}
-
-fn referenced_source_exists(root: &Path, source: &str) -> bool {
+fn referenced_source_is_current(root: &Path, source: &str) -> bool {
     let relative = source.split('#').next().unwrap_or_default();
-    !relative.is_empty()
-        && Path::new(relative)
+    if relative.is_empty()
+        || !Path::new(relative)
             .components()
             .all(|part| matches!(part, Component::Normal(_)))
-        && root.join(relative).is_file()
+    {
+        return false;
+    }
+    let candidate = root.join(relative);
+    candidate.is_file()
+        && candidate
+            .canonicalize()
+            .is_ok_and(|canonical| canonical.strip_prefix(root).is_ok())
 }
 
 fn map_title(body: &str) -> Result<String, FastSearchError> {
@@ -347,34 +280,6 @@ fn ensure_bounded_map(path: &Path) -> Result<(), FastSearchError> {
     Ok(())
 }
 
-fn replace_map_atomically(path: &Path, bytes: &[u8]) -> Result<(), FastSearchError> {
-    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("map has no parent directory"))?;
-    let temporary = parent.join(format!(
-        ".cfmap-replace-{}-{}",
-        std::process::id(),
-        NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| source_failure("create map replacement", error))?;
-        file.write_all(bytes)
-            .map_err(|error| source_failure("write map replacement", error))?;
-        file.sync_all()
-            .map_err(|error| source_failure("sync map replacement", error))?;
-        fs::rename(&temporary, path)
-            .map_err(|error| source_failure("replace map atomically", error))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
 fn invalid(message: impl Into<String>) -> FastSearchError {
     FastSearchError::new(ErrorKind::InvalidContent, message)
 }
