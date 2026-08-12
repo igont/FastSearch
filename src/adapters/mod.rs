@@ -4,4 +4,5 @@ pub mod lexical;
 pub mod maps;
 pub mod source;
 pub mod state;
+pub mod symbols;
 pub mod vector;
