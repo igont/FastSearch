@@ -1,16 +1,17 @@
 //! Versioned read-only `.cfmap.md` admission.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::domain::RelatedQuery;
 use crate::domain::{
     CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
     SourceSnapshot, StableId,
 };
-use crate::ports::SourcePort;
+use crate::ports::{CodeMapPort, SourcePort};
 
 const HEADER_START: &str = "---\n";
 const HEADER_END: &str = "---\n";
@@ -22,6 +23,64 @@ const MAX_MAP_DEPTH: usize = 16;
 #[derive(Debug)]
 pub struct CodeMapSource {
     root: PathBuf,
+}
+
+/// In-memory projection of explicit map facts. It never follows a relation recursively.
+#[derive(Debug)]
+pub struct CodeMapRelated {
+    records: BTreeMap<StableId, CanonicalRecord>,
+}
+
+impl CodeMapRelated {
+    pub fn new(
+        records: impl IntoIterator<Item = CanonicalRecord>,
+    ) -> Result<Self, FastSearchError> {
+        let mut indexed = BTreeMap::new();
+        for record in records {
+            if indexed.insert(record.id().clone(), record).is_some() {
+                return Err(FastSearchError::new(
+                    ErrorKind::DuplicateStableId,
+                    "map relation projection contains duplicate stable IDs",
+                ));
+            }
+        }
+        Ok(Self { records: indexed })
+    }
+}
+
+impl CodeMapPort for CodeMapRelated {
+    fn related_maps(&self, query: &RelatedQuery) -> Result<Vec<CanonicalRecord>, FastSearchError> {
+        let source = self.records.get(query.id()).ok_or_else(|| {
+            FastSearchError::new(ErrorKind::NotFound, "related map source is not present")
+        })?;
+        if source.kind() != RecordKind::CodeMap {
+            return Err(FastSearchError::new(
+                ErrorKind::NotFound,
+                "related navigation requires a code map source",
+            ));
+        }
+        if source
+            .metadata()
+            .get("state")
+            .is_some_and(|state| state == "STALE")
+        {
+            return Err(FastSearchError::new(
+                ErrorKind::StateFailure,
+                "stale code map cannot publish related navigation",
+            ));
+        }
+        let mut target_ids = BTreeSet::new();
+        target_ids.extend(source.relations().iter().cloned());
+        target_ids
+            .into_iter()
+            .map(|id| {
+                let target = self.records.get(&id).ok_or_else(|| {
+                    FastSearchError::new(ErrorKind::NotFound, "explicit map relation is dangling")
+                })?;
+                related_with_provenance(target, source.id())
+            })
+            .collect()
+    }
 }
 
 impl CodeMapSource {
@@ -67,6 +126,7 @@ struct ParsedMap {
     mode: MapMode,
     source: Option<String>,
     body: String,
+    relations: Vec<StableId>,
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf, FastSearchError> {
@@ -165,7 +225,7 @@ fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearch
         map_title(&parsed.body)?,
         parsed.body,
         metadata,
-        Vec::new(),
+        parsed.relations,
         ContentHash::parse(digest.clone())?,
     )?;
     Ok(SourceSnapshot::new(
@@ -237,7 +297,23 @@ fn parse_map_text(locator: &str, text: &str) -> Result<ParsedMap, FastSearchErro
     if locator.is_empty() {
         return Err(invalid("map locator must not be empty"));
     }
-    Ok(ParsedMap { mode, source, body })
+    let relations = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("@related "))
+        .map(|value| StableId::parse(value.to_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if body
+        .lines()
+        .any(|line| line.starts_with("@related") && !line.starts_with("@related "))
+    {
+        return Err(invalid("map relation must use @related <stable-id>"));
+    }
+    Ok(ParsedMap {
+        mode,
+        source,
+        body,
+        relations,
+    })
 }
 
 enum ReferencedSourceState {
@@ -294,6 +370,27 @@ fn ensure_bounded_map(path: &Path) -> Result<(), FastSearchError> {
         return Err(invalid("map exceeds the configured size limit"));
     }
     Ok(())
+}
+
+fn related_with_provenance(
+    target: &CanonicalRecord,
+    source_id: &StableId,
+) -> Result<CanonicalRecord, FastSearchError> {
+    let mut metadata = target.metadata().clone();
+    metadata.insert(
+        "relation_provenance".to_owned(),
+        format!("explicit-map:{}", source_id.as_str()),
+    );
+    CanonicalRecord::new(
+        target.id().clone(),
+        target.kind(),
+        target.locator().clone(),
+        target.title(),
+        target.searchable_content(),
+        metadata,
+        target.relations().to_vec(),
+        target.content_hash().clone(),
+    )
 }
 
 fn invalid(message: impl Into<String>) -> FastSearchError {
