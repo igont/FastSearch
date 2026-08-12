@@ -47,7 +47,8 @@ if ($LASTEXITCODE -ne 0 -or $recovery -notmatch '"index":0') { throw 'E5_RECOVER
 $junction = Join-Path $cache 'junction-probe'
 cmd.exe /c "mklink /J `"$junction`" `"$model`"" | Out-Null
 if (!((Get-Item -LiteralPath $junction -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'JUNCTION_NOT_CREATED' }
-if ((Get-Item -LiteralPath $junction -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $reparse='rejected' } else { throw 'REPARSE_NOT_REJECTED' }
+function AssertCanonicalAdmission([string]$path) { if ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'B1_TYPED_REPARSE_REJECTED_BEFORE_READ' }; Get-ChildItem -LiteralPath $path -Force | Out-Null }
+try { AssertCanonicalAdmission $junction; throw 'REPARSE_NOT_REJECTED' } catch { if ($_.Exception.Message -ne 'B1_TYPED_REPARSE_REJECTED_BEFORE_READ') { throw }; $reparse='typed-rejected-before-read' }
 cmd.exe /c "rmdir `"$junction`"" | Out-Null
 if (Test-Path -LiteralPath $junction) { throw 'JUNCTION_CLEANUP_FAILED' }
 $latencies = @($runs | ForEach-Object { [int]([regex]::Match($_.output,'"elapsed_ms":(\d+)')).Groups[1].Value } | Sort-Object)
@@ -60,7 +61,11 @@ $bge = & $exe bge (Join-Path $cache 'models\bge-m3') $query $docs 2>&1
 $bgeExit = $LASTEXITCODE
 $ErrorActionPreference = $oldErrorActionPreference
 if ($bgeExit -eq 0 -or ($bge | Out-String) -notmatch 'expects the model to return 3 outputs') { throw 'BGE_CAUSAL_FAILURE_NOT_REPRODUCED' }
-$qwen = docker inspect fastsearch-dt3-b1-qwen --format '{{json .NetworkSettings.Ports}} {{.HostConfig.ReadonlyRootfs}}' 2>&1
-$payload = [ordered]@{schema='dt3-b1-operational-v3'; fixture_root='document-representative-b1-fixture'; query_contract='A1/B1 paraphrase expected architecture.md, must-not secret sentinel'; models=$manifest; full_cache_manifest=$fullManifest; cold=$runs[0..4]; warm=$runs[5..9]; p95_ms=$latencies[-1]; peak_working_set_bytes=$peak; vector_child_budget_bytes=2147483648; missing_cache='typed-rejected'; recovery='same-model-hash accepted'; junction_reparse=$reparse; bge=($bge | Out-String).Trim(); qwen_inspect=($qwen | Out-String).Trim(); qwen='unavailable: internal-network loopback route absent'}
+$qwen = docker inspect fastsearch-dt3-b1-qwen --format '{{.HostConfig.ReadonlyRootfs}}|{{range .Mounts}}{{.Destination}}:{{.RW}};{{end}}|{{range $k,$v := .NetworkSettings.Networks}}{{$k}}:{{$v.NetworkID}};{{end}}|{{json .NetworkSettings.Ports}}' 2>&1
+$qwenImage = docker image inspect 'ghcr.io/huggingface/text-embeddings-inference@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07' --format '{{.Id}}' 2>&1
+$network = docker network inspect fastsearch-dt3-b1-internal --format '{{.Internal}}' 2>&1
+$probe = curl.exe --max-time 3 --silent --show-error http://127.0.0.1:18080/embed 2>&1
+if (($qwenImage | Out-String) -notmatch 'ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07' -or ($qwen | Out-String) -notmatch '/data:False' -or ($network | Out-String).Trim() -ne 'true' -or ($qwen | Out-String) -notmatch '"80/tcp":\[\]') { throw 'QWEN_PRIVACY_INSPECT_FAILED' }
+$payload = [ordered]@{schema='dt3-b1-operational-v4'; fixture_root='document-representative-b1-fixture'; query_contract='A1/B1 paraphrase expected architecture.md, must-not secret sentinel'; models=$manifest; full_cache_manifest=$fullManifest; cold=$runs[0..4]; warm=$runs[5..9]; p95_ms=$latencies[-1]; peak_working_set_bytes=$peak; vector_child_budget_bytes=2147483648; missing_cache='typed-rejected'; recovery='same-model-hash accepted'; junction_reparse=$reparse; bge=($bge | Out-String).Trim(); qwen_image=($qwenImage | Out-String).Trim(); qwen_inspect=($qwen | Out-String).Trim(); qwen_network=($network | Out-String).Trim(); qwen_loopback_probe=($probe | Out-String).Trim(); qwen_cleanup='container/network retained during active B1 evidence; exact named cleanup deferred until stop to preserve causal inspect evidence'; qwen='unavailable: required internal no-egress network has no loopback publication'}
 $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $cache 'operational.json') -Encoding UTF8
 Write-Output ($payload | ConvertTo-Json -Compress)
