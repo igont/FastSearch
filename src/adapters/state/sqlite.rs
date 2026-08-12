@@ -652,8 +652,8 @@ fn source_key(snapshot: &SourceSnapshot) -> String {
     }
 
     let mut key = String::new();
-    if snapshot.root().as_str() != "default" {
-        append_component(&mut key, snapshot.root().as_str());
+    if let Some(root) = snapshot.root() {
+        append_component(&mut key, root.as_str());
     }
     let locator = snapshot.locator();
     append_component(&mut key, locator.path());

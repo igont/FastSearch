@@ -271,7 +271,7 @@ impl SourceAdmission {
 /// Наблюдаемый снимок одного исходного файла до state/lexical projections.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceSnapshot {
-    root: LogicalRootId,
+    root: Option<LogicalRootId>,
     locator: SourceLocator,
     file_hash: FileHash,
     records: Vec<CanonicalRecord>,
@@ -281,7 +281,7 @@ impl SourceSnapshot {
     #[must_use]
     pub fn new(locator: SourceLocator, file_hash: FileHash, records: Vec<CanonicalRecord>) -> Self {
         Self {
-            root: LogicalRootId("default".to_owned()),
+            root: None,
             locator,
             file_hash,
             records,
@@ -295,15 +295,15 @@ impl SourceSnapshot {
         records: Vec<CanonicalRecord>,
     ) -> Self {
         Self {
-            root,
+            root: Some(root),
             locator,
             file_hash,
             records,
         }
     }
     #[must_use]
-    pub const fn root(&self) -> &LogicalRootId {
-        &self.root
+    pub const fn root(&self) -> Option<&LogicalRootId> {
+        self.root.as_ref()
     }
     #[must_use]
     pub const fn locator(&self) -> &SourceLocator {

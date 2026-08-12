@@ -157,6 +157,11 @@ fn full_reconcile_keeps_equal_relative_locators_from_named_roots_distinct() {
     let mut store = fastsearch::adapters::state::SqliteStateStore::open(&database).unwrap();
     let locator = SourceLocator::whole_file("shared/readme.md").unwrap();
     let snapshots = [
+        SourceSnapshot::new(
+            locator.clone(),
+            FileHash::parse("sha256:legacy").unwrap(),
+            Vec::new(),
+        ),
         SourceSnapshot::for_root(
             LogicalRootId::parse("documents").unwrap(),
             locator.clone(),
@@ -164,7 +169,7 @@ fn full_reconcile_keeps_equal_relative_locators_from_named_roots_distinct() {
             Vec::new(),
         ),
         SourceSnapshot::for_root(
-            LogicalRootId::parse("code").unwrap(),
+            LogicalRootId::parse("default").unwrap(),
             locator,
             FileHash::parse("sha256:b").unwrap(),
             Vec::new(),
