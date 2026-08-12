@@ -171,3 +171,44 @@ fn external_source_locator_is_rejected_before_any_snapshot_is_returned() {
         &ErrorKind::InvalidContent
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn external_junction_source_is_rejected_before_any_snapshot_is_returned() {
+    let fixture = Fixture::new();
+    let outside = fixture
+        .root
+        .parent()
+        .unwrap()
+        .join(format!("fastsearch-c1-external-{}", std::process::id()));
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("source.md"), "# Outside\n").unwrap();
+    let junction = fixture.root.join("linked");
+    let status = std::process::Command::new("cmd")
+        .args([
+            "/c",
+            "mklink",
+            "/J",
+            junction.to_str().unwrap(),
+            outside.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "test requires a Windows directory junction"
+    );
+    fixture.write(
+        "external.cfmap.md",
+        "---\ncfmap: v1\nmode: AUTO\nsource: linked/source.md#Hidden\n---\n# External\n",
+    );
+    assert_eq!(
+        CodeMapSource::new(&fixture.root)
+            .snapshots()
+            .unwrap_err()
+            .kind(),
+        &ErrorKind::InvalidContent
+    );
+    let _ = fs::remove_dir(junction);
+    let _ = fs::remove_dir_all(outside);
+}

@@ -134,15 +134,12 @@ fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearch
     let bytes = fs::read(path).map_err(|error| source_failure("read map", error))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| invalid("map must be UTF-8"))?;
     let parsed = parse_map_text(&locator, text)?;
-    let state = if parsed.mode == MapMode::Auto
-        && parsed
-            .source
-            .as_ref()
-            .is_some_and(|source| !referenced_source_is_current(root, source))
-    {
-        "STALE"
-    } else {
-        "CURRENT"
+    let state = match (parsed.mode, parsed.source.as_deref()) {
+        (MapMode::Auto, Some(source)) => match referenced_source_state(root, source)? {
+            ReferencedSourceState::Current => "CURRENT",
+            ReferencedSourceState::Missing => "STALE",
+        },
+        _ => "CURRENT",
     };
     let mut metadata = BTreeMap::new();
     metadata.insert("schema".to_owned(), "cfmap-v1".to_owned());
@@ -243,20 +240,39 @@ fn parse_map_text(locator: &str, text: &str) -> Result<ParsedMap, FastSearchErro
     Ok(ParsedMap { mode, source, body })
 }
 
-fn referenced_source_is_current(root: &Path, source: &str) -> bool {
+enum ReferencedSourceState {
+    Current,
+    Missing,
+}
+
+fn referenced_source_state(
+    root: &Path,
+    source: &str,
+) -> Result<ReferencedSourceState, FastSearchError> {
     let relative = source.split('#').next().unwrap_or_default();
     if relative.is_empty()
         || !Path::new(relative)
             .components()
             .all(|part| matches!(part, Component::Normal(_)))
     {
-        return false;
+        return Err(invalid(
+            "AUTO cfmap source must be a contained relative locator",
+        ));
     }
     let candidate = root.join(relative);
-    candidate.is_file()
-        && candidate
-            .canonicalize()
-            .is_ok_and(|canonical| canonical.strip_prefix(root).is_ok())
+    if !candidate.exists() {
+        return Ok(ReferencedSourceState::Missing);
+    }
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| source_failure("canonicalize AUTO cfmap source", error))?;
+    if canonical.strip_prefix(root).is_err() {
+        return Err(invalid("AUTO cfmap source escapes configured root"));
+    }
+    if !canonical.is_file() {
+        return Err(invalid("AUTO cfmap source must be a file"));
+    }
+    Ok(ReferencedSourceState::Current)
 }
 
 fn map_title(body: &str) -> Result<String, FastSearchError> {
