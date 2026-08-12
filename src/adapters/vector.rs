@@ -606,21 +606,7 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
                     return Err(provider_error("model file size mismatch"));
                 }
                 let mut file = open_verified_file(&path)?;
-                let opened = file.metadata().map_err(provider_error)?;
-                if !opened.is_file() || opened.len() != *expected_size {
-                    return Err(provider_error("opened model file size mismatch"));
-                }
-                let expected_size = usize::try_from(*expected_size).map_err(provider_error)?;
-                let mut content = Vec::new();
-                content
-                    .try_reserve_exact(expected_size)
-                    .map_err(provider_error)?;
-                content.resize(expected_size, 0);
-                file.read_exact(&mut content).map_err(provider_error)?;
-                let mut trailing = [0_u8; 1];
-                if file.read(&mut trailing).map_err(provider_error)? != 0 {
-                    return Err(provider_error("model file grew while reading"));
-                }
+                let content = read_exact_allowlisted_file(&mut file, *expected_size)?;
                 bytes.insert(locator, content);
                 files.push(file);
             }
@@ -657,6 +643,28 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
         files,
         directories,
     })
+}
+
+fn read_exact_allowlisted_file(
+    file: &mut File,
+    expected_size: u64,
+) -> Result<Vec<u8>, FastSearchError> {
+    let opened = file.metadata().map_err(provider_error)?;
+    if !opened.is_file() || opened.len() != expected_size {
+        return Err(provider_error("opened model file size mismatch"));
+    }
+    let expected_size = usize::try_from(expected_size).map_err(provider_error)?;
+    let mut content = Vec::new();
+    content
+        .try_reserve_exact(expected_size)
+        .map_err(provider_error)?;
+    content.resize(expected_size, 0);
+    file.read_exact(&mut content).map_err(provider_error)?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).map_err(provider_error)? != 0 {
+        return Err(provider_error("model file grew while reading"));
+    }
+    Ok(content)
 }
 
 fn open_verified_file(path: &Path) -> Result<File, FastSearchError> {
@@ -1006,16 +1014,32 @@ mod security_tests {
         let expected = fs::metadata(&tokenizer).unwrap().len();
         let mut grown = fs::read(&tokenizer).unwrap();
         grown.extend(std::iter::repeat_n(0_u8, 1_048_576));
-        fs::write(&tokenizer, grown).unwrap();
+        let exchange = TempTree(fixture.0.with_extension("bounded-read-exchange"));
+        fs::create_dir_all(&exchange.0).unwrap();
+        let grown_path = exchange.0.join("grown.json");
+        let saved_path = exchange.0.join("saved.json");
+        fs::write(&grown_path, &grown).unwrap();
 
-        let error = match verified_model(&fixture.0) {
-            Ok(_) => panic!("grown allowlisted file must fail before provider load"),
-            Err(error) => error,
-        };
-        assert!(error.message().contains("model file size mismatch"));
+        // Executable vulnerable control reproduces the exact baseline order:
+        // pathname size check, replacement, then unrestricted second open/read.
+        assert_eq!(fs::metadata(&tokenizer).unwrap().len(), expected);
+        fs::rename(&tokenizer, &saved_path).unwrap();
+        fs::rename(&grown_path, &tokenizer).unwrap();
+        let mut vulnerable = Vec::new();
+        File::open(&tokenizer)
+            .unwrap()
+            .read_to_end(&mut vulnerable)
+            .unwrap();
         assert_eq!(
-            fs::metadata(&tokenizer).unwrap().len(),
-            expected + 1_048_576
+            vulnerable.len(),
+            usize::try_from(expected).unwrap() + 1_048_576
         );
+        fs::rename(&tokenizer, &grown_path).unwrap();
+        fs::rename(&saved_path, &tokenizer).unwrap();
+
+        let mut acquired = open_verified_file(&grown_path).unwrap();
+        let error = read_exact_allowlisted_file(&mut acquired, expected).unwrap_err();
+        assert!(error.message().contains("opened model file size mismatch"));
+        assert_eq!(fs::metadata(&tokenizer).unwrap().len(), expected);
     }
 }
