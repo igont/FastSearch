@@ -47,6 +47,7 @@ function Assert-ResourceBudget {
 
 function Assert-LatencyBudget {
   param([string]$ObservedKind, [double]$ObservedMs)
+  if ([double]::IsNaN($ObservedMs) -or [double]::IsInfinity($ObservedMs)) { throw 'RESOURCE_NONFINITE_LATENCY_REJECTED' }
   if ($ObservedMs -lt 0) { throw 'RESOURCE_NEGATIVE_LATENCY_REJECTED' }
   switch ($ObservedKind) {
     'warm_in_process_query' {
@@ -117,6 +118,7 @@ if ($SelfTest) {
   Invoke-LatencyPublicCase -ObservedKind 'warm_in_process_query' -ObservedMs 501 -ExpectedExit 1 -ExpectedOutput 'RESOURCE_WARM_IN_PROCESS_QUERY_REJECTED'
   Invoke-LatencyPublicCase -ObservedKind 'new_process_reopen_query' -ObservedMs 750 -ExpectedExit 0 -ExpectedOutput 'latency measurement PASS'
   Invoke-LatencyPublicCase -ObservedKind 'new_process_reopen_query' -ObservedMs 751 -ExpectedExit 1 -ExpectedOutput 'RESOURCE_NEW_PROCESS_REOPEN_QUERY_REJECTED'
+  Invoke-LatencyPublicCase -ObservedKind 'warm_in_process_query' -ObservedMs ([double]::NaN) -ExpectedExit 1 -ExpectedOutput 'RESOURCE_NONFINITE_LATENCY_REJECTED'
   Write-Output 'resource and latency split authority, exact boundaries, rejection boundaries and uncapped model artifact diagnostic PASS'
   exit 0
 }
