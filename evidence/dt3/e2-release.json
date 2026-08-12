@@ -1,9 +1,9 @@
 {
     "schema":  "dt3-e2-release-v3",
     "run_id":  "dt3-e2-release-v3",
-    "measured_product_revision":  "25c8cd00a6629523765d8462a54bb1321cf9df64",
+    "measured_product_revision":  "b07abdcfb7d512049a1761f2efa087b8fd520934",
     "evidence_candidate_relation":  "final evidence-only commit must descend from measured_product_revision",
-    "binary_sha256":  "59a170a66f61dde984214ed6ef837bc5822eba5346e6e636b73aad5a52d1b61a",
+    "binary_sha256":  "5c9bd1c3ce169e2e529d3081070a98acc7f38352aea173675b91eaf3798a4a8e",
     "rustc":  "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "cargo":  "cargo 1.97.1 (c980f4866 2026-06-30)",
     "command":  "spikes/dt3-e2/run-release.ps1 release 5 cold + 5 warm + optional E5 5 cold + 5 warm",
@@ -23,7 +23,7 @@
                         "code":  {
                                      "identity":  "code-fastsearch",
                                      "file_count":  21,
-                                     "manifest_sha256":  "2a27fc5e63626b05aa2ba8896dd96ef06c1043d79136529100a2c8d4043bd67d",
+                                     "manifest_sha256":  "ebaab83b85e2ad7331e256569a37705d65ed342e426a45a04aad2f5ecdff6c49",
                                      "files":  [
                                                    {
                                                        "locator":  "adapters/lexical/mod.rs",
@@ -82,8 +82,8 @@
                                                    },
                                                    {
                                                        "locator":  "application/production.rs",
-                                                       "bytes":  32269,
-                                                       "sha256":  "1101c3c7f204813c03108a55d67eba245f860fb0f71617c9074f27ef33495170"
+                                                       "bytes":  32250,
+                                                       "sha256":  "4b86d2052c376174edc498d63a764dbac16167548bc78c1e751ecd57e1c8053a"
                                                    },
                                                    {
                                                        "locator":  "contract_tests.rs",
@@ -153,36 +153,36 @@
     "cold":  [
                  {
                      "label":  "cold-1",
-                     "milliseconds":  463.448,
-                     "peak_working_set_bytes":  42688512,
+                     "milliseconds":  453.138,
+                     "peak_working_set_bytes":  42692608,
                      "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
                      "exit_code":  0
                  },
                  {
                      "label":  "cold-2",
-                     "milliseconds":  423.942,
-                     "peak_working_set_bytes":  43716608,
+                     "milliseconds":  418.633,
+                     "peak_working_set_bytes":  43548672,
                      "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
                      "exit_code":  0
                  },
                  {
                      "label":  "cold-3",
-                     "milliseconds":  432.805,
-                     "peak_working_set_bytes":  44326912,
+                     "milliseconds":  417.644,
+                     "peak_working_set_bytes":  42643456,
                      "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
                      "exit_code":  0
                  },
                  {
                      "label":  "cold-4",
-                     "milliseconds":  482.013,
-                     "peak_working_set_bytes":  42795008,
+                     "milliseconds":  416.15,
+                     "peak_working_set_bytes":  42778624,
                      "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
                      "exit_code":  0
                  },
                  {
                      "label":  "cold-5",
-                     "milliseconds":  440.616,
-                     "peak_working_set_bytes":  44199936,
+                     "milliseconds":  418.694,
+                     "peak_working_set_bytes":  43794432,
                      "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
                      "exit_code":  0
                  }
@@ -190,36 +190,36 @@
     "warm":  [
                  {
                      "label":  "warm-1",
-                     "milliseconds":  298.566,
-                     "peak_working_set_bytes":  22978560,
+                     "milliseconds":  302.932,
+                     "peak_working_set_bytes":  22835200,
                      "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
                      "exit_code":  0
                  },
                  {
                      "label":  "warm-2",
-                     "milliseconds":  294.661,
-                     "peak_working_set_bytes":  22822912,
+                     "milliseconds":  292.619,
+                     "peak_working_set_bytes":  22659072,
                      "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
                      "exit_code":  0
                  },
                  {
                      "label":  "warm-3",
-                     "milliseconds":  291.788,
-                     "peak_working_set_bytes":  22986752,
+                     "milliseconds":  292.69,
+                     "peak_working_set_bytes":  22818816,
                      "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
                      "exit_code":  0
                  },
                  {
                      "label":  "warm-4",
-                     "milliseconds":  294.966,
-                     "peak_working_set_bytes":  22769664,
+                     "milliseconds":  308.907,
+                     "peak_working_set_bytes":  22585344,
                      "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
                      "exit_code":  0
                  },
                  {
                      "label":  "warm-5",
-                     "milliseconds":  310.425,
-                     "peak_working_set_bytes":  22999040,
+                     "milliseconds":  293.739,
+                     "peak_working_set_bytes":  22618112,
                      "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
                      "exit_code":  0
                  }
@@ -227,80 +227,80 @@
     "vector":  [
                    {
                        "label":  "vector-cold-1",
-                       "milliseconds":  7465.238,
-                       "peak_working_set_bytes":  1512951808,
+                       "milliseconds":  7266.25,
+                       "peak_working_set_bytes":  1513230336,
                        "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-cold-2",
-                       "milliseconds":  6994.718,
-                       "peak_working_set_bytes":  1513123840,
+                       "milliseconds":  6554.2,
+                       "peak_working_set_bytes":  1513164800,
                        "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-cold-3",
-                       "milliseconds":  7037.797,
-                       "peak_working_set_bytes":  1513529344,
+                       "milliseconds":  6626.179,
+                       "peak_working_set_bytes":  1512914944,
                        "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-cold-4",
-                       "milliseconds":  7421.618,
-                       "peak_working_set_bytes":  1513021440,
+                       "milliseconds":  7340.65,
+                       "peak_working_set_bytes":  1512845312,
                        "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-cold-5",
-                       "milliseconds":  6883.894,
-                       "peak_working_set_bytes":  1513467904,
+                       "milliseconds":  7344.049,
+                       "peak_working_set_bytes":  1513447424,
                        "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-warm-1",
-                       "milliseconds":  8988.448,
-                       "peak_working_set_bytes":  1518751744,
+                       "milliseconds":  9997.309,
+                       "peak_working_set_bytes":  1520271360,
                        "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-warm-2",
-                       "milliseconds":  8969.224,
-                       "peak_working_set_bytes":  1520353280,
+                       "milliseconds":  10183.135,
+                       "peak_working_set_bytes":  1520316416,
                        "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-warm-3",
-                       "milliseconds":  8938.031,
-                       "peak_working_set_bytes":  1520611328,
+                       "milliseconds":  10207.129,
+                       "peak_working_set_bytes":  1520103424,
                        "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-warm-4",
-                       "milliseconds":  8888.456,
-                       "peak_working_set_bytes":  1520484352,
+                       "milliseconds":  10085.499,
+                       "peak_working_set_bytes":  1519349760,
                        "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
                        "exit_code":  0
                    },
                    {
                        "label":  "vector-warm-5",
-                       "milliseconds":  9099.186,
-                       "peak_working_set_bytes":  1520099328,
+                       "milliseconds":  10468.675,
+                       "peak_working_set_bytes":  1520201728,
                        "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
                        "exit_code":  0
                    }
                ],
-    "source_bytes":  1691399,
+    "source_bytes":  1691380,
     "service_bytes":  2477542,
-    "service_ratio":  1.464789,
-    "non_vector_peak_bytes":  44326912,
-    "vector_peak_bytes":  1520611328,
+    "service_ratio":  1.464805,
+    "non_vector_peak_bytes":  43794432,
+    "vector_peak_bytes":  1520316416,
     "gates":  {
                   "cold_max_ms":  true,
                   "new_process_reopen_query_max_ms":  true,
