@@ -2,8 +2,13 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[cfg(windows)]
@@ -31,6 +36,7 @@ use crate::{
 };
 
 const E5_IDENTITY: &str = "multilingual-e5-small@614241f";
+static RUN_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Replaceable machine paths for the one full production composition.
 #[derive(Clone, Debug)]
@@ -73,6 +79,7 @@ pub struct ProductionRuntime {
     lexical: TantivyLexical,
     vector: LocalE5Vector,
     vector_configured: bool,
+    owned_runs: Mutex<BTreeMap<String, String>>,
 }
 
 impl std::fmt::Debug for ProductionRuntime {
@@ -107,6 +114,7 @@ impl ProductionRuntime {
             lexical: TantivyLexical::open(service_root.join("lexical"))?,
             vector: LocalE5Vector::open(model_root, E5_IDENTITY),
             vector_configured,
+            owned_runs: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -121,13 +129,29 @@ impl ProductionRuntime {
     /// Creates an exact run-owned directory used by acceptance jobs and batch callers.
     pub fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
         validate_marker(marker)?;
-        let run = self.service_root.join("runs").join(marker);
-        fs::create_dir_all(&run)
+        let runs = self.service_root.join("runs");
+        fs::create_dir_all(&runs)
+            .map_err(|error| failure(ErrorKind::StateFailure, "create runs directory", error))?;
+        let run = runs.join(marker);
+        fs::create_dir(&run)
             .map_err(|error| failure(ErrorKind::StateFailure, "create run directory", error))?;
-        fs::write(run.join("owner.marker"), marker.as_bytes())
-            .map_err(|error| failure(ErrorKind::StateFailure, "write run marker", error))?;
-        fs::write(run.join("schema.marker"), b"fastsearch-run-v1")
-            .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))?;
+        let token = format!(
+            "{}-{}",
+            std::process::id(),
+            RUN_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        if let Err(error) = write_new_run_markers(&run, &token) {
+            let _ = fs::remove_file(run.join("schema.marker"));
+            let _ = fs::remove_file(run.join("owner.marker"));
+            let _ = fs::remove_dir(&run);
+            return Err(error);
+        }
+        self.owned_runs
+            .lock()
+            .map_err(|_| {
+                FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
+            })?
+            .insert(marker.to_owned(), token);
         Ok(run)
     }
 
@@ -135,13 +159,22 @@ impl ProductionRuntime {
     pub fn cleanup_run(&self, marker: &str) -> Result<bool, FastSearchError> {
         validate_marker(marker)?;
         let run = self.service_root.join("runs").join(marker);
-        let marker_path = run.join("owner.marker");
-        if !marker_path.exists() {
+        if !run.exists() {
             return Ok(false);
         }
+        let marker_path = run.join("owner.marker");
+        let mut owned = self.owned_runs.lock().map_err(|_| {
+            FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
+        })?;
+        let token = owned.get(marker).ok_or_else(|| {
+            FastSearchError::new(
+                ErrorKind::StateFailure,
+                "run directory is not owned by this runtime invocation",
+            )
+        })?;
         let observed = fs::read_to_string(&marker_path)
             .map_err(|error| failure(ErrorKind::StateFailure, "read run marker", error))?;
-        if observed != marker {
+        if observed != *token {
             return Err(FastSearchError::new(
                 ErrorKind::StateFailure,
                 "run cleanup marker does not match the exact requested owner",
@@ -179,6 +212,7 @@ impl ProductionRuntime {
             .map_err(|error| failure(ErrorKind::StateFailure, "remove schema marker", error))?;
         fs::remove_dir(&run)
             .map_err(|error| failure(ErrorKind::StateFailure, "remove empty exact run", error))?;
+        owned.remove(marker);
         Ok(true)
     }
 
@@ -408,6 +442,9 @@ fn validate_service_path_before_write(
             .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))?
             .join(requested)
     };
+    // Inspect the unresolved path first: canonicalizing the nearest existing
+    // ancestor would otherwise erase the identity of a junction ancestor.
+    ensure_no_reparse_points(&requested)?;
     let requested = canonicalize_existing_ancestor(&requested)?;
     ensure_no_reparse_points(&requested)?;
     let overlaps = requested.starts_with(documents)
@@ -509,6 +546,25 @@ fn validate_marker(marker: &str) -> Result<(), FastSearchError> {
         ));
     }
     Ok(())
+}
+
+fn write_new_run_markers(run: &Path, token: &str) -> Result<(), FastSearchError> {
+    let mut owner = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(run.join("owner.marker"))
+        .map_err(|error| failure(ErrorKind::StateFailure, "create run marker", error))?;
+    owner
+        .write_all(token.as_bytes())
+        .map_err(|error| failure(ErrorKind::StateFailure, "write run marker", error))?;
+    let mut schema = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(run.join("schema.marker"))
+        .map_err(|error| failure(ErrorKind::StateFailure, "create run schema", error))?;
+    schema
+        .write_all(b"fastsearch-run-v1")
+        .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))
 }
 
 fn failure(kind: ErrorKind, context: &str, error: std::io::Error) -> FastSearchError {

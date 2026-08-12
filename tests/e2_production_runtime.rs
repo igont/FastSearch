@@ -138,6 +138,20 @@ fn one_production_composition_indexes_reopens_fuses_and_resolves_map_to_symbol()
     fs::remove_file(unknown).unwrap();
     assert!(runtime.cleanup_run("E2-run-001").unwrap());
     assert!(!exact_run.exists());
+    let preexisting_empty = service.join("runs").join("preexisting-empty");
+    fs::create_dir(&preexisting_empty).unwrap();
+    assert!(runtime.record_run_marker("preexisting-empty").is_err());
+    assert!(preexisting_empty.exists());
+    let preexisting_marked = service.join("runs").join("preexisting-marked");
+    fs::create_dir(&preexisting_marked).unwrap();
+    fs::write(preexisting_marked.join("owner.marker"), "foreign").unwrap();
+    assert!(runtime.record_run_marker("preexisting-marked").is_err());
+    assert_eq!(
+        fs::read_to_string(preexisting_marked.join("owner.marker")).unwrap(),
+        "foreign"
+    );
+    assert!(runtime.cleanup_run("preexisting-marked").is_err());
+    assert!(preexisting_marked.exists());
     assert!(runtime.record_run_marker("../escape").is_err());
 
     fs::write(code.join("unsupported.txt"), "must not partially publish").unwrap();
@@ -262,6 +276,12 @@ fn service_junction_is_rejected_before_external_state_write() {
         fs::read_to_string(external.join("sentinel.txt")).unwrap(),
         "unchanged"
     );
+
+    let missing_child = junction.join("missing-child");
+    let error = ProductionRuntime::open(ProductionConfig::new(&documents, &code, &missing_child))
+        .expect_err("missing child beneath junction must fail before create");
+    assert!(error.to_string().contains("reparse point"));
+    assert!(!external.join("missing-child").exists());
 }
 
 #[test]
