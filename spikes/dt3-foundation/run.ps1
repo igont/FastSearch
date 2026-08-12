@@ -29,9 +29,9 @@ function AssertRedacted([object]$Payload) {
 if ($NegativeOnly) { exit 0 }
 $service=AssertSafeService $DocumentRoot $CodeRoot $ServiceRoot $RunId
 New-Item -ItemType Directory -Force -Path $service | Out-Null
-$marker=Join-Path $service 'dt3-a1-run.marker'; Set-Content -LiteralPath $marker -Value $RunId -Encoding utf8NoBOM
+$marker=Join-Path $service 'dt3-a1-run.marker'; Set-Content -LiteralPath $marker -Value $RunId -Encoding UTF8
 $payload=[ordered]@{ schema='dt3-a1-redacted-v1'; run_id=$RunId; roots=@('document-representative','code-fastsearch'); marker_sha256=(Get-FileHash -Path $marker -Algorithm SHA256).Hash.ToLowerInvariant(); error_classes=@(); timings_ms=@{} }
 AssertRedacted $payload
-$out=Join-Path $service 'run.json'; $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $out -Encoding utf8NoBOM
+$out=Join-Path $service 'run.json'; $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $out -Encoding UTF8
 if (!(Test-Path -LiteralPath $out) -or (Get-Content -LiteralPath $marker -Raw -Encoding utf8).Trim() -ne $RunId) { throw 'READBACK_FAILED' }
 Write-Output ($payload | ConvertTo-Json -Compress)
