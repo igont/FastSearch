@@ -13,19 +13,21 @@ use std::{
 };
 
 #[cfg(windows)]
-use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+use std::os::windows::{
+    ffi::OsStrExt,
+    fs::{MetadataExt, OpenOptionsExt},
+    io::{AsRawHandle, RawHandle},
+};
 
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_READ,
-        OPEN_EXISTING,
+        CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ, FileAttributeTagInfo, GetFileInformationByHandleEx, OPEN_EXISTING,
     },
 };
-
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt;
 
 use fastembed::{
     InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
@@ -61,6 +63,7 @@ struct ProjectionState {
 
 /// Rebuildable local vector projection using only explicitly supplied model files.
 pub struct LocalE5Vector {
+    operation: Mutex<()>,
     state: Mutex<ProjectionState>,
 }
 
@@ -92,6 +95,7 @@ impl LocalE5Vector {
     #[must_use]
     pub fn open(model_root: impl Into<PathBuf>, model_identity: impl Into<String>) -> Self {
         Self {
+            operation: Mutex::new(()),
             state: Mutex::new(ProjectionState {
                 model_root: model_root.into(),
                 model_identity: model_identity.into(),
@@ -108,6 +112,15 @@ impl LocalE5Vector {
     /// Applies the complete authoritative record set. Removed IDs disappear from
     /// the derived projection because the map is replaced atomically after E5 succeeds.
     pub fn apply(
+        &self,
+        records: &[CanonicalRecord],
+        state_generation: u64,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        let _operation = self.lock_operation()?;
+        self.apply_locked(records, state_generation)
+    }
+
+    fn apply_locked(
         &self,
         records: &[CanonicalRecord],
         state_generation: u64,
@@ -194,6 +207,7 @@ impl LocalE5Vector {
         model_root: impl Into<PathBuf>,
         model_identity: impl Into<String>,
     ) -> Result<(), FastSearchError> {
+        let _operation = self.lock_operation()?;
         let mut state = self.lock()?;
         state.model_root = model_root.into();
         state.model_identity = model_identity.into();
@@ -269,10 +283,20 @@ impl LocalE5Vector {
             )
         })
     }
+
+    fn lock_operation(&self) -> Result<std::sync::MutexGuard<'_, ()>, FastSearchError> {
+        self.operation.lock().map_err(|_| {
+            FastSearchError::new(
+                ErrorKind::ProjectionFailure,
+                "vector operation lock is poisoned",
+            )
+        })
+    }
 }
 
 impl VectorRetrieval for LocalE5Vector {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
+        let _operation = self.lock_operation()?;
         let (
             root,
             entries,
@@ -397,11 +421,6 @@ fn embed_verified(
     embed_texts_verified(verified, &texts)
 }
 
-#[cfg(test)]
-fn embed_texts(root: &Path, texts: &[String]) -> Result<Vec<Vec<f32>>, FastSearchError> {
-    embed_texts_verified(verified_model(root)?, texts)
-}
-
 fn embed_texts_verified(
     verified: VerifiedModel,
     texts: &[String],
@@ -483,6 +502,57 @@ fn verified_model(root: &Path) -> Result<VerifiedModel, FastSearchError> {
 const B1_E5_MANIFEST_ROOT: &str =
     "63A0FA9AEC56D0A3F5080D82956111F4BBEE57BF0A3637371CF16E451B194D0E";
 
+const B1_E5_FILES: &[(&str, u64)] = &[
+    (".eval_results\\ArguAna.yaml", 595),
+    (".eval_results\\BrightAopsRetrieval.yaml", 663),
+    (".eval_results\\BrightBiologyLongRetrieval.yaml", 673),
+    (".eval_results\\BrightBiologyRetrieval.yaml", 669),
+    (".eval_results\\BrightEarthScienceLongRetrieval.yaml", 685),
+    (".eval_results\\BrightEarthScienceRetrieval.yaml", 681),
+    (".eval_results\\BrightEconomicsLongRetrieval.yaml", 677),
+    (".eval_results\\BrightEconomicsRetrieval.yaml", 673),
+    (".eval_results\\BrightLeetcodeRetrieval.yaml", 673),
+    (".eval_results\\BrightPonyLongRetrieval.yaml", 667),
+    (".eval_results\\BrightPonyRetrieval.yaml", 663),
+    (".eval_results\\BrightPsychologyLongRetrieval.yaml", 677),
+    (".eval_results\\BrightPsychologyRetrieval.yaml", 675),
+    (".eval_results\\BrightRoboticsLongRetrieval.yaml", 675),
+    (".eval_results\\BrightRoboticsRetrieval.yaml", 669),
+    (".eval_results\\BrightStackoverflowLongRetrieval.yaml", 687),
+    (".eval_results\\BrightStackoverflowRetrieval.yaml", 681),
+    (
+        ".eval_results\\BrightSustainableLivingLongRetrieval.yaml",
+        695,
+    ),
+    (".eval_results\\BrightSustainableLivingRetrieval.yaml", 689),
+    (".eval_results\\BrightTheoremQAQuestionsRetrieval.yaml", 691),
+    (".eval_results\\BrightTheoremQATheoremsRetrieval.yaml", 689),
+    (".gitattributes", 1_606),
+    ("1_Pooling\\config.json", 206),
+    ("config.json", 681),
+    ("model.safetensors", 134),
+    ("modules.json", 406),
+    ("onnx\\config.json", 678),
+    ("onnx\\model.onnx", 470_268_510),
+    ("onnx\\model_O4.onnx", 235_052_531),
+    ("onnx\\model_qint8_avx512_vnni.onnx", 118_346_824),
+    ("onnx\\sentencepiece.bpe.model", 5_069_051),
+    ("onnx\\special_tokens_map.json", 176),
+    ("onnx\\tokenizer.json", 17_082_730),
+    ("onnx\\tokenizer_config.json", 463),
+    ("openvino\\openvino_model.bin", 134),
+    ("openvino\\openvino_model.xml", 375_553),
+    ("pytorch_model.bin", 134),
+    ("README.md", 516_022),
+    ("sentence_bert_config.json", 60),
+    ("sentencepiece.bpe.model", 132),
+    ("special_tokens_map.json", 176),
+    ("tokenizer.json", 17_082_730),
+    ("tokenizer_config.json", 463),
+];
+
+const B1_E5_DIRECTORIES: &[&str] = &[".eval_results", "1_Pooling", "onnx", "openvino"];
+
 struct VerifiedSnapshot {
     bytes: BTreeMap<String, Vec<u8>>,
     manifest: String,
@@ -499,6 +569,16 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
         directories: &mut Vec<DirectoryGuard>,
     ) -> Result<(), FastSearchError> {
         ensure_not_link_or_reparse(directory)?;
+        if directory != root {
+            let locator = directory
+                .strip_prefix(root)
+                .map_err(provider_error)?
+                .to_string_lossy()
+                .replace('/', "\\");
+            if !B1_E5_DIRECTORIES.contains(&locator.as_str()) {
+                return Err(provider_error("unexpected model directory"));
+            }
+        }
         directories.push(open_directory_guard(directory)?);
         for entry in fs::read_dir(directory).map_err(provider_error)? {
             let entry = entry.map_err(provider_error)?;
@@ -511,14 +591,29 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
             if metadata.is_dir() {
                 collect(root, &path, bytes, files, directories)?;
             } else if metadata.is_file() {
-                let mut file = open_verified_file(&path)?;
-                let mut content = Vec::new();
-                file.read_to_end(&mut content).map_err(provider_error)?;
                 let locator = path
                     .strip_prefix(root)
                     .map_err(provider_error)?
                     .to_string_lossy()
                     .replace('/', "\\");
+                let Some((_, expected_size)) = B1_E5_FILES
+                    .iter()
+                    .find(|(expected, _)| *expected == locator)
+                else {
+                    return Err(provider_error("unexpected model file"));
+                };
+                if metadata.len() != *expected_size {
+                    return Err(provider_error("model file size mismatch"));
+                }
+                let mut file = open_verified_file(&path)?;
+                let mut content = Vec::new();
+                content
+                    .try_reserve_exact(usize::try_from(*expected_size).map_err(provider_error)?)
+                    .map_err(provider_error)?;
+                file.read_to_end(&mut content).map_err(provider_error)?;
+                if u64::try_from(content.len()).map_err(provider_error)? != *expected_size {
+                    return Err(provider_error("model file changed while reading"));
+                }
                 bytes.insert(locator, content);
                 files.push(file);
             }
@@ -529,6 +624,9 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
     let mut files = Vec::new();
     let mut directories = Vec::new();
     collect(root, root, &mut bytes, &mut files, &mut directories)?;
+    if bytes.len() != B1_E5_FILES.len() {
+        return Err(provider_error("model file set is incomplete"));
+    }
     let mut lines = Vec::new();
     for (locator, content) in &bytes {
         let hash = format!("{:X}", Sha256::digest(content));
@@ -558,8 +656,13 @@ fn open_verified_file(path: &Path) -> Result<File, FastSearchError> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
-    options.share_mode(FILE_SHARE_READ);
-    options.open(path).map_err(provider_error)
+    options
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).map_err(provider_error)?;
+    #[cfg(windows)]
+    ensure_handle_is_not_reparse(file.as_raw_handle())?;
+    Ok(file)
 }
 
 fn ensure_not_link_or_reparse(path: &Path) -> Result<(), FastSearchError> {
@@ -603,15 +706,42 @@ fn open_directory_guard(path: &Path) -> Result<DirectoryGuard, FastSearchError> 
             FILE_SHARE_READ,
             std::ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             std::ptr::null_mut(),
         )
     };
     if handle == INVALID_HANDLE_VALUE {
         return Err(provider_error(std::io::Error::last_os_error()));
     }
-    ensure_not_link_or_reparse(path)?;
+    if let Err(error) = ensure_handle_is_not_reparse(handle as RawHandle) {
+        // SAFETY: `handle` was just acquired above and has not been transferred.
+        unsafe { CloseHandle(handle) };
+        return Err(error);
+    }
     Ok(DirectoryGuard(handle))
+}
+
+#[cfg(windows)]
+fn ensure_handle_is_not_reparse(handle: RawHandle) -> Result<(), FastSearchError> {
+    let mut info = FILE_ATTRIBUTE_TAG_INFO::default();
+    // SAFETY: `handle` is borrowed from a live owned File/DirectoryGuard and
+    // `info` is a correctly sized writable output buffer for this call.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle as HANDLE,
+            FileAttributeTagInfo,
+            (&raw mut info).cast(),
+            u32::try_from(std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>())
+                .expect("FILE_ATTRIBUTE_TAG_INFO size fits u32"),
+        )
+    };
+    if ok == 0 {
+        return Err(provider_error(std::io::Error::last_os_error()));
+    }
+    if info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(provider_error("model handle is a reparse point"));
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -669,30 +799,195 @@ fn cosine(left: &[f32], right: &[f32]) -> f32 {
 #[cfg(test)]
 mod security_tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use crate::domain::{ContentHash, RecordKind, SearchMode, SourceLocator, StableId};
+    use std::{
+        process::Command,
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::{Duration, SystemTime},
+    };
+
+    struct TempTree(PathBuf);
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn disposable_model_copy() -> TempTree {
+        let source = PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap());
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fastsearch-b2-model-{}-{unique}",
+            std::process::id()
+        ));
+        copy_tree(&source, &root);
+        TempTree(root)
+    }
+
+    fn copy_tree(source: &Path, target: &Path) {
+        fs::create_dir_all(target).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let source_path = entry.path();
+            let target_path = target.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&source_path, &target_path);
+            } else {
+                fs::copy(source_path, target_path).unwrap();
+            }
+        }
+    }
+
+    fn record() -> CanonicalRecord {
+        CanonicalRecord::new(
+            StableId::parse("b2-race").unwrap(),
+            RecordKind::MarkdownSection,
+            SourceLocator::markdown("race.md", ["race"]).unwrap(),
+            "race",
+            "semantic navigation immutable provider",
+            BTreeMap::new(),
+            Vec::new(),
+            ContentHash::parse("race-v1").unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(windows)]
+    fn create_junction(link: &Path, target: &Path) -> std::process::Output {
+        Command::new("cmd.exe")
+            .args([
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                link.to_str().unwrap(),
+                target.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    }
 
     #[test]
     #[ignore = "requires FASTSEARCH_E5_MODEL_ROOT local-only cache"]
     fn verified_model_denies_mutation_and_replacement_until_provider_finishes() {
-        let root = PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap());
+        let fixture = disposable_model_copy();
+        let root = fixture.0.clone();
+        let external = TempTree(root.with_extension("external-sentinel"));
+        fs::create_dir_all(&external.0).unwrap();
+        let sentinel = external.0.join("sentinel.txt");
+        fs::write(&sentinel, b"unchanged").unwrap();
         let mutation_result = Arc::new(Mutex::new(None));
         let replacement_result = Arc::new(Mutex::new(None));
+        let junction_result = Arc::new(Mutex::new(None));
         let mutation_capture = Arc::clone(&mutation_result);
         let replacement_capture = Arc::clone(&replacement_result);
+        let junction_capture = Arc::clone(&junction_result);
         let config = root.join("onnx").join("config.json");
-        let replacement = root.with_extension("race-replacement");
+        let onnx = root.join("onnx");
+        let replacement = root.join("onnx-race-replacement");
+        let external_target = external.0.clone();
         install_verify_load_hook(move || {
             *mutation_capture.lock().unwrap() = Some(fs::write(&config, b"mutation"));
-            *replacement_capture.lock().unwrap() = Some(fs::rename(&root, &replacement));
+            *replacement_capture.lock().unwrap() = Some(fs::rename(&onnx, &replacement));
+            #[cfg(windows)]
+            {
+                *junction_capture.lock().unwrap() = Some(create_junction(&onnx, &external_target));
+            }
         });
 
-        let vectors = embed_texts(
-            &PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap()),
-            &["query: semantic navigation".to_owned()],
-        )
-        .unwrap();
-        assert_eq!(vectors.len(), 1);
+        let adapter = LocalE5Vector::open(&root, "multilingual-e5-small@614241f");
+        assert_eq!(
+            adapter.apply(&[record()], 1).unwrap().freshness(),
+            IndexFreshness::Current
+        );
         assert!(mutation_result.lock().unwrap().take().unwrap().is_err());
         assert!(replacement_result.lock().unwrap().take().unwrap().is_err());
+        #[cfg(windows)]
+        assert!(
+            !junction_result
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .status
+                .success()
+        );
+        let query = SearchQuery::new("semantic navigation", SearchMode::Balanced).unwrap();
+        let response = adapter.search(&query).unwrap();
+        assert_eq!(response.freshness(), IndexFreshness::Current);
+        assert_eq!(response.hits().len(), 1);
+        assert!(response.hits()[0].projection_provenance().is_some());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+
+        // A pre-existing inner junction is the fail-closed control: it is
+        // rejected before bytes are admitted and cannot publish Current/hits.
+        let saved = root.join("onnx-saved");
+        fs::rename(root.join("onnx"), &saved).unwrap();
+        #[cfg(windows)]
+        assert!(
+            create_junction(&root.join("onnx"), &external.0)
+                .status
+                .success()
+        );
+        let attacked = LocalE5Vector::open(&root, "multilingual-e5-small@614241f");
+        assert!(attacked.apply(&[record()], 2).is_err());
+        assert_ne!(
+            attacked.lifecycle_status().freshness(),
+            IndexFreshness::Current
+        );
+        let failed = attacked.search(&query).unwrap();
+        assert!(failed.hits().is_empty());
+        assert_ne!(failed.freshness(), IndexFreshness::Current);
+        #[cfg(windows)]
+        Command::new("cmd.exe")
+            .args(["/d", "/c", "rmdir", root.join("onnx").to_str().unwrap()])
+            .status()
+            .unwrap();
+        fs::rename(saved, root.join("onnx")).unwrap();
+        assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+
+        // Search and reconfigure are linearized: reconfiguration cannot finish
+        // while inference owns the operation token, so old hits never emerge
+        // after the new configuration becomes observable.
+        let adapter = Arc::new(adapter);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        install_verify_load_hook(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        let searching = Arc::clone(&adapter);
+        let query_copy = query.clone();
+        let search = thread::spawn(move || searching.search(&query_copy).unwrap());
+        entered_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        let (configured_tx, configured_rx) = mpsc::channel();
+        let configuring = Arc::clone(&adapter);
+        let configured_root = root.clone();
+        let reconfigure = thread::spawn(move || {
+            configuring
+                .reconfigure(configured_root, "multilingual-e5-small@new")
+                .unwrap();
+            configured_tx.send(()).unwrap();
+        });
+        assert!(
+            configured_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        let completed = search.join().unwrap();
+        assert_eq!(completed.freshness(), IndexFreshness::Current);
+        configured_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        reconfigure.join().unwrap();
+        assert_ne!(
+            adapter.lifecycle_status().freshness(),
+            IndexFreshness::Current
+        );
+        assert!(adapter.search(&query).unwrap().hits().is_empty());
     }
 }

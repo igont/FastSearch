@@ -4,15 +4,16 @@
 
 ## Причинный RED
 
-Новый deterministic barrier-test `verified_model_denies_mutation_and_replacement_until_provider_finishes` был добавлен до product-изменения. На exact base сборка завершилась `E0425`: отсутствовала `install_verify_load_hook`, то есть код не имел проверяемой границы между manifest verification и provider load.
+На exact base path-based цепочка была непосредственно подтверждена чтением и существующим lifecycle oracle: `model_manifest(root)` завершал hash, затем `embed(root, ...)` повторно открывал те же pathname; `search` также отпускал state lock до inference и без финальной revalidation возвращал старый snapshot как `Current`. Новый deterministic barrier-test до product-изменения дополнительно завершился `E0425` из-за отсутствия verify→load seam. Этот compile RED фиксирует отсутствие управляемого barrier, а причинный behavioral control — исходная двойная pathname-open цепочка и публичный stale-search путь.
 
 ## GREEN
 
 - Полный B1 E5 manifest и фактически переданные FastEmbed байты теперь формируются из одного snapshot.
 - На Windows каждый файл и каталог snapshot удерживается handle без `FILE_SHARE_WRITE` и `FILE_SHARE_DELETE` до завершения provider inference; reparse point отклоняется до чтения.
-- Barrier после verification одновременно попытался перезаписать `onnx/config.json` и заменить корень модели. Обе операции были отклонены ОС, E5 inference завершился на pinned verified bytes: `1 passed`, `21.79 s`.
-- Полный stationary E5 lifecycle с add/change/delete-equivalent replacement, reopen, rebuild, manifest mutation, typed degradation и recovery: `2 passed`, `386.40 s` тестового времени.
-- Cache readback после barrier: полный lifecycle повторно подтвердил B1 manifest root `63A0FA9A...B194D0E`; внешняя модель не изменена, race replacement не создан.
+- Exact B1 allowlist ограничивает snapshot 43 файлами, 4 дочерними каталогами и фиксированными размерами до allocation/read; unexpected entry отклоняется до чтения.
+- Barrier работает только на disposable exact copy. После verification он одновременно пытается перезаписать `onnx/config.json`, заменить внутренний `onnx` и создать junction на внешний sentinel; все операции отклонены, публичные apply/search возвращают Current/hit/provenance только для pinned bytes. Pre-existing junction control даёт typed error, no Current, zero hits/no provenance. Concurrent search/reconfigure gate доказывает линейризацию. Итог: `1 passed`, `71.26 s`.
+- Полный stationary E5 lifecycle с add/change/delete-equivalent replacement, reopen, rebuild, manifest mutation, typed degradation и recovery повторно запущен после R5: `2 passed`, `339.96 s` тестового времени.
+- Cleanup/readback: disposable copy удаляется RAII; внешний sentinel неизменен; canonical cache не атакуется и повторно подтвердил B1 manifest root `63A0FA9A...B194D0E` в stationary lifecycle.
 
 ## Широкие gates exact candidate
 
