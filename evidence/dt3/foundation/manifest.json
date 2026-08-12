@@ -16,6 +16,26 @@
     "a2-materialization-passport.md"
   ],
   "performance": {
+    "latency_ms": {
+      "warm_in_process_query_max": 500,
+      "new_process_reopen_query_max": 750,
+      "measurement_kinds_interchangeable": false,
+      "retained_series": [
+        {
+          "kind": "new_process_reopen_query",
+          "classification": "FAILED_UNDER_WRONG_IN_PROCESS_500_MS_CLASSIFICATION",
+          "samples": [270.126, 353.159, 575.127, 540.506, 261.237],
+          "max": 575.127,
+          "discarded_samples": 0
+        },
+        {
+          "kind": "new_process_reopen_query",
+          "classification": "PASS_NEW_PROCESS_REOPEN_QUERY_750_MS",
+          "max": 282.027,
+          "discarded_samples": 0
+        }
+      ]
+    },
     "working_set_mib": {
       "non_vector_max": 1024,
       "local_vector_child_max": 2048
