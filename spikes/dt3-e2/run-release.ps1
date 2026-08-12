@@ -8,11 +8,41 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$runId = 'dt3-e2-release-v1'
+$runId = 'dt3-e2-release-v2'
 $resolvedDocument = (Resolve-Path -LiteralPath $DocumentRoot).Path
 $resolvedCode = (Resolve-Path -LiteralPath $CodeRoot).Path
 $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
 $resolvedWork = [System.IO.Path]::GetFullPath($WorkRoot)
+
+function Get-RootInventory {
+    param([string]$Root, [string]$Identity)
+    $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($Root.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+        [pscustomobject][ordered]@{
+            locator = $relative
+            bytes = $_.Length
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+    $manifest = ($files | ForEach-Object { "$($_.locator)`t$($_.bytes)`t$($_.sha256)" }) -join "`n"
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $manifestHash = ([System.BitConverter]::ToString(
+            $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($manifest))
+        ) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+    [pscustomobject][ordered]@{
+        identity = $Identity
+        file_count = $files.Count
+        manifest_sha256 = $manifestHash
+        files = $files
+    }
+}
+
+$documentInventory = Get-RootInventory -Root $resolvedDocument -Identity 'document-fastsearch'
+$codeInventory = Get-RootInventory -Root $resolvedCode -Identity 'code-fastsearch'
 
 if ($resolvedWork -eq $resolvedDocument -or $resolvedWork -eq $resolvedCode) {
     throw 'work root must differ from source roots'
@@ -166,13 +196,18 @@ $vectorPeak = if ($vector.Count -eq 0) { 0 } else {
     ($vector | Measure-Object -Property peak_working_set_bytes -Maximum).Maximum
 }
 $result = [ordered]@{
-    schema = 'dt3-e2-release-v1'
+    schema = 'dt3-e2-release-v2'
     run_id = $runId
-    candidate_revision = (git -C (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) rev-parse HEAD).Trim()
+    measured_product_revision = (git -C (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) rev-parse HEAD).Trim()
+    evidence_candidate_relation = 'final evidence-only commit must descend from measured_product_revision'
     binary_sha256 = (Get-FileHash -LiteralPath $resolvedBinary -Algorithm SHA256).Hash.ToLowerInvariant()
     rustc = (rustc --version).Trim()
     cargo = (cargo --version).Trim()
     command = 'spikes/dt3-e2/run-release.ps1 release 5 cold + 5 warm + optional E5 5 cold + 5 warm'
+    input_roots = [ordered]@{
+        document = $documentInventory
+        code = $codeInventory
+    }
     cold = $cold
     warm = $warm
     vector = $vector
@@ -193,7 +228,11 @@ $result = [ordered]@{
 $json = $result | ConvertTo-Json -Depth 8
 [System.IO.File]::WriteAllText($OutputJson, $json, [System.Text.UTF8Encoding]::new($false))
 $readback = Get-Content -LiteralPath $OutputJson -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($readback.schema -ne 'dt3-e2-release-v1' -or $readback.run_id -ne $runId) {
+if ($readback.schema -ne 'dt3-e2-release-v2' -or $readback.run_id -ne $runId -or
+    $readback.input_roots.document.file_count -ne $documentInventory.file_count -or
+    $readback.input_roots.code.file_count -ne $codeInventory.file_count -or
+    $readback.input_roots.document.manifest_sha256 -ne $documentInventory.manifest_sha256 -or
+    $readback.input_roots.code.manifest_sha256 -ne $codeInventory.manifest_sha256) {
     throw 'result readback mismatch'
 }
 if ($result.gates.Values -contains $false) {
