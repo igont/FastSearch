@@ -45,6 +45,8 @@ pub enum RetrievalChannel {
     Exact,
     Lexical,
     Vector,
+    CodeMap,
+    Symbol,
 }
 
 /// Один результат retrieval без навязывания ranking algorithm.
@@ -104,6 +106,47 @@ impl SearchResponse {
     #[must_use]
     pub const fn freshness(&self) -> IndexFreshness {
         self.freshness
+    }
+
+    /// Deterministically fuses independently produced hits without hiding provenance.
+    #[must_use]
+    pub fn fuse(
+        mut hits: Vec<SearchHit>,
+        capability_statuses: Vec<super::CapabilityStatus>,
+    ) -> Self {
+        hits.sort_by(|left, right| {
+            right
+                .score()
+                .total_cmp(&left.score())
+                .then_with(|| channel_order(left.channel()).cmp(&channel_order(right.channel())))
+                .then_with(|| left.record().id().cmp(right.record().id()))
+        });
+        let freshness = if capability_statuses
+            .iter()
+            .any(|status| matches!(status.state(), super::CapabilityState::Degraded { .. }))
+        {
+            IndexFreshness::Degraded
+        } else if capability_statuses.iter().any(|status| {
+            matches!(
+                status.state(),
+                super::CapabilityState::Stale { .. } | super::CapabilityState::Unavailable { .. }
+            )
+        }) {
+            IndexFreshness::Stale
+        } else {
+            IndexFreshness::Current
+        };
+        Self { hits, freshness }
+    }
+}
+
+fn channel_order(channel: RetrievalChannel) -> u8 {
+    match channel {
+        RetrievalChannel::Exact => 0,
+        RetrievalChannel::Lexical => 1,
+        RetrievalChannel::Vector => 2,
+        RetrievalChannel::CodeMap => 3,
+        RetrievalChannel::Symbol => 4,
     }
 }
 
