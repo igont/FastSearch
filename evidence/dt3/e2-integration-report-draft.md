@@ -1,0 +1,12 @@
+# Черновик интеграционного отчёта DT3 / E2
+
+E2 связывает принятые document/vector/map/symbol adapters через единственную production-композицию и E1 fusion. Пути document root, code root, service root и optional local E5 root являются параметрами CLI; машинные пути не входят в публичную identity.
+
+Структурная навигация сообщает только синтаксические Rust/Python declaration facts и явные `.cfmap.md` relations. Она не заявляет compiler-resolved definition, references, type inference или call graph.
+
+## Остаточные границы
+
+- Исторический redacted A1 corpus из 918 файлов не имеет восстановимого machine path; release acceptance выполняется на согласованных deterministic fixture roots и текущем Rust source contour без ложного заявления о старом corpus.
+- MCP/agent transport остаётся scope DT4. E2 предоставляет CLI/application boundary, но не добавляет transport.
+- Qwen3-Embedding-0.6B остаётся в будущем сравнении моделей; production E2 использует принятый local multilingual-E5 contour.
+- Governance/TDR controlled fields не изменялись. Для последующего writer/review/approval передаются evidence exact candidate, release JSON, quality 24/24 x 5 и master verdict.

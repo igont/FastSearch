@@ -1,0 +1,143 @@
+{
+    "schema":  "dt3-e2-release-v1",
+    "run_id":  "dt3-e2-release-v1",
+    "cold":  [
+                 {
+                     "label":  "cold-1",
+                     "milliseconds":  274.938,
+                     "peak_working_set_bytes":  39854080,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0"
+                 },
+                 {
+                     "label":  "cold-2",
+                     "milliseconds":  257.967,
+                     "peak_working_set_bytes":  39763968,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0"
+                 },
+                 {
+                     "label":  "cold-3",
+                     "milliseconds":  234.276,
+                     "peak_working_set_bytes":  39804928,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0"
+                 },
+                 {
+                     "label":  "cold-4",
+                     "milliseconds":  227.615,
+                     "peak_working_set_bytes":  39837696,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0"
+                 },
+                 {
+                     "label":  "cold-5",
+                     "milliseconds":  243.948,
+                     "peak_working_set_bytes":  39665664,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0"
+                 }
+             ],
+    "warm":  [
+                 {
+                     "label":  "warm-1",
+                     "milliseconds":  97.973,
+                     "peak_working_set_bytes":  21458944,
+                     "output_sha256":  "7b9a3a7b821a080a4659d733317f393a5bf05238ca43279c4bf219549651817e"
+                 },
+                 {
+                     "label":  "warm-2",
+                     "milliseconds":  53.549,
+                     "peak_working_set_bytes":  4698112,
+                     "output_sha256":  "7b9a3a7b821a080a4659d733317f393a5bf05238ca43279c4bf219549651817e"
+                 },
+                 {
+                     "label":  "warm-3",
+                     "milliseconds":  45.636,
+                     "peak_working_set_bytes":  4132864,
+                     "output_sha256":  "7b9a3a7b821a080a4659d733317f393a5bf05238ca43279c4bf219549651817e"
+                 },
+                 {
+                     "label":  "warm-4",
+                     "milliseconds":  45.538,
+                     "peak_working_set_bytes":  5439488,
+                     "output_sha256":  "7b9a3a7b821a080a4659d733317f393a5bf05238ca43279c4bf219549651817e"
+                 },
+                 {
+                     "label":  "warm-5",
+                     "milliseconds":  75.169,
+                     "peak_working_set_bytes":  21491712,
+                     "output_sha256":  "7b9a3a7b821a080a4659d733317f393a5bf05238ca43279c4bf219549651817e"
+                 }
+             ],
+    "vector":  [
+                   {
+                       "label":  "vector-cold-1",
+                       "milliseconds":  2343.703,
+                       "peak_working_set_bytes":  1511231488,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65"
+                   },
+                   {
+                       "label":  "vector-cold-2",
+                       "milliseconds":  2318.625,
+                       "peak_working_set_bytes":  1511616512,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65"
+                   },
+                   {
+                       "label":  "vector-cold-3",
+                       "milliseconds":  2342.887,
+                       "peak_working_set_bytes":  1511718912,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65"
+                   },
+                   {
+                       "label":  "vector-cold-4",
+                       "milliseconds":  2361.666,
+                       "peak_working_set_bytes":  1511645184,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65"
+                   },
+                   {
+                       "label":  "vector-cold-5",
+                       "milliseconds":  2282.273,
+                       "peak_working_set_bytes":  1511260160,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65"
+                   },
+                   {
+                       "label":  "vector-warm-1",
+                       "milliseconds":  4271.963,
+                       "peak_working_set_bytes":  1516748800,
+                       "output_sha256":  "6e6de970504bd3cabedacf6b3e2c3cc7241060f24de8125342fc2c2950840c97"
+                   },
+                   {
+                       "label":  "vector-warm-2",
+                       "milliseconds":  4363.795,
+                       "peak_working_set_bytes":  1515859968,
+                       "output_sha256":  "6e6de970504bd3cabedacf6b3e2c3cc7241060f24de8125342fc2c2950840c97"
+                   },
+                   {
+                       "label":  "vector-warm-3",
+                       "milliseconds":  4252.151,
+                       "peak_working_set_bytes":  1517690880,
+                       "output_sha256":  "6e6de970504bd3cabedacf6b3e2c3cc7241060f24de8125342fc2c2950840c97"
+                   },
+                   {
+                       "label":  "vector-warm-4",
+                       "milliseconds":  4248.776,
+                       "peak_working_set_bytes":  1517158400,
+                       "output_sha256":  "6e6de970504bd3cabedacf6b3e2c3cc7241060f24de8125342fc2c2950840c97"
+                   },
+                   {
+                       "label":  "vector-warm-5",
+                       "milliseconds":  4408.202,
+                       "peak_working_set_bytes":  1517039616,
+                       "output_sha256":  "6e6de970504bd3cabedacf6b3e2c3cc7241060f24de8125342fc2c2950840c97"
+                   }
+               ],
+    "source_bytes":  1442095,
+    "service_bytes":  1536669,
+    "service_ratio":  1.065581,
+    "non_vector_peak_bytes":  39854080,
+    "vector_peak_bytes":  1517690880,
+    "gates":  {
+                  "cold_max_ms":  true,
+                  "warm_max_ms":  true,
+                  "non_vector_memory":  true,
+                  "vector_memory":  true,
+                  "service_ratio":  true,
+                  "all_samples":  true
+              }
+}
