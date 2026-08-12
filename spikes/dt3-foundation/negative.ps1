@@ -10,9 +10,11 @@ foreach($case in $cases) { try { & $run -DocumentRoot $doc -CodeRoot $code -Serv
 foreach($payload in @('C:\forbidden\raw.md','source snippet content','token=sentinel')) { try { & $run -DocumentRoot $doc -CodeRoot $code -ServiceRoot $doc -RunId 'safe-run-01' -EvidencePayload $payload | Out-Null; throw 'redaction case accepted' } catch { if ($_.Exception.Message -notmatch 'EVIDENCE_REDACTION_REJECTED') { throw } } }
 $reparseRunId = 'reparse-run-02'
 $junction = Join-Path $doc ('.cfknowledge\dt3-a1-' + $reparseRunId)
+$junctionParent = Split-Path -Parent $junction
+$createdParent = !(Test-Path -LiteralPath $junctionParent)
 if (Test-Path -LiteralPath $junction) { throw 'REPARSE_TEST_TARGET_ALREADY_EXISTS' }
 try {
   New-Item -ItemType Junction -Path $junction -Target $PSScriptRoot | Out-Null
   try { & $run -DocumentRoot $doc -CodeRoot $code -ServiceRoot $junction -RunId $reparseRunId | Out-Null; throw 'reparse case accepted' } catch { if ($_.Exception.Message -notmatch 'SERVICE_REPARSE_ESCAPE_REJECTED') { throw } }
-} finally { if (Test-Path -LiteralPath $junction) { [System.IO.Directory]::Delete($junction, $false) } }
+} finally { if (Test-Path -LiteralPath $junction) { [System.IO.Directory]::Delete($junction, $false) }; if ($createdParent -and (Test-Path -LiteralPath $junctionParent) -and (Get-ChildItem -LiteralPath $junctionParent -Force | Measure-Object).Count -eq 0) { [System.IO.Directory]::Delete($junctionParent, $false) } }
 Write-Output 'negative containment cases rejected before write'
