@@ -1,0 +1,313 @@
+{
+    "schema":  "dt3-e2-release-v3",
+    "run_id":  "dt3-e2-release-v3",
+    "measured_product_revision":  "b07abdcfb7d512049a1761f2efa087b8fd520934",
+    "evidence_candidate_relation":  "final evidence-only commit must descend from measured_product_revision",
+    "binary_sha256":  "5c9bd1c3ce169e2e529d3081070a98acc7f38352aea173675b91eaf3798a4a8e",
+    "rustc":  "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo":  "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "command":  "spikes/dt3-e2/run-release.ps1 release 5 cold + 5 warm + optional E5 5 cold + 5 warm",
+    "input_roots":  {
+                        "document":  {
+                                         "identity":  "document-fastsearch",
+                                         "file_count":  1,
+                                         "manifest_sha256":  "66e10821e2e8ab049e4090feacc9048bf32e67ee8977fb525f4fe57e4b104ea8",
+                                         "files":  [
+                                                       {
+                                                           "locator":  "architecture.md",
+                                                           "bytes":  164,
+                                                           "sha256":  "46656265f1b291a18500b3c8a354804cd0b664bd0bbc1d653810053f09403f22"
+                                                       }
+                                                   ]
+                                     },
+                        "code":  {
+                                     "identity":  "code-fastsearch",
+                                     "file_count":  21,
+                                     "manifest_sha256":  "ebaab83b85e2ad7331e256569a37705d65ed342e426a45a04aad2f5ecdff6c49",
+                                     "files":  [
+                                                   {
+                                                       "locator":  "adapters/lexical/mod.rs",
+                                                       "bytes":  20706,
+                                                       "sha256":  "1b68418f4aa68deb3d3eb04f1d5cb692b5ec085ee0d9cca3782ccdd5454911dd"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/maps.rs",
+                                                       "bytes":  13521,
+                                                       "sha256":  "e5261fa36d640cb10b9adece7a9d3e9b70dce650b079186bcbb394f8207f8e34"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/mod.rs",
+                                                       "bytes":  158,
+                                                       "sha256":  "1b1f3d2af5def68d1b28db4fe98fbffd8cc605109f484b874301201f1d654ab7"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/source/mod.rs",
+                                                       "bytes":  36145,
+                                                       "sha256":  "1c14eb5fa3ea0090135a1efb092dfa2d243beb9c90a88f16028fb797bb47eac0"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/state/mod.rs",
+                                                       "bytes":  126,
+                                                       "sha256":  "33f9c990983642035e543a0fd2f30f601048eb614c6a1b3b63f0c7707767424c"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/state/sqlite.rs",
+                                                       "bytes":  27315,
+                                                       "sha256":  "e17b610f2752be3b37261c2919e32fd324807be9acf13978f605380c2f589060"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/symbols.rs",
+                                                       "bytes":  9719,
+                                                       "sha256":  "19d426d5000ffc4d278d880243aff2ca2a1060f3900067b4693e93bed0a40160"
+                                                   },
+                                                   {
+                                                       "locator":  "adapters/vector.rs",
+                                                       "bytes":  38395,
+                                                       "sha256":  "1fa476de3d40857e6bdff7d965668db3feca4888d16047076751b008354da337"
+                                                   },
+                                                   {
+                                                       "locator":  "application/cli.rs",
+                                                       "bytes":  10162,
+                                                       "sha256":  "d9dd1712c51840b69ab4bf049afe900c51a9366e1c61b0666c791418f31c4de3"
+                                                   },
+                                                   {
+                                                       "locator":  "application/fusion.rs",
+                                                       "bytes":  7908,
+                                                       "sha256":  "d27b0d44b7093ed7864c1c29a7dc57f707307ecf7eda581c68d37c741de1cb93"
+                                                   },
+                                                   {
+                                                       "locator":  "application/mod.rs",
+                                                       "bytes":  14843,
+                                                       "sha256":  "b19532a0ac071e5327345c578648f54aaabd1a9aa0012b0183b39afcee3864e9"
+                                                   },
+                                                   {
+                                                       "locator":  "application/production.rs",
+                                                       "bytes":  32250,
+                                                       "sha256":  "4b86d2052c376174edc498d63a764dbac16167548bc78c1e751ecd57e1c8053a"
+                                                   },
+                                                   {
+                                                       "locator":  "contract_tests.rs",
+                                                       "bytes":  4799,
+                                                       "sha256":  "23cd8fc6e95f5383c7a41bb80e59fcb07d659e14b504a4a7f7df4808dc6087aa"
+                                                   },
+                                                   {
+                                                       "locator":  "domain/error.rs",
+                                                       "bytes":  1583,
+                                                       "sha256":  "c044ae620648cad43321aa25df10238834289f29a62f29715bc82e6d8c15e49e"
+                                                   },
+                                                   {
+                                                       "locator":  "domain/mod.rs",
+                                                       "bytes":  671,
+                                                       "sha256":  "fb582f81f1616c4cf85f284a4495c8a686b02baf7e12b8b657f1c22a0e5e5663"
+                                                   },
+                                                   {
+                                                       "locator":  "domain/record.rs",
+                                                       "bytes":  12009,
+                                                       "sha256":  "666dda72ad01c5b1fe81fcabe901ad2eb839b1ad5e9aa2b6b748a935c3120b07"
+                                                   },
+                                                   {
+                                                       "locator":  "domain/search.rs",
+                                                       "bytes":  8243,
+                                                       "sha256":  "a76e33295cb166a66a0fe7b41946a7ef68652c8639fc8f8ceeda50350ef16f69"
+                                                   },
+                                                   {
+                                                       "locator":  "domain/status.rs",
+                                                       "bytes":  4492,
+                                                       "sha256":  "0be220a5cf10ab83ce4019a5c3d5c86219bae79705de31b9d00123045615ff67"
+                                                   },
+                                                   {
+                                                       "locator":  "lib.rs",
+                                                       "bytes":  813,
+                                                       "sha256":  "207952f26955503e180d575833bba41c3ea60561928e815f5e4b3e1999e3271f"
+                                                   },
+                                                   {
+                                                       "locator":  "main.rs",
+                                                       "bytes":  556,
+                                                       "sha256":  "e9da716094308997279cef1b4101928265942555649012a1f173b24a9d6c30ee"
+                                                   },
+                                                   {
+                                                       "locator":  "ports/mod.rs",
+                                                       "bytes":  4979,
+                                                       "sha256":  "ed0cf7bd3cf6e221ffb342241e89a825e586777ee27ac405c7de54f21d91d19c"
+                                                   }
+                                               ]
+                                 },
+                        "runtime_document":  {
+                                                 "identity":  "document-fastsearch-runtime",
+                                                 "file_count":  2,
+                                                 "manifest_sha256":  "6762bcafd47f33f2aa1d99cabc69867f8436e6fd51921af656aba47c73856738",
+                                                 "files":  [
+                                                               {
+                                                                   "locator":  "architecture.md",
+                                                                   "bytes":  164,
+                                                                   "sha256":  "46656265f1b291a18500b3c8a354804cd0b664bd0bbc1d653810053f09403f22"
+                                                               },
+                                                               {
+                                                                   "locator":  "release-scale.md",
+                                                                   "bytes":  1441823,
+                                                                   "sha256":  "e5b42a90ebc8318cad3b6d4a7acb741d278818747d6e27cea5a558ad478fbe34"
+                                                               }
+                                                           ]
+                                             }
+                    },
+    "cold":  [
+                 {
+                     "label":  "cold-1",
+                     "milliseconds":  453.138,
+                     "peak_working_set_bytes":  42692608,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "cold-2",
+                     "milliseconds":  418.633,
+                     "peak_working_set_bytes":  43548672,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "cold-3",
+                     "milliseconds":  417.644,
+                     "peak_working_set_bytes":  42643456,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "cold-4",
+                     "milliseconds":  416.15,
+                     "peak_working_set_bytes":  42778624,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "cold-5",
+                     "milliseconds":  418.694,
+                     "peak_working_set_bytes":  43794432,
+                     "output_sha256":  "6d46d7cd4a04e4dd2cee0efd8defda46e7a7bbc3a137f760aaecbc6ea2b347f0",
+                     "exit_code":  0
+                 }
+             ],
+    "warm":  [
+                 {
+                     "label":  "warm-1",
+                     "milliseconds":  302.932,
+                     "peak_working_set_bytes":  22835200,
+                     "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "warm-2",
+                     "milliseconds":  292.619,
+                     "peak_working_set_bytes":  22659072,
+                     "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "warm-3",
+                     "milliseconds":  292.69,
+                     "peak_working_set_bytes":  22818816,
+                     "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "warm-4",
+                     "milliseconds":  308.907,
+                     "peak_working_set_bytes":  22585344,
+                     "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
+                     "exit_code":  0
+                 },
+                 {
+                     "label":  "warm-5",
+                     "milliseconds":  293.739,
+                     "peak_working_set_bytes":  22618112,
+                     "output_sha256":  "884ca72ea568c325b14611b8fb2bf34dd93689c26a0d5e63f62de7082396b4b3",
+                     "exit_code":  0
+                 }
+             ],
+    "vector":  [
+                   {
+                       "label":  "vector-cold-1",
+                       "milliseconds":  7266.25,
+                       "peak_working_set_bytes":  1513230336,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-cold-2",
+                       "milliseconds":  6554.2,
+                       "peak_working_set_bytes":  1513164800,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-cold-3",
+                       "milliseconds":  6626.179,
+                       "peak_working_set_bytes":  1512914944,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-cold-4",
+                       "milliseconds":  7340.65,
+                       "peak_working_set_bytes":  1512845312,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-cold-5",
+                       "milliseconds":  7344.049,
+                       "peak_working_set_bytes":  1513447424,
+                       "output_sha256":  "bf11012497f7a3814a541f1993cb075914ab57b161f7c3b053c50201846b4d65",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-warm-1",
+                       "milliseconds":  9997.309,
+                       "peak_working_set_bytes":  1520271360,
+                       "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-warm-2",
+                       "milliseconds":  10183.135,
+                       "peak_working_set_bytes":  1520316416,
+                       "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-warm-3",
+                       "milliseconds":  10207.129,
+                       "peak_working_set_bytes":  1520103424,
+                       "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-warm-4",
+                       "milliseconds":  10085.499,
+                       "peak_working_set_bytes":  1519349760,
+                       "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
+                       "exit_code":  0
+                   },
+                   {
+                       "label":  "vector-warm-5",
+                       "milliseconds":  10468.675,
+                       "peak_working_set_bytes":  1520201728,
+                       "output_sha256":  "9d78bd4e76f8b1fa0c8f62aaa65717531a675ac7f39d1a09be81ff2f675284ad",
+                       "exit_code":  0
+                   }
+               ],
+    "source_bytes":  1691380,
+    "service_bytes":  2477542,
+    "service_ratio":  1.464805,
+    "non_vector_peak_bytes":  43794432,
+    "vector_peak_bytes":  1520316416,
+    "gates":  {
+                  "cold_max_ms":  true,
+                  "new_process_reopen_query_max_ms":  true,
+                  "non_vector_memory":  true,
+                  "vector_memory":  true,
+                  "service_ratio":  true,
+                  "source_inventory_unchanged":  true,
+                  "all_samples":  true
+              }
+}

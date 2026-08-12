@@ -9,8 +9,11 @@ use crate::domain::{
 };
 
 mod cli;
+pub mod fusion;
+mod production;
 
 pub use cli::{CliError, execute_cli};
+pub use production::{ProductionConfig, ProductionRuntime};
 
 /// Coordinates one complete source scan with its authoritative state commit and projection.
 ///

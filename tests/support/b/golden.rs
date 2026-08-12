@@ -74,6 +74,12 @@ fn render_status(fixture: &impl PortContractFixture) -> String {
             fastsearch::domain::CapabilityState::Unavailable { .. } => {
                 format!("{:?}=Unavailable", status.capability())
             }
+            fastsearch::domain::CapabilityState::Stale { .. } => {
+                format!("{:?}=Stale", status.capability())
+            }
+            fastsearch::domain::CapabilityState::Degraded { .. } => {
+                format!("{:?}=Degraded", status.capability())
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")

@@ -23,6 +23,8 @@ pub enum BackendKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CapabilityState {
     Available { backend: BackendKind },
+    Stale { detail: String },
+    Degraded { detail: String },
     Unavailable { reason: String },
 }
 
@@ -112,6 +114,26 @@ impl CapabilityStatus {
     }
 
     #[must_use]
+    pub fn stale(capability: Capability, detail: impl Into<String>) -> Self {
+        Self {
+            capability,
+            state: CapabilityState::Stale {
+                detail: detail.into(),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn degraded(capability: Capability, detail: impl Into<String>) -> Self {
+        Self {
+            capability,
+            state: CapabilityState::Degraded {
+                detail: detail.into(),
+            },
+        }
+    }
+
+    #[must_use]
     pub const fn capability(&self) -> Capability {
         self.capability
     }
@@ -129,6 +151,14 @@ impl CapabilityStatus {
                 },
                 reason.clone(),
             )),
+            CapabilityState::Stale { detail } | CapabilityState::Degraded { detail } => {
+                Err(FastSearchError::new(
+                    ErrorKind::CapabilityUnavailable {
+                        capability: self.capability,
+                    },
+                    detail.clone(),
+                ))
+            }
         }
     }
 }

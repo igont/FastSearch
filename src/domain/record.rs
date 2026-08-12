@@ -26,6 +26,31 @@ impl StableId {
     }
 }
 
+/// Stable, user-selected root identity. Machine paths never enter public identity.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct LogicalRootId(String);
+
+impl LogicalRootId {
+    pub fn parse(value: impl Into<String>) -> Result<Self, FastSearchError> {
+        let value = value.into();
+        if value.trim().is_empty()
+            || value.contains(['/', '\\'])
+            || value.chars().any(char::is_control)
+        {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidIdentifier,
+                "logical root identifier must be a nonblank path-free label",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Хеш содержимого; алгоритм и lifecycle намеренно уточняются evidence-спайком D3.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContentHash(String);
@@ -139,11 +164,17 @@ impl SourceLocator {
     }
 
     fn new(path: impl Into<String>, selector: SourceSelector) -> Result<Self, FastSearchError> {
-        let path = path.into();
-        if path.trim().is_empty() {
+        let path = path.into().replace('\\', "/");
+        if path.trim().is_empty()
+            || path.starts_with('/')
+            || path.contains(':')
+            || path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+        {
             return Err(FastSearchError::new(
                 ErrorKind::InvalidLocator,
-                "source path must not be blank",
+                "source locator must be a normalized relative path",
             ));
         }
 
@@ -161,9 +192,86 @@ impl SourceLocator {
     }
 }
 
+/// Public named-root identity for a source locator.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootedSourceLocator {
+    root: LogicalRootId,
+    locator: SourceLocator,
+}
+
+impl RootedSourceLocator {
+    pub fn new(root: LogicalRootId, locator: SourceLocator) -> Result<Self, FastSearchError> {
+        Ok(Self { root, locator })
+    }
+
+    #[must_use]
+    pub const fn root(&self) -> &LogicalRootId {
+        &self.root
+    }
+
+    #[must_use]
+    pub const fn locator(&self) -> &SourceLocator {
+        &self.locator
+    }
+
+    #[must_use]
+    pub fn stable_id(&self) -> StableId {
+        fn append_component(encoded: &mut String, value: &str) {
+            encoded.push_str(&value.len().to_string());
+            encoded.push(':');
+            encoded.push_str(value);
+        }
+        let selector = match self.locator.selector() {
+            SourceSelector::MarkdownHeading { heading_path } => {
+                let mut encoded = String::from("markdown:");
+                for heading in heading_path {
+                    append_component(&mut encoded, heading);
+                }
+                encoded
+            }
+            SourceSelector::RegistryRow { row } => format!("registry:{}", row),
+            SourceSelector::CodeSymbol { symbol } => format!("symbol:{symbol}"),
+            SourceSelector::WholeFile => "file".to_owned(),
+        };
+        StableId(format!(
+            "named-root-v1:{}:{}:{selector}",
+            self.root.as_str(),
+            self.locator.path()
+        ))
+    }
+}
+
+/// Classification is fixed before concrete map/code adapters are introduced.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceAdmission {
+    Markdown,
+    Registry,
+    CodeMap,
+    CodeCandidate,
+    Unsupported,
+}
+
+impl SourceAdmission {
+    #[must_use]
+    pub fn classify(path: &str) -> Self {
+        if path.ends_with(".cfmap.md") {
+            Self::CodeMap
+        } else if path.ends_with(".md") {
+            Self::Markdown
+        } else if path.ends_with(".tsv") {
+            Self::Registry
+        } else if path.ends_with(".rs") || path.ends_with(".py") {
+            Self::CodeCandidate
+        } else {
+            Self::Unsupported
+        }
+    }
+}
+
 /// Наблюдаемый снимок одного исходного файла до state/lexical projections.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceSnapshot {
+    root: Option<LogicalRootId>,
     locator: SourceLocator,
     file_hash: FileHash,
     records: Vec<CanonicalRecord>,
@@ -171,16 +279,31 @@ pub struct SourceSnapshot {
 
 impl SourceSnapshot {
     #[must_use]
-    pub const fn new(
+    pub fn new(locator: SourceLocator, file_hash: FileHash, records: Vec<CanonicalRecord>) -> Self {
+        Self {
+            root: None,
+            locator,
+            file_hash,
+            records,
+        }
+    }
+    #[must_use]
+    pub fn for_root(
+        root: LogicalRootId,
         locator: SourceLocator,
         file_hash: FileHash,
         records: Vec<CanonicalRecord>,
     ) -> Self {
         Self {
+            root: Some(root),
             locator,
             file_hash,
             records,
         }
+    }
+    #[must_use]
+    pub const fn root(&self) -> Option<&LogicalRootId> {
+        self.root.as_ref()
     }
     #[must_use]
     pub const fn locator(&self) -> &SourceLocator {

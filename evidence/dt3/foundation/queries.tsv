@@ -1,0 +1,25 @@
+label	intent	section	logical_root_id	relative_locator	selector_kind	selector_value	top_k	required_rank_max	must_not	review
+Q01	exact	A1/B1	document-representative	architecture.md	heading	Navigation contract	3	1	stale map	READY
+Q02	lexical	A1/B1	document-representative	registry.tsv	row	1	3	1	unrelated symbol	READY
+Q03	paraphrase	A1/B1	document-representative	architecture.md	heading	Navigation contract	5	3	secret sentinel	READY
+Q04	doc-map	C1/C2	document-representative	auto.cfmap.md	heading	Auto navigation map	3	1	curated overwrite	READY
+Q05	symbol	D1/D2	code-fastsearch	src/navigator.rs	symbol	stable_navigation	3	1	python duplicate	READY
+Q06	no-hit	A1/B1	document-representative	missing.md	locator	missing	3	0	any result	READY
+Q07	vector-unavailable	A1/B1	document-representative	architecture.md	heading	Navigation contract	3	1	provider error as hit	READY
+Q08	exact	A1/B1	document-representative	guide-current.md	heading	Current	3	1	design only	READY
+Q09	lexical	A1/B1	document-representative	guide-design.md	heading	Design	3	1	current only	READY
+Q10	paraphrase	A1/B1	document-representative	architecture.md	heading	Navigation contract	5	3	raw snippet	READY
+Q11	doc-map	C1/C2	document-representative	curated.cfmap.md	heading	Curated navigation map	3	1	auto replacement	READY
+Q12	symbol	D1/D2	code-fastsearch	tools/index.py	symbol	rebuild_index	3	1	rust duplicate	READY
+Q13	no-hit	A1/B1	code-fastsearch	unknown.rs	locator	missing	3	0	any result	READY
+Q14	vector-unavailable	A1/B1	document-representative	registry.tsv	row	1	3	1	embedding result	READY
+Q15	exact	A1/B1	document-representative	registry.tsv	row	2	3	1	row 1	READY
+Q16	lexical	A1/B1	document-representative	architecture.md	heading	Navigation contract	3	1	invalid map	READY
+Q17	paraphrase	A1/B1	document-representative	guide-current.md	heading	Current	5	3	absolute path	READY
+Q18	doc-map	C1/C2	document-representative	stale.cfmap.md	heading	Stale map	3	1	current map	READY
+Q19	symbol	D1/D2	code-fastsearch	src/navigator.rs	symbol	stable_navigation	3	1	compiler definition claim	READY
+Q20	no-hit	A1/B1	document-representative	invalid.cfmap.md	heading	Invalid map	3	0	partial map	READY
+Q21	vector-unavailable	A1/B1	document-representative	guide-design.md	heading	Design	3	1	vector score	READY
+Q22	exact	A1/B1	code-fastsearch	src/navigator.rs	symbol	stable_navigation	3	1	insertion order	READY
+Q23	doc-map	C1/C2	document-representative	auto.cfmap.md	heading	Auto navigation map	3	1	stale relation	READY
+Q24	symbol	D1/D2	code-fastsearch	tools/index.py	symbol	rebuild_index	3	1	unavailable omitted	READY
