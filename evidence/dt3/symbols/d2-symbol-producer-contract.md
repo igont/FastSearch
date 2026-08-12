@@ -34,3 +34,13 @@ snapshot имеет те же identities и порядок. Dense fixture с 1 0
 (6 002 nodes) проходит, fixture с 3 000 функциями (18 002 nodes, менее 64 KiB)
 возвращает ошибку без snapshots. Отдельно повторены depth 17, files 1 025,
 syntax, unsupported extension, oversize, Rust/Python и SQLite lifecycle gates.
+
+## PV-26 integration robustness
+
+Паспорт 20 файлов / 50 451 узел остаётся immutable evidence exact revision
+`cc91f63780357538b2e86e78adc8bee7fd76f510`, а не вечным равенством для
+расширяемого `src`. Executable current-src gate теперь дважды строит полный
+sorted admitted inventory во время теста, требует непустой идентичный результат,
+проверяет полное совпадение inventory со snapshot locators и ограничивает каждый
+файл значением не более 16 384 nodes. Новый accepted Rust-файл не создаёт ложный
+регресс, но превышение resource budget по-прежнему отклоняется.
