@@ -606,13 +606,20 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
                     return Err(provider_error("model file size mismatch"));
                 }
                 let mut file = open_verified_file(&path)?;
+                let opened = file.metadata().map_err(provider_error)?;
+                if !opened.is_file() || opened.len() != *expected_size {
+                    return Err(provider_error("opened model file size mismatch"));
+                }
+                let expected_size = usize::try_from(*expected_size).map_err(provider_error)?;
                 let mut content = Vec::new();
                 content
-                    .try_reserve_exact(usize::try_from(*expected_size).map_err(provider_error)?)
+                    .try_reserve_exact(expected_size)
                     .map_err(provider_error)?;
-                file.read_to_end(&mut content).map_err(provider_error)?;
-                if u64::try_from(content.len()).map_err(provider_error)? != *expected_size {
-                    return Err(provider_error("model file changed while reading"));
+                content.resize(expected_size, 0);
+                file.read_exact(&mut content).map_err(provider_error)?;
+                let mut trailing = [0_u8; 1];
+                if file.read(&mut trailing).map_err(provider_error)? != 0 {
+                    return Err(provider_error("model file grew while reading"));
                 }
                 bytes.insert(locator, content);
                 files.push(file);
@@ -989,5 +996,26 @@ mod security_tests {
             IndexFreshness::Current
         );
         assert!(adapter.search(&query).unwrap().hits().is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires FASTSEARCH_E5_MODEL_ROOT local-only cache"]
+    fn opened_file_size_and_eof_are_bounded_by_b1_allowlist() {
+        let fixture = disposable_model_copy();
+        let tokenizer = fixture.0.join("onnx").join("tokenizer_config.json");
+        let expected = fs::metadata(&tokenizer).unwrap().len();
+        let mut grown = fs::read(&tokenizer).unwrap();
+        grown.extend(std::iter::repeat_n(0_u8, 1_048_576));
+        fs::write(&tokenizer, grown).unwrap();
+
+        let error = match verified_model(&fixture.0) {
+            Ok(_) => panic!("grown allowlisted file must fail before provider load"),
+            Err(error) => error,
+        };
+        assert!(error.message().contains("model file size mismatch"));
+        assert_eq!(
+            fs::metadata(&tokenizer).unwrap().len(),
+            expected + 1_048_576
+        );
     }
 }
