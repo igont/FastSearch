@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$DocumentRoot,
     [Parameter(Mandatory = $true)][string]$CodeRoot,
     [Parameter(Mandatory = $true)][string]$WorkRoot,
+    [Parameter(Mandatory = $true)][string]$RuntimeDocumentRoot,
     [Parameter(Mandatory = $true)][string]$OutputJson,
     [string]$E5Root = '',
     [switch]$ValidateOnly
@@ -39,10 +40,14 @@ function Test-ContainsPath {
 Assert-NoReparseAncestors -Path $DocumentRoot -Label 'document root'
 Assert-NoReparseAncestors -Path $CodeRoot -Label 'code root'
 Assert-NoReparseAncestors -Path $WorkRoot -Label 'work root'
+Assert-NoReparseAncestors -Path $RuntimeDocumentRoot -Label 'runtime document root'
+if ($E5Root -ne '') { Assert-NoReparseAncestors -Path $E5Root -Label 'E5 root' }
 $resolvedDocument = (Resolve-Path -LiteralPath $DocumentRoot).Path
 $resolvedCode = (Resolve-Path -LiteralPath $CodeRoot).Path
 $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
 $resolvedWork = [System.IO.Path]::GetFullPath($WorkRoot)
+$resolvedRuntimeDocument = [System.IO.Path]::GetFullPath($RuntimeDocumentRoot)
+$resolvedE5Input = if ($E5Root -eq '') { $null } else { (Resolve-Path -LiteralPath $E5Root).Path }
 
 function Get-RootInventory {
     param([string]$Root, [string]$Identity)
@@ -74,11 +79,18 @@ function Get-RootInventory {
 $documentInventory = Get-RootInventory -Root $resolvedDocument -Identity 'document-fastsearch'
 $codeInventory = Get-RootInventory -Root $resolvedCode -Identity 'code-fastsearch'
 
-$pairs = @(
-    @('document root', $resolvedDocument, 'code root', $resolvedCode),
-    @('document root', $resolvedDocument, 'work root', $resolvedWork),
-    @('code root', $resolvedCode, 'work root', $resolvedWork)
+$admittedRoots = @(
+    @('document root', $resolvedDocument),
+    @('code root', $resolvedCode),
+    @('work root', $resolvedWork),
+    @('runtime document root', $resolvedRuntimeDocument)
 )
+if ($null -ne $resolvedE5Input) { $admittedRoots += ,@('E5 root', $resolvedE5Input) }
+$pairs = for ($left = 0; $left -lt $admittedRoots.Count; $left++) {
+    for ($right = $left + 1; $right -lt $admittedRoots.Count; $right++) {
+        ,@($admittedRoots[$left][0], $admittedRoots[$left][1], $admittedRoots[$right][0], $admittedRoots[$right][1])
+    }
+}
 foreach ($pair in $pairs) {
     if ((Test-ContainsPath -Ancestor $pair[1] -Candidate $pair[3]) -or
         (Test-ContainsPath -Ancestor $pair[3] -Candidate $pair[1])) {
@@ -102,18 +114,19 @@ if ([System.IO.File]::ReadAllText($marker, [System.Text.Encoding]::UTF8) -ne $ru
     throw 'run marker readback mismatch'
 }
 
-# The approved roots are intentionally tiny functional fixtures. A deterministic
-# copied root adds source bytes (not records) so the service-byte ratio measures
-# steady-state overhead instead of SQLite's fixed minimum page size.
-$scaledDocument = Join-Path $resolvedWork 'scaled-document-root'
-Copy-Item -LiteralPath $resolvedDocument -Destination $scaledDocument -Recurse
+# The approved document root is intentionally tiny. A caller-supplied disjoint
+# runtime root adds deterministic source bytes without contaminating WorkRoot.
+if (Test-Path -LiteralPath $resolvedRuntimeDocument) {
+    throw 'runtime document root must not preexist'
+}
+Copy-Item -LiteralPath $resolvedDocument -Destination $resolvedRuntimeDocument -Recurse
 $scaleText = "# Deterministic release scale`n`n" + ('navigation ' * 131072)
 [System.IO.File]::WriteAllText(
-    (Join-Path $scaledDocument 'release-scale.md'),
+    (Join-Path $resolvedRuntimeDocument 'release-scale.md'),
     $scaleText,
     [System.Text.UTF8Encoding]::new($false)
 )
-$resolvedDocument = (Resolve-Path -LiteralPath $scaledDocument).Path
+$resolvedDocument = (Resolve-Path -LiteralPath $resolvedRuntimeDocument).Path
 $runtimeDocumentInventory = Get-RootInventory -Root $resolvedDocument -Identity 'document-fastsearch-runtime'
 $runtimeCodeInventory = Get-RootInventory -Root $resolvedCode -Identity 'code-fastsearch'
 $sourceBytes = (@($runtimeDocumentInventory.files + $runtimeCodeInventory.files) |
@@ -216,7 +229,7 @@ for ($index = 1; $index -le 5; $index++) {
 
 $vector = @()
 if ($E5Root -ne '') {
-    $resolvedE5 = (Resolve-Path -LiteralPath $E5Root).Path
+    $resolvedE5 = $resolvedE5Input
     for ($index = 1; $index -le 5; $index++) {
         $service = Join-Path $resolvedWork "vector-cold-$index\.cfknowledge"
         $serviceRoots.Add($service)
