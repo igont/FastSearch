@@ -144,3 +144,35 @@ fn copied_dt2_state_is_stale_and_hides_legacy_records_until_rebuild() {
     drop(store);
     std::fs::remove_file(database).unwrap();
 }
+
+#[test]
+fn full_reconcile_keeps_equal_relative_locators_from_named_roots_distinct() {
+    let database = std::env::temp_dir().join(format!(
+        "fastsearch-a2-roots-{}.sqlite",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut store = fastsearch::adapters::state::SqliteStateStore::open(&database).unwrap();
+    let locator = SourceLocator::whole_file("shared/readme.md").unwrap();
+    let snapshots = [
+        SourceSnapshot::for_root(
+            LogicalRootId::parse("documents").unwrap(),
+            locator.clone(),
+            FileHash::parse("sha256:a").unwrap(),
+            Vec::new(),
+        ),
+        SourceSnapshot::for_root(
+            LogicalRootId::parse("code").unwrap(),
+            locator,
+            FileHash::parse("sha256:b").unwrap(),
+            Vec::new(),
+        ),
+    ];
+    store
+        .reconcile_snapshots(&snapshots)
+        .expect("named roots must not collide");
+    drop(store);
+    std::fs::remove_file(database).unwrap();
+}

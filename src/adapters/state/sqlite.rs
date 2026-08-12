@@ -341,7 +341,7 @@ impl StateStore for SqliteStateStore {
             ));
         }
 
-        let source_key = source_key(snapshot.locator());
+        let source_key = source_key(&snapshot);
         self.reject_cross_source_ids(&source_key, records)?;
         let previous = self.existing_source_records(&source_key)?;
         let current_ids = records
@@ -403,7 +403,7 @@ impl StateStore for SqliteStateStore {
         let mut incoming = BTreeMap::new();
         let mut incoming_memberships = BTreeSet::new();
         for snapshot in snapshots {
-            let source_key = source_key(snapshot.locator());
+            let source_key = source_key(snapshot);
             if !source_keys.insert(source_key.clone()) {
                 return Err(FastSearchError::new(
                     ErrorKind::StateFailure,
@@ -452,7 +452,7 @@ impl StateStore for SqliteStateStore {
             .execute("DELETE FROM state_records", [])
             .map_err(state_failure)?;
         for snapshot in snapshots {
-            let source_key = source_key(snapshot.locator());
+            let source_key = source_key(snapshot);
             transaction
                 .execute(
                     "INSERT INTO state_source_snapshots (source_key, file_hash) VALUES (?1, ?2)",
@@ -644,7 +644,7 @@ fn storage_position(position: usize) -> Result<i64, FastSearchError> {
         .map_err(|_| state_failure("record component position exceeds SQLite range"))
 }
 
-fn source_key(locator: &SourceLocator) -> String {
+fn source_key(snapshot: &SourceSnapshot) -> String {
     fn append_component(key: &mut String, value: &str) {
         key.push_str(&value.len().to_string());
         key.push(':');
@@ -652,6 +652,10 @@ fn source_key(locator: &SourceLocator) -> String {
     }
 
     let mut key = String::new();
+    if snapshot.root().as_str() != "default" {
+        append_component(&mut key, snapshot.root().as_str());
+    }
+    let locator = snapshot.locator();
     append_component(&mut key, locator.path());
     match locator.selector() {
         SourceSelector::MarkdownHeading { heading_path } => {
