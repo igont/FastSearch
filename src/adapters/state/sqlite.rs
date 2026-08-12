@@ -12,11 +12,19 @@ use crate::ports::{StateChange, StateChangeSet, StateStore};
 /// Внутренний SQLite-владелец durable canonical records.
 pub struct SqliteStateStore {
     connection: Connection,
+    mandatory_rebuild: bool,
 }
 
 impl SqliteStateStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, FastSearchError> {
         let connection = Connection::open(path).map_err(state_failure)?;
+        let had_legacy_records = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'state_records')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(state_failure)? != 0;
         connection
             .execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(state_failure)?;
@@ -66,10 +74,32 @@ impl SqliteStateStore {
                     PRIMARY KEY (source_key, record_id),
                     UNIQUE (record_id)
                 );
+                CREATE TABLE IF NOT EXISTS state_identity_version (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    version TEXT NOT NULL
+                );
                 ",
             )
             .map_err(state_failure)?;
-        Ok(Self { connection })
+        let version = connection
+            .query_row(
+                "SELECT version FROM state_identity_version WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(state_failure)?;
+        let mandatory_rebuild = had_legacy_records && version.is_none();
+        if !mandatory_rebuild && version.is_none() {
+            connection.execute(
+                "INSERT INTO state_identity_version (singleton, version) VALUES (1, 'named-root-v1')",
+                [],
+            ).map_err(state_failure)?;
+        }
+        Ok(Self {
+            connection,
+            mandatory_rebuild,
+        })
     }
 
     /// Записывает batch атомарно; повторяющиеся stable IDs отклоняются до открытия транзакции.
@@ -206,6 +236,9 @@ impl SqliteStateStore {
 
 impl StateStore for SqliteStateStore {
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
+        if self.mandatory_rebuild {
+            return Ok(None);
+        }
         let primary = self
             .connection
             .query_row(
@@ -440,10 +473,25 @@ impl StateStore for SqliteStateStore {
             increment_generation(&transaction)?;
         }
         transaction.commit().map_err(state_failure)?;
+        if self.mandatory_rebuild {
+            self.connection.execute(
+                "INSERT INTO state_identity_version (singleton, version) VALUES (1, 'named-root-v1')\n                 ON CONFLICT(singleton) DO UPDATE SET version = excluded.version",
+                [],
+            ).map_err(state_failure)?;
+            self.mandatory_rebuild = false;
+        }
         Ok(StateChangeSet::new(changes, self.generation()?))
     }
 
     fn lifecycle_status(&self) -> LifecycleStatus {
+        if self.mandatory_rebuild {
+            return LifecycleStatus::new(
+                IndexFreshness::Stale,
+                0,
+                None,
+                "legacy DT2 state requires named-root-v1 rebuild",
+            );
+        }
         match self.generation() {
             Ok(generation) => LifecycleStatus::new(
                 IndexFreshness::Stale,

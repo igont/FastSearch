@@ -216,9 +216,18 @@ impl RootedSourceLocator {
 
     #[must_use]
     pub fn stable_id(&self) -> StableId {
+        fn append_component(encoded: &mut String, value: &str) {
+            encoded.push_str(&value.len().to_string());
+            encoded.push(':');
+            encoded.push_str(value);
+        }
         let selector = match self.locator.selector() {
             SourceSelector::MarkdownHeading { heading_path } => {
-                format!("markdown:{}", heading_path.join("/"))
+                let mut encoded = String::from("markdown:");
+                for heading in heading_path {
+                    append_component(&mut encoded, heading);
+                }
+                encoded
             }
             SourceSelector::RegistryRow { row } => format!("registry:{}", row),
             SourceSelector::CodeSymbol { symbol } => format!("symbol:{symbol}"),

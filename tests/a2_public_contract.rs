@@ -1,8 +1,14 @@
 use fastsearch::domain::{
-    FileHash, IndexFreshness, LifecycleStatus, LogicalRootId, RootedSourceLocator, SearchResponse,
-    SourceAdmission, SourceLocator, SourceSnapshot, StableId,
+    BackendKind, CanonicalRecord, Capability, CapabilityStatus, ContentHash, FileHash,
+    IndexFreshness, LifecycleStatus, LogicalRootId, RecordKind, RetrievalChannel,
+    RootedSourceLocator, SearchHit, SearchResponse, SourceAdmission, SourceLocator, SourceSnapshot,
+    StableId,
 };
 use fastsearch::ports::{LexicalRetrieval, SourcePort, StateChange, StateChangeSet, StateStore};
+use std::{
+    collections::BTreeMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn public_ports_express_source_hashes_lifecycle_and_changes_without_adapter_handles() {
@@ -47,6 +53,23 @@ fn named_roots_make_stable_ids_collision_free_without_absolute_paths() {
     assert!(document_id.as_str().starts_with("named-root-v1:"));
     assert!(SourceLocator::whole_file("C:/private/readme.md").is_err());
     assert!(SourceLocator::whole_file("../readme.md").is_err());
+
+    let first = RootedSourceLocator::new(
+        LogicalRootId::parse("documents").unwrap(),
+        SourceLocator::markdown("guide.md", ["a/b"]).unwrap(),
+    )
+    .unwrap()
+    .stable_id();
+    let second = RootedSourceLocator::new(
+        LogicalRootId::parse("documents").unwrap(),
+        SourceLocator::markdown("guide.md", ["a", "b"]).unwrap(),
+    )
+    .unwrap()
+    .stable_id();
+    assert_ne!(
+        first, second,
+        "selector component boundaries must remain injective"
+    );
 }
 
 #[test]
@@ -64,4 +87,60 @@ fn source_admission_reserves_cfmap_for_its_single_owner() {
         SourceAdmission::CodeCandidate
     );
     let _ = StableId::parse("named-root-v1:example").expect("versioned stable ID");
+}
+
+#[test]
+fn fused_result_preserves_provenance_and_is_deterministic_with_partial_capabilities() {
+    let record = CanonicalRecord::new(
+        StableId::parse("named-root-v1:documents:guide.md:file").unwrap(),
+        RecordKind::MarkdownSection,
+        SourceLocator::whole_file("guide.md").unwrap(),
+        "Guide",
+        "content",
+        BTreeMap::new(),
+        Vec::new(),
+        ContentHash::parse("sha256:content").unwrap(),
+    )
+    .unwrap();
+    let response = SearchResponse::fuse(
+        vec![
+            SearchHit::new(record.clone(), RetrievalChannel::Vector, 1.0),
+            SearchHit::new(record, RetrievalChannel::Lexical, 1.0),
+        ],
+        vec![
+            CapabilityStatus::available(Capability::LexicalRetrieval, BackendKind::Real),
+            CapabilityStatus::unavailable(Capability::VectorRetrieval, "offline"),
+        ],
+    );
+    assert_eq!(response.freshness(), IndexFreshness::Stale);
+    assert_eq!(response.hits()[0].channel(), RetrievalChannel::Lexical);
+    assert_eq!(response.hits()[1].channel(), RetrievalChannel::Vector);
+}
+
+#[test]
+fn copied_dt2_state_is_stale_and_hides_legacy_records_until_rebuild() {
+    let database = std::env::temp_dir().join(format!(
+        "fastsearch-a2-{}.sqlite",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE state_records (id TEXT PRIMARY KEY, kind INTEGER NOT NULL, locator_path TEXT NOT NULL, selector_kind INTEGER NOT NULL, title TEXT NOT NULL, searchable_content TEXT NOT NULL, content_hash TEXT NOT NULL);
+         INSERT INTO state_records VALUES ('legacy-id', 1, 'guide.md', 4, 'legacy', 'legacy', 'sha256:legacy');",
+    ).unwrap();
+    drop(connection);
+
+    let store = fastsearch::adapters::state::SqliteStateStore::open(&database).unwrap();
+    assert_eq!(store.lifecycle_status().freshness(), IndexFreshness::Stale);
+    assert!(
+        store
+            .get(&StableId::parse("legacy-id").unwrap())
+            .unwrap()
+            .is_none()
+    );
+    drop(store);
+    std::fs::remove_file(database).unwrap();
 }

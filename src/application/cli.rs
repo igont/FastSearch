@@ -104,6 +104,10 @@ fn render_status(runtime: &impl AgentSurface) -> String {
                 CapabilityState::Unavailable { .. } => {
                     format!("{:?}=Unavailable", capability.capability())
                 }
+                CapabilityState::Stale { .. } => format!("{:?}=Stale", capability.capability()),
+                CapabilityState::Degraded { .. } => {
+                    format!("{:?}=Degraded", capability.capability())
+                }
             }),
     );
     lines.join("\n")
