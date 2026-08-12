@@ -6,10 +6,26 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Read,
     path::{Path, PathBuf},
     sync::Mutex,
 };
+
+#[cfg(windows)]
+use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
+    Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_READ,
+        OPEN_EXISTING,
+    },
+};
+
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 
 use fastembed::{
     InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
@@ -100,8 +116,9 @@ impl LocalE5Vector {
             let state = self.lock()?;
             (state.model_root.clone(), state.model_identity.clone())
         };
-        let manifest =
-            model_manifest(&root).map_err(|error| self.provider_failed(state_generation, error))?;
+        let verified =
+            verified_model(&root).map_err(|error| self.provider_failed(state_generation, error))?;
+        let manifest = verified.manifest.clone();
         let unchanged = {
             let state = self.lock()?;
             state.freshness == IndexFreshness::Current
@@ -122,8 +139,8 @@ impl LocalE5Vector {
             state.projection_generation = Some(state_generation);
             return Ok(status(&state));
         }
-        let vectors =
-            embed(&root, records).map_err(|error| self.provider_failed(state_generation, error))?;
+        let vectors = embed_verified(verified, records)
+            .map_err(|error| self.provider_failed(state_generation, error))?;
         let mut next = BTreeMap::new();
         for (record, vector) in records.iter().cloned().zip(vectors) {
             if next.contains_key(record.id().as_str()) {
@@ -279,7 +296,7 @@ impl VectorRetrieval for LocalE5Vector {
         if freshness != IndexFreshness::Current {
             return Ok(SearchResponse::with_freshness(Vec::new(), freshness));
         }
-        let observed_manifest = match model_manifest(&root) {
+        let verified = match verified_model(&root) {
             Ok(value) => value,
             Err(error) => {
                 self.provider_failed(generation, error);
@@ -289,7 +306,7 @@ impl VectorRetrieval for LocalE5Vector {
                 ));
             }
         };
-        if manifest.as_deref() != Some(&observed_manifest) {
+        if manifest.as_deref() != Some(&verified.manifest) {
             let mut state = self.lock()?;
             state.freshness = IndexFreshness::Stale;
             state.projection_generation = None;
@@ -300,7 +317,7 @@ impl VectorRetrieval for LocalE5Vector {
                 IndexFreshness::Stale,
             ));
         }
-        let query_vector = embed_texts(&root, &[query.text().to_owned()])
+        let query_vector = embed_texts_verified(verified, &[query.text().to_owned()])
             .map_err(|error| self.provider_failed(generation, error))?
             .into_iter()
             .next()
@@ -369,18 +386,29 @@ fn projection_provenance(
     ))
 }
 
-fn embed(root: &Path, records: &[CanonicalRecord]) -> Result<Vec<Vec<f32>>, FastSearchError> {
+fn embed_verified(
+    verified: VerifiedModel,
+    records: &[CanonicalRecord],
+) -> Result<Vec<Vec<f32>>, FastSearchError> {
     let texts = records
         .iter()
         .map(|record| format!("{}\n{}", record.title(), record.searchable_content()))
         .collect::<Vec<_>>();
-    embed_texts(root, &texts)
+    embed_texts_verified(verified, &texts)
 }
 
+#[cfg(test)]
 fn embed_texts(root: &Path, texts: &[String]) -> Result<Vec<Vec<f32>>, FastSearchError> {
-    let model = local_model(root)?;
+    embed_texts_verified(verified_model(root)?, texts)
+}
+
+fn embed_texts_verified(
+    verified: VerifiedModel,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, FastSearchError> {
+    run_verify_load_hook();
     let mut runtime =
-        TextEmbedding::try_new_from_user_defined(model, InitOptionsUserDefined::default())
+        TextEmbedding::try_new_from_user_defined(verified.model, InitOptionsUserDefined::default())
             .map_err(provider_error)?;
     let vectors = runtime.embed(texts, Some(1)).map_err(provider_error)?;
     if vectors.len() != texts.len()
@@ -396,16 +424,26 @@ fn embed_texts(root: &Path, texts: &[String]) -> Result<Vec<Vec<f32>>, FastSearc
     Ok(vectors.into_iter().map(normalize).collect())
 }
 
-fn local_model(root: &Path) -> Result<UserDefinedEmbeddingModel, FastSearchError> {
-    let onnx = root.join("onnx");
+struct VerifiedModel {
+    model: UserDefinedEmbeddingModel,
+    manifest: String,
+    _files: Vec<File>,
+    _directories: Vec<DirectoryGuard>,
+}
+
+fn verified_model(root: &Path) -> Result<VerifiedModel, FastSearchError> {
+    let snapshot = verified_snapshot(root)?;
     let required = [
-        "model.onnx",
-        "tokenizer.json",
-        "config.json",
-        "special_tokens_map.json",
-        "tokenizer_config.json",
+        "onnx\\model.onnx",
+        "onnx\\tokenizer.json",
+        "onnx\\config.json",
+        "onnx\\special_tokens_map.json",
+        "onnx\\tokenizer_config.json",
     ];
-    if required.iter().any(|name| !onnx.join(name).is_file()) {
+    if required
+        .iter()
+        .any(|name| !snapshot.bytes.contains_key(*name))
+    {
         return Err(FastSearchError::new(
             ErrorKind::CapabilityUnavailable {
                 capability: Capability::VectorRetrieval,
@@ -414,7 +452,7 @@ fn local_model(root: &Path) -> Result<UserDefinedEmbeddingModel, FastSearchError
         ));
     }
     let read = |name: &str| {
-        fs::read(onnx.join(name)).map_err(|_| {
+        snapshot.bytes.get(name).cloned().ok_or_else(|| {
             FastSearchError::new(
                 ErrorKind::CapabilityUnavailable {
                     capability: Capability::VectorRetrieval,
@@ -423,51 +461,78 @@ fn local_model(root: &Path) -> Result<UserDefinedEmbeddingModel, FastSearchError
             )
         })
     };
-    Ok(UserDefinedEmbeddingModel::new(
-        read("model.onnx")?,
+    let model = UserDefinedEmbeddingModel::new(
+        read("onnx\\model.onnx")?,
         TokenizerFiles {
-            tokenizer_file: read("tokenizer.json")?,
-            config_file: read("config.json")?,
-            special_tokens_map_file: read("special_tokens_map.json")?,
-            tokenizer_config_file: read("tokenizer_config.json")?,
+            tokenizer_file: read("onnx\\tokenizer.json")?,
+            config_file: read("onnx\\config.json")?,
+            special_tokens_map_file: read("onnx\\special_tokens_map.json")?,
+            tokenizer_config_file: read("onnx\\tokenizer_config.json")?,
         },
     )
-    .with_pooling(Pooling::Mean))
+    .with_pooling(Pooling::Mean);
+    Ok(VerifiedModel {
+        model,
+        manifest: snapshot.manifest,
+        _files: snapshot.files,
+        _directories: snapshot.directories,
+    })
 }
 
 /// B1 accepted complete E5 cache set: canonical locator/bytes/full-SHA256 root.
 const B1_E5_MANIFEST_ROOT: &str =
     "63A0FA9AEC56D0A3F5080D82956111F4BBEE57BF0A3637371CF16E451B194D0E";
 
-fn model_manifest(root: &Path) -> Result<String, FastSearchError> {
-    fn collect(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), FastSearchError> {
+struct VerifiedSnapshot {
+    bytes: BTreeMap<String, Vec<u8>>,
+    manifest: String,
+    files: Vec<File>,
+    directories: Vec<DirectoryGuard>,
+}
+
+fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
+    fn collect(
+        root: &Path,
+        directory: &Path,
+        bytes: &mut BTreeMap<String, Vec<u8>>,
+        files: &mut Vec<File>,
+        directories: &mut Vec<DirectoryGuard>,
+    ) -> Result<(), FastSearchError> {
+        ensure_not_link_or_reparse(directory)?;
+        directories.push(open_directory_guard(directory)?);
         for entry in fs::read_dir(directory).map_err(provider_error)? {
             let entry = entry.map_err(provider_error)?;
             let path = entry.path();
             if path.file_name().is_some_and(|name| name == ".git") {
                 continue;
             }
-            if path.is_dir() {
-                collect(&path, files)?;
-            } else if path.is_file() {
-                files.push(path);
+            ensure_not_link_or_reparse(&path)?;
+            let metadata = fs::symlink_metadata(&path).map_err(provider_error)?;
+            if metadata.is_dir() {
+                collect(root, &path, bytes, files, directories)?;
+            } else if metadata.is_file() {
+                let mut file = open_verified_file(&path)?;
+                let mut content = Vec::new();
+                file.read_to_end(&mut content).map_err(provider_error)?;
+                let locator = path
+                    .strip_prefix(root)
+                    .map_err(provider_error)?
+                    .to_string_lossy()
+                    .replace('/', "\\");
+                bytes.insert(locator, content);
+                files.push(file);
             }
         }
         Ok(())
     }
+    let mut bytes = BTreeMap::new();
     let mut files = Vec::new();
-    collect(root, &mut files)?;
-    files.sort();
+    let mut directories = Vec::new();
+    collect(root, root, &mut bytes, &mut files, &mut directories)?;
     let mut lines = Vec::new();
-    for path in files {
-        let bytes = fs::read(&path).map_err(provider_error)?;
-        let hash = format!("{:X}", Sha256::digest(&bytes));
-        let locator = path
-            .strip_prefix(root)
-            .map_err(provider_error)?
-            .to_string_lossy()
-            .replace('/', "\\");
-        lines.push(format!("{locator}|{}|{hash}", bytes.len()));
+    for (locator, content) in &bytes {
+        let hash = format!("{:X}", Sha256::digest(content));
+        lines.push(format!("{locator}|{}|{hash}", content.len()));
     }
     let root_hash = format!(
         "{:X}",
@@ -481,8 +546,102 @@ fn model_manifest(root: &Path) -> Result<String, FastSearchError> {
             "B2_LOCAL_E5_MANIFEST_MISMATCH",
         ));
     }
-    Ok(root_hash)
+    Ok(VerifiedSnapshot {
+        bytes,
+        manifest: root_hash,
+        files,
+        directories,
+    })
 }
+
+fn open_verified_file(path: &Path) -> Result<File, FastSearchError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ);
+    options.open(path).map_err(provider_error)
+}
+
+fn ensure_not_link_or_reparse(path: &Path) -> Result<(), FastSearchError> {
+    let metadata = fs::symlink_metadata(path).map_err(provider_error)?;
+    #[cfg(windows)]
+    if metadata.file_attributes() & 0x400 != 0 {
+        return Err(provider_error("model path contains a reparse point"));
+    }
+    #[cfg(not(windows))]
+    if metadata.file_type().is_symlink() {
+        return Err(provider_error("model path contains a symbolic link"));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+struct DirectoryGuard(HANDLE);
+
+#[cfg(windows)]
+impl Drop for DirectoryGuard {
+    fn drop(&mut self) {
+        // SAFETY: the handle is owned by this guard, validated on acquisition,
+        // and closed exactly once here.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+#[cfg(windows)]
+fn open_directory_guard(path: &Path) -> Result<DirectoryGuard, FastSearchError> {
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: `wide` is a live NUL-terminated UTF-16 path; the returned owned
+    // handle is checked before it enters `DirectoryGuard`.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(provider_error(std::io::Error::last_os_error()));
+    }
+    ensure_not_link_or_reparse(path)?;
+    Ok(DirectoryGuard(handle))
+}
+
+#[cfg(not(windows))]
+struct DirectoryGuard;
+
+#[cfg(not(windows))]
+fn open_directory_guard(_path: &Path) -> Result<DirectoryGuard, FastSearchError> {
+    Ok(DirectoryGuard)
+}
+
+#[cfg(test)]
+type VerifyLoadHook = Box<dyn FnOnce() + Send>;
+
+#[cfg(test)]
+static VERIFY_LOAD_HOOK: Mutex<Option<VerifyLoadHook>> = Mutex::new(None);
+
+#[cfg(test)]
+fn install_verify_load_hook(hook: impl FnOnce() + Send + 'static) {
+    *VERIFY_LOAD_HOOK.lock().unwrap() = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn run_verify_load_hook() {
+    if let Some(hook) = VERIFY_LOAD_HOOK.lock().unwrap().take() {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+fn run_verify_load_hook() {}
 
 fn provider_error(error: impl std::fmt::Display) -> FastSearchError {
     FastSearchError::new(
@@ -505,4 +664,35 @@ fn normalize(mut vector: Vec<f32>) -> Vec<f32> {
 
 fn cosine(left: &[f32], right: &[f32]) -> f32 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    #[ignore = "requires FASTSEARCH_E5_MODEL_ROOT local-only cache"]
+    fn verified_model_denies_mutation_and_replacement_until_provider_finishes() {
+        let root = PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap());
+        let mutation_result = Arc::new(Mutex::new(None));
+        let replacement_result = Arc::new(Mutex::new(None));
+        let mutation_capture = Arc::clone(&mutation_result);
+        let replacement_capture = Arc::clone(&replacement_result);
+        let config = root.join("onnx").join("config.json");
+        let replacement = root.with_extension("race-replacement");
+        install_verify_load_hook(move || {
+            *mutation_capture.lock().unwrap() = Some(fs::write(&config, b"mutation"));
+            *replacement_capture.lock().unwrap() = Some(fs::rename(&root, &replacement));
+        });
+
+        let vectors = embed_texts(
+            &PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap()),
+            &["query: semantic navigation".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(vectors.len(), 1);
+        assert!(mutation_result.lock().unwrap().take().unwrap().is_err());
+        assert!(replacement_result.lock().unwrap().take().unwrap().is_err());
+    }
 }
