@@ -211,6 +211,13 @@ fn read_source(
 }
 
 fn source_kind(path: &Path) -> Option<ScannedSourceKind> {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".cfmap.md"))
+    {
+        return None;
+    }
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("md") => Some(ScannedSourceKind::Markdown),
         Some("tsv") => Some(ScannedSourceKind::Tsv),

@@ -7,8 +7,8 @@ mod status;
 
 pub use error::{ErrorKind, FastSearchError};
 pub use record::{
-    CanonicalRecord, ContentHash, FileHash, RecordKind, SourceLocator, SourceSelector,
-    SourceSnapshot, StableId,
+    CanonicalRecord, ContentHash, FileHash, LogicalRootId, RecordKind, RootedSourceLocator,
+    SourceAdmission, SourceLocator, SourceSelector, SourceSnapshot, StableId,
 };
 pub use search::{
     RelatedQuery, RetrievalChannel, SearchHit, SearchMode, SearchQuery, SearchResponse,
