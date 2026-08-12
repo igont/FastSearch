@@ -599,7 +599,18 @@ struct OwnedRun {
 }
 
 #[cfg(windows)]
-struct RunDirectoryGuard(HANDLE);
+struct OwnedDirectoryHandle(HANDLE);
+
+#[cfg(windows)]
+impl Drop for OwnedDirectoryHandle {
+    fn drop(&mut self) {
+        // SAFETY: this RAII value exclusively owns the valid HANDLE and drops once.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+#[cfg(windows)]
+struct RunDirectoryGuard(OwnedDirectoryHandle);
 
 #[cfg(windows)]
 impl RunDirectoryGuard {
@@ -614,15 +625,13 @@ impl RunDirectoryGuard {
         // output buffer for FILE_ATTRIBUTE_TAG_INFO during the call.
         let inspected = unsafe {
             GetFileInformationByHandleEx(
-                handle,
+                handle.0,
                 FileAttributeTagInfo,
                 (&raw mut attributes).cast(),
                 size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
             )
         };
         if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            // SAFETY: `handle` is valid and owned here and is closed exactly once.
-            unsafe { CloseHandle(handle) };
             return Err(FastSearchError::new(
                 ErrorKind::InvalidContent,
                 "run directory is or became a reparse point",
@@ -637,7 +646,7 @@ impl RunDirectoryGuard {
         // `disposition` is a live correctly-sized FILE_DISPOSITION_INFO buffer.
         let deleted = unsafe {
             SetFileInformationByHandle(
-                self.0,
+                self.0.0,
                 FileDispositionInfo,
                 (&raw const disposition).cast(),
                 size_of::<FILE_DISPOSITION_INFO>() as u32,
@@ -651,14 +660,6 @@ impl RunDirectoryGuard {
             ));
         }
         Ok(())
-    }
-}
-
-#[cfg(windows)]
-impl Drop for RunDirectoryGuard {
-    fn drop(&mut self) {
-        // SAFETY: the HANDLE is owned by this guard and Drop closes it exactly once.
-        unsafe { CloseHandle(self.0) };
     }
 }
 
@@ -678,7 +679,9 @@ impl RunDirectoryGuard {
 }
 
 #[cfg(windows)]
-struct PathGuards(Vec<HANDLE>);
+struct PathGuards {
+    _handles: Vec<OwnedDirectoryHandle>,
+}
 
 #[cfg(windows)]
 fn securely_create_and_pin_service(
@@ -721,7 +724,7 @@ fn securely_create_and_pin_service(
             .map_err(|error| failure(ErrorKind::StateFailure, "create pinned runs root", error))?;
     }
     handles.push(open_directory_without_delete_share(&runs)?);
-    Ok((service, PathGuards(handles)))
+    Ok((service, PathGuards { _handles: handles }))
 }
 
 #[cfg(all(test, windows))]
@@ -752,17 +755,9 @@ fn bootstrap_before_existing_component(path: &Path) {
 fn bootstrap_before_existing_component(_path: &Path) {}
 
 #[cfg(windows)]
-impl Drop for PathGuards {
-    fn drop(&mut self) {
-        for handle in self.0.drain(..).rev() {
-            // SAFETY: every HANDLE is owned by this guard vector and drained exactly once.
-            unsafe { CloseHandle(handle) };
-        }
-    }
-}
-
-#[cfg(windows)]
-fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearchError> {
+fn open_directory_without_delete_share(
+    path: &Path,
+) -> Result<OwnedDirectoryHandle, FastSearchError> {
     let handle = open_directory_handle(
         path,
         FILE_LIST_DIRECTORY,
@@ -772,15 +767,13 @@ fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearch
     // SAFETY: `handle` is valid and the output buffer is live and correctly sized.
     let inspected = unsafe {
         GetFileInformationByHandleEx(
-            handle,
+            handle.0,
             FileAttributeTagInfo,
             (&raw mut attributes).cast(),
             size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
         )
     };
     if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        // SAFETY: handle ownership has not escaped and is closed exactly once here.
-        unsafe { CloseHandle(handle) };
         return Err(FastSearchError::new(
             ErrorKind::InvalidContent,
             "service bootstrap encountered a reparse point",
@@ -794,7 +787,7 @@ fn open_directory_handle(
     path: &Path,
     desired_access: u32,
     flags: u32,
-) -> Result<HANDLE, FastSearchError> {
+) -> Result<OwnedDirectoryHandle, FastSearchError> {
     let wide = path
         .as_os_str()
         .encode_wide()
@@ -821,7 +814,7 @@ fn open_directory_handle(
             std::io::Error::last_os_error(),
         ));
     }
-    Ok(handle)
+    Ok(OwnedDirectoryHandle(handle))
 }
 
 #[cfg(not(windows))]
@@ -915,6 +908,36 @@ mod bootstrap_race_tests {
         let _ = fs::remove_dir(&parent);
         if displaced.exists() {
             let _ = fs::rename(&displaced, &parent);
+        }
+        let unlocked = root.join("unlocked-parent");
+        fs::rename(&parent, &unlocked).expect("all bootstrap handles must close on return");
+        fs::rename(&unlocked, &parent).unwrap();
+
+        for attempt in 0..16 {
+            let rejected_parent = root.join(format!("rejected-parent-{attempt}"));
+            let rejected_external = root.join(format!("rejected-external-{attempt}"));
+            fs::create_dir_all(&rejected_external).unwrap();
+            fs::write(rejected_external.join("sentinel.txt"), "unchanged").unwrap();
+            let linked = Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&rejected_parent)
+                .arg(&rejected_external)
+                .output()
+                .unwrap();
+            assert!(linked.status.success());
+            let rejected = securely_create_and_pin_service(&rejected_parent.join("service"));
+            assert!(rejected.is_err());
+            assert!(!rejected_external.join("state.sqlite").exists());
+            let removed = Command::new("cmd")
+                .args(["/c", "rmdir"])
+                .arg(&rejected_parent)
+                .output()
+                .unwrap();
+            assert!(
+                removed.status.success(),
+                "rejected traversal leaked a HANDLE"
+            );
+            fs::remove_dir_all(rejected_external).unwrap();
         }
         let _ = fs::remove_dir_all(&root);
     }
