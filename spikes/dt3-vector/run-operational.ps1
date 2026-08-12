@@ -38,14 +38,29 @@ $runs = @()
 }
 $unique = @($runs.output | ForEach-Object { $_ -replace '"elapsed_ms":\d+', '"elapsed_ms":X' } | Select-Object -Unique)
 if ($unique.Count -ne 1) { throw 'E5_ORDER_OR_VECTOR_NONDETERMINISTIC' }
+if ($runs[0].output -notmatch '"selectors":\["architecture.md#Navigation contract"' -or $runs[0].output -match 'secret sentinel') { throw 'E5_MUST_NOT_SELECTOR_FAILED' }
 $missingArgs = @('"e5"', ('"' + (Join-Path $cache 'models\missing') + '"'), ('"' + $query + '"')) + @($docs | ForEach-Object { '"' + $_ + '"' })
 $missing = Start-Process -FilePath $exe -ArgumentList $missingArgs -NoNewWindow -PassThru -Wait -RedirectStandardOutput (Join-Path $cache 'missing.out') -RedirectStandardError (Join-Path $cache 'missing.err')
 if ($missing.ExitCode -eq 0 -or (Get-Content -LiteralPath (Join-Path $cache 'missing.err') -Raw -Encoding UTF8) -notmatch 'B1_NO_PROVIDER_CACHE_MISSING') { throw 'MISSING_CACHE_NOT_TYPED' }
 $recovery = & $exe @runArgs 2>&1
 if ($LASTEXITCODE -ne 0 -or $recovery -notmatch '"index":0') { throw 'E5_RECOVERY_FAILED' }
+$junction = Join-Path $cache 'junction-probe'
+cmd.exe /c "mklink /J `"$junction`" `"$model`"" | Out-Null
+if (!((Get-Item -LiteralPath $junction -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'JUNCTION_NOT_CREATED' }
+if ((Get-Item -LiteralPath $junction -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $reparse='rejected' } else { throw 'REPARSE_NOT_REJECTED' }
+cmd.exe /c "rmdir `"$junction`"" | Out-Null
+if (Test-Path -LiteralPath $junction) { throw 'JUNCTION_CLEANUP_FAILED' }
 $latencies = @($runs | ForEach-Object { [int]([regex]::Match($_.output,'"elapsed_ms":(\d+)')).Groups[1].Value } | Sort-Object)
 $peak = ($runs.peak_bytes | Measure-Object -Maximum).Maximum
 if ($peak -gt 2147483648) { throw 'E5_VECTOR_CHILD_MEMORY_BUDGET_EXCEEDED' }
-$payload = [ordered]@{schema='dt3-b1-operational-v2'; fixture_root='document-representative-b1-fixture'; query_contract='A1/B1 paraphrase expected architecture.md, must-not secret sentinel'; models=$manifest; cold=$runs[0..4]; warm=$runs[5..9]; p95_ms=$latencies[-1]; peak_working_set_bytes=$peak; vector_child_budget_bytes=2147483648; missing_cache='typed-rejected'; recovery='same-model-hash accepted'; qwen='unavailable: internal-network loopback route absent'; bge='unavailable: adapter requires three outputs'}
+$fullManifest = foreach($directory in @('models\multilingual-e5-small','models\bge-m3','models\qwen3-embedding-0.6b')) { Get-ChildItem -LiteralPath (Join-Path $cache $directory) -Recurse -File | Where-Object { $_.FullName -notmatch '\\.git\\' } | ForEach-Object { [ordered]@{profile=$directory; locator=$_.FullName.Substring((Join-Path $cache $directory).Length).TrimStart('\\'); bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash} } }
+$oldErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$bge = & $exe bge (Join-Path $cache 'models\bge-m3') $query $docs 2>&1
+$bgeExit = $LASTEXITCODE
+$ErrorActionPreference = $oldErrorActionPreference
+if ($bgeExit -eq 0 -or ($bge | Out-String) -notmatch 'expects the model to return 3 outputs') { throw 'BGE_CAUSAL_FAILURE_NOT_REPRODUCED' }
+$qwen = docker inspect fastsearch-dt3-b1-qwen --format '{{json .NetworkSettings.Ports}} {{.HostConfig.ReadonlyRootfs}}' 2>&1
+$payload = [ordered]@{schema='dt3-b1-operational-v3'; fixture_root='document-representative-b1-fixture'; query_contract='A1/B1 paraphrase expected architecture.md, must-not secret sentinel'; models=$manifest; full_cache_manifest=$fullManifest; cold=$runs[0..4]; warm=$runs[5..9]; p95_ms=$latencies[-1]; peak_working_set_bytes=$peak; vector_child_budget_bytes=2147483648; missing_cache='typed-rejected'; recovery='same-model-hash accepted'; junction_reparse=$reparse; bge=($bge | Out-String).Trim(); qwen_inspect=($qwen | Out-String).Trim(); qwen='unavailable: internal-network loopback route absent'}
 $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $cache 'operational.json') -Encoding UTF8
 Write-Output ($payload | ConvertTo-Json -Compress)
