@@ -6,6 +6,7 @@
 
 # Rust build output
 /target/
+/spikes/**/target/
 
 # FastSearch disposable local state
 /.cfknowledge/
