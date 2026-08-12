@@ -17,7 +17,7 @@ use crate::ports::{SourcePort, SymbolPort};
 const MAX_SOURCE_BYTES: u64 = 64 * 1024;
 const MAX_FILES: usize = 1_024;
 const MAX_DEPTH: usize = 16;
-const MAX_NODES: usize = 512;
+const MAX_NODES: usize = 16_384;
 
 /// A read-only source that emits only complete structural snapshots for an explicit named root.
 #[derive(Debug)]
