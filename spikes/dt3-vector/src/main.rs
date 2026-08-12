@@ -25,6 +25,7 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let profile = args.next().context("profile")?;
     let model = PathBuf::from(args.next().context("model root")?);
+    if !model.join("onnx/model.onnx").is_file() { anyhow::bail!("B1_NO_PROVIDER_CACHE_MISSING") }
     let query = args.next().context("query")?;
     if query != "semantic navigation optional provider fallback" { anyhow::bail!("B1_FIXED_QUERY_REQUIRED") }
     let docs: Vec<String> = args.map(|file| fs::read_to_string(file)).collect::<std::io::Result<_>>()?;
@@ -51,12 +52,14 @@ fn main() -> Result<()> {
     if vectors.len() != documents_len + 1 || vectors.iter().any(|v| v.is_empty() || v.iter().any(|x| !x.is_finite())) {
         anyhow::bail!("invalid vectors")
     }
+    let query_norm = vectors[0].iter().map(|x| x * x).sum::<f32>().sqrt();
+    if !query_norm.is_finite() || query_norm <= 0.0 { anyhow::bail!("B1_INVALID_VECTOR_NORM") }
     let mut ranks: Vec<(usize, f32)> = vectors[1..].iter().enumerate()
         .map(|(i, vector)| (i, cosine(&vectors[0], vector))).collect();
     ranks.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
     if ranks.first().map(|entry| entry.0) != Some(0) { anyhow::bail!("B1_REQUIRED_HIT_RANK_FAILED") }
-    println!("{{\"profile\":\"{}\",\"dimension\":{},\"elapsed_ms\":{},\"rank\":[{}]}}",
-        profile, vectors[0].len(), start.elapsed().as_millis(),
+    println!("{{\"profile\":\"{}\",\"dimension\":{},\"norm\":{},\"batch_size\":1,\"elapsed_ms\":{},\"rank\":[{}]}}",
+        profile, vectors[0].len(), query_norm, start.elapsed().as_millis(),
         ranks.iter().map(|(i, score)| format!("{{\"index\":{},\"score\":{}}}", i, score)).collect::<Vec<_>>().join(","));
     Ok(())
 }
