@@ -4,6 +4,7 @@ param(
   [Parameter(Mandatory)][string]$CodeRoot,
   [Parameter(Mandatory)][string]$ServiceRoot,
   [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9-]{2,63}$')][string]$RunId,
+  [string]$EvidencePayload,
   [switch]$NegativeOnly
 )
 Set-StrictMode -Version Latest
@@ -26,6 +27,7 @@ function AssertRedacted([object]$Payload) {
   $json=$Payload | ConvertTo-Json -Depth 8 -Compress
   if ($json -match '(?i)([A-Z]:\\\\|/Users/|token=|password=|secret=|content|snippet)') { throw 'EVIDENCE_REDACTION_REJECTED' }
 }
+if ($EvidencePayload) { AssertRedacted ([ordered]@{ payload = $EvidencePayload }); Write-Output 'payload accepted'; exit 0 }
 if ($NegativeOnly) { exit 0 }
 $service=AssertSafeService $DocumentRoot $CodeRoot $ServiceRoot $RunId
 New-Item -ItemType Directory -Force -Path $service | Out-Null
