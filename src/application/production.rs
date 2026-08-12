@@ -12,14 +12,17 @@ use std::{
 };
 
 #[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
+use std::{mem::size_of, os::windows::ffi::OsStrExt};
 
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+        FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_LIST_DIRECTORY, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
+        FileDispositionInfo, GetFileInformationByHandleEx, OPEN_EXISTING,
+        SetFileInformationByHandle,
     },
 };
 
@@ -91,7 +94,7 @@ pub struct ProductionRuntime {
     lexical: TantivyLexical,
     vector: LocalE5Vector,
     vector_configured: bool,
-    owned_runs: Mutex<BTreeMap<String, String>>,
+    owned_runs: Mutex<BTreeMap<String, OwnedRun>>,
     _path_guards: PathGuards,
 }
 
@@ -156,6 +159,13 @@ impl ProductionRuntime {
         let run = runs.join(marker);
         fs::create_dir(&run)
             .map_err(|error| failure(ErrorKind::StateFailure, "create run directory", error))?;
+        let guard = match RunDirectoryGuard::acquire(&run) {
+            Ok(guard) => guard,
+            Err(error) => {
+                let _ = fs::remove_dir(&run);
+                return Err(error);
+            }
+        };
         let token = format!(
             "{}-{}",
             std::process::id(),
@@ -164,7 +174,8 @@ impl ProductionRuntime {
         if let Err(error) = write_new_run_markers(&run, &token) {
             let _ = fs::remove_file(run.join("schema.marker"));
             let _ = fs::remove_file(run.join("owner.marker"));
-            let _ = fs::remove_dir(&run);
+            let _ = guard.mark_for_delete(&run);
+            drop(guard);
             return Err(error);
         }
         self.owned_runs
@@ -172,7 +183,7 @@ impl ProductionRuntime {
             .map_err(|_| {
                 FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
             })?
-            .insert(marker.to_owned(), token);
+            .insert(marker.to_owned(), OwnedRun { token, guard });
         Ok(run)
     }
 
@@ -187,7 +198,7 @@ impl ProductionRuntime {
         let mut owned = self.owned_runs.lock().map_err(|_| {
             FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
         })?;
-        let token = owned.get(marker).ok_or_else(|| {
+        let owned_run = owned.get(marker).ok_or_else(|| {
             FastSearchError::new(
                 ErrorKind::StateFailure,
                 "run directory is not owned by this runtime invocation",
@@ -195,7 +206,7 @@ impl ProductionRuntime {
         })?;
         let observed = fs::read_to_string(&marker_path)
             .map_err(|error| failure(ErrorKind::StateFailure, "read run marker", error))?;
-        if observed != *token {
+        if observed != owned_run.token {
             return Err(FastSearchError::new(
                 ErrorKind::StateFailure,
                 "run cleanup marker does not match the exact requested owner",
@@ -231,8 +242,7 @@ impl ProductionRuntime {
             .map_err(|error| failure(ErrorKind::StateFailure, "remove owner marker", error))?;
         fs::remove_file(&schema_path)
             .map_err(|error| failure(ErrorKind::StateFailure, "remove schema marker", error))?;
-        fs::remove_dir(&run)
-            .map_err(|error| failure(ErrorKind::StateFailure, "remove empty exact run", error))?;
+        owned_run.guard.mark_for_delete(&run)?;
         owned.remove(marker);
         Ok(true)
     }
@@ -588,6 +598,90 @@ fn write_new_run_markers(run: &Path, token: &str) -> Result<(), FastSearchError>
         .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))
 }
 
+struct OwnedRun {
+    token: String,
+    guard: RunDirectoryGuard,
+}
+
+#[cfg(windows)]
+struct RunDirectoryGuard(HANDLE);
+
+#[cfg(windows)]
+impl RunDirectoryGuard {
+    fn acquire(path: &Path) -> Result<Self, FastSearchError> {
+        let handle = open_directory_handle(
+            path,
+            FILE_LIST_DIRECTORY | DELETE,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        )?;
+        let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
+        // SAFETY: `handle` is valid and owned; `attributes` is a live correctly-sized
+        // output buffer for FILE_ATTRIBUTE_TAG_INFO during the call.
+        let inspected = unsafe {
+            GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfo,
+                (&raw mut attributes).cast(),
+                size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        };
+        if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            // SAFETY: `handle` is valid and owned here and is closed exactly once.
+            unsafe { CloseHandle(handle) };
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "run directory is or became a reparse point",
+            ));
+        }
+        Ok(Self(handle))
+    }
+
+    fn mark_for_delete(&self, _path: &Path) -> Result<(), FastSearchError> {
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: the pinned directory HANDLE remains valid for this call and
+        // `disposition` is a live correctly-sized FILE_DISPOSITION_INFO buffer.
+        let deleted = unsafe {
+            SetFileInformationByHandle(
+                self.0,
+                FileDispositionInfo,
+                (&raw const disposition).cast(),
+                size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        };
+        if deleted == 0 {
+            return Err(failure(
+                ErrorKind::StateFailure,
+                "mark exact run directory for deletion",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RunDirectoryGuard {
+    fn drop(&mut self) {
+        // SAFETY: the HANDLE is owned by this guard and Drop closes it exactly once.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+#[cfg(not(windows))]
+struct RunDirectoryGuard;
+
+#[cfg(not(windows))]
+impl RunDirectoryGuard {
+    fn acquire(_path: &Path) -> Result<Self, FastSearchError> {
+        Ok(Self)
+    }
+
+    fn mark_for_delete(&self, path: &Path) -> Result<(), FastSearchError> {
+        fs::remove_dir(path)
+            .map_err(|error| failure(ErrorKind::StateFailure, "remove empty exact run", error))
+    }
+}
+
 #[cfg(windows)]
 struct PathGuards {
     service: HANDLE,
@@ -625,6 +719,15 @@ impl Drop for PathGuards {
 
 #[cfg(windows)]
 fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearchError> {
+    open_directory_handle(path, FILE_LIST_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS)
+}
+
+#[cfg(windows)]
+fn open_directory_handle(
+    path: &Path,
+    desired_access: u32,
+    flags: u32,
+) -> Result<HANDLE, FastSearchError> {
     let wide = path
         .as_os_str()
         .encode_wide()
@@ -636,11 +739,11 @@ fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearch
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
-            FILE_LIST_DIRECTORY,
+            desired_access,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             std::ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            flags,
             std::ptr::null_mut(),
         )
     };
