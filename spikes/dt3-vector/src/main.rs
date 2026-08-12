@@ -26,6 +26,7 @@ fn main() -> Result<()> {
     let profile = args.next().context("profile")?;
     let model = PathBuf::from(args.next().context("model root")?);
     let query = args.next().context("query")?;
+    if query != "semantic navigation optional provider fallback" { anyhow::bail!("B1_FIXED_QUERY_REQUIRED") }
     let docs: Vec<String> = args.map(|file| fs::read_to_string(file)).collect::<std::io::Result<_>>()?;
     if docs.is_empty() { anyhow::bail!("no documents") }
     let documents_len = docs.len();
@@ -53,6 +54,7 @@ fn main() -> Result<()> {
     let mut ranks: Vec<(usize, f32)> = vectors[1..].iter().enumerate()
         .map(|(i, vector)| (i, cosine(&vectors[0], vector))).collect();
     ranks.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
+    if ranks.first().map(|entry| entry.0) != Some(0) { anyhow::bail!("B1_REQUIRED_HIT_RANK_FAILED") }
     println!("{{\"profile\":\"{}\",\"dimension\":{},\"elapsed_ms\":{},\"rank\":[{}]}}",
         profile, vectors[0].len(), start.elapsed().as_millis(),
         ranks.iter().map(|(i, score)| format!("{{\"index\":{},\"score\":{}}}", i, score)).collect::<Vec<_>>().join(","));
