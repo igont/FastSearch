@@ -279,6 +279,27 @@ impl VectorRetrieval for LocalE5Vector {
         if freshness != IndexFreshness::Current {
             return Ok(SearchResponse::with_freshness(Vec::new(), freshness));
         }
+        let observed_manifest = match model_manifest(&root) {
+            Ok(value) => value,
+            Err(error) => {
+                self.provider_failed(generation, error);
+                return Ok(SearchResponse::with_freshness(
+                    Vec::new(),
+                    IndexFreshness::Degraded,
+                ));
+            }
+        };
+        if manifest.as_deref() != Some(&observed_manifest) {
+            let mut state = self.lock()?;
+            state.freshness = IndexFreshness::Stale;
+            state.projection_generation = None;
+            state.detail =
+                "local E5 artifact manifest changed; vector projection must rebuild".to_owned();
+            return Ok(SearchResponse::with_freshness(
+                Vec::new(),
+                IndexFreshness::Stale,
+            ));
+        }
         let query_vector = embed_texts(&root, &[query.text().to_owned()])
             .map_err(|error| self.provider_failed(generation, error))?
             .into_iter()

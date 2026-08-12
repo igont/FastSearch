@@ -23,6 +23,14 @@ fn record(id: &str, hash: &str, text: &str) -> CanonicalRecord {
     .unwrap()
 }
 
+struct ExactTempFile(PathBuf);
+
+impl Drop for ExactTempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 #[test]
 fn missing_local_provider_is_typed_and_never_current() {
     let adapter = LocalE5Vector::open(PathBuf::from("missing-local-e5"), "e5-test");
@@ -118,8 +126,18 @@ fn local_e5_lifecycle_invalidates_and_recovers_deterministically() {
         adapter.rebuild(&changed, 3).unwrap().freshness(),
         IndexFreshness::Current
     );
-    let mutation = root.join("b2-model-bytes-mutation.tmp");
-    fs::write(&mutation, b"mutation").unwrap();
+    let mutation = ExactTempFile(root.join("b2-model-bytes-mutation.tmp"));
+    fs::write(&mutation.0, b"mutation").unwrap();
+    let stale = port.search(&query).unwrap();
+    assert!(stale.hits().is_empty());
+    assert!(matches!(
+        stale.freshness(),
+        IndexFreshness::Stale | IndexFreshness::Degraded
+    ));
+    assert_ne!(
+        adapter.lifecycle_status().freshness(),
+        IndexFreshness::Current
+    );
     let error = adapter.rebuild(&changed, 4).unwrap_err();
     assert_eq!(
         error.kind(),
@@ -132,7 +150,7 @@ fn local_e5_lifecycle_invalidates_and_recovers_deterministically() {
         IndexFreshness::Degraded
     );
     assert_eq!(adapter.lifecycle_status().state_generation(), 4);
-    fs::remove_file(&mutation).unwrap();
+    fs::remove_file(&mutation.0).unwrap();
     adapter
         .reconfigure(root, "multilingual-e5-small@614241f")
         .unwrap();
