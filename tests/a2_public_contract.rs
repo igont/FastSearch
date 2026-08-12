@@ -1,8 +1,8 @@
 use fastsearch::domain::{
     BackendKind, CanonicalRecord, Capability, CapabilityStatus, ContentHash, FileHash,
-    IndexFreshness, LifecycleStatus, LogicalRootId, RecordKind, RetrievalChannel,
-    RootedSourceLocator, SearchHit, SearchResponse, SourceAdmission, SourceLocator, SourceSnapshot,
-    StableId,
+    IndexFreshness, LifecycleStatus, LogicalRootId, ModelIdentity, ProjectionProvenance,
+    RecordKind, RetrievalChannel, RootedSourceLocator, SearchHit, SearchResponse, SourceAdmission,
+    SourceLocator, SourceSnapshot, StableId,
 };
 use fastsearch::ports::{LexicalRetrieval, SourcePort, StateChange, StateChangeSet, StateStore};
 use std::{
@@ -115,6 +115,66 @@ fn fused_result_preserves_provenance_and_is_deterministic_with_partial_capabilit
     assert_eq!(response.freshness(), IndexFreshness::Stale);
     assert_eq!(response.hits()[0].channel(), RetrievalChannel::Lexical);
     assert_eq!(response.hits()[1].channel(), RetrievalChannel::Vector);
+}
+
+#[test]
+fn optional_projection_provenance_is_source_compatible_and_survives_fusion() {
+    let record = CanonicalRecord::new(
+        StableId::parse("named-root-v1:documents:vector.md:file").unwrap(),
+        RecordKind::MarkdownSection,
+        SourceLocator::whole_file("vector.md").unwrap(),
+        "Vector",
+        "semantic content",
+        BTreeMap::new(),
+        Vec::new(),
+        ContentHash::parse("sha256:vector-content").unwrap(),
+    )
+    .unwrap();
+    for channel in [
+        RetrievalChannel::Exact,
+        RetrievalChannel::Lexical,
+        RetrievalChannel::Vector,
+        RetrievalChannel::CodeMap,
+        RetrievalChannel::Symbol,
+    ] {
+        assert_eq!(
+            SearchHit::new(record.clone(), channel, 0.5).projection_provenance(),
+            None
+        );
+    }
+    let lexical = SearchHit::new(record.clone(), RetrievalChannel::Lexical, 0.5);
+
+    let model = ModelIdentity::new(
+        "multilingual-e5-small",
+        "614241f",
+        "9c80551e7f08186b2e04d0f887d1939a7c3696db421f8cfef38cb40a2b623bae",
+    )
+    .unwrap();
+    let provenance = ProjectionProvenance::new(model, 7, 11);
+    let vector = SearchHit::new(record, RetrievalChannel::Vector, 0.75)
+        .with_projection_provenance(provenance.clone());
+
+    let fused = SearchResponse::fuse(
+        vec![lexical, vector],
+        vec![CapabilityStatus::available(
+            Capability::VectorRetrieval,
+            BackendKind::Real,
+        )],
+    );
+    assert_eq!(fused.hits()[0].projection_provenance(), Some(&provenance));
+    assert_eq!(
+        fused.projection_provenances().collect::<Vec<_>>(),
+        vec![&provenance]
+    );
+    assert_eq!(provenance.authoritative_state_generation(), 7);
+    assert_eq!(provenance.derived_projection_generation(), 11);
+    assert_eq!(provenance.model_identity().model(), "multilingual-e5-small");
+    assert_eq!(provenance.model_identity().upstream_revision(), "614241f");
+    assert_eq!(
+        provenance.model_identity().artifact_manifest_sha256(),
+        "9c80551e7f08186b2e04d0f887d1939a7c3696db421f8cfef38cb40a2b623bae"
+    );
+    assert!(ModelIdentity::new("model", "revision", "short-digest").is_err());
 }
 
 #[test]

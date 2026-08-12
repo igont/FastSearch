@@ -11,7 +11,8 @@ pub use record::{
     SourceAdmission, SourceLocator, SourceSelector, SourceSnapshot, StableId,
 };
 pub use search::{
-    RelatedQuery, RetrievalChannel, SearchHit, SearchMode, SearchQuery, SearchResponse,
+    ModelIdentity, ProjectionProvenance, RelatedQuery, RetrievalChannel, SearchHit, SearchMode,
+    SearchQuery, SearchResponse,
 };
 pub use status::{
     BackendKind, Capability, CapabilityState, CapabilityStatus, IndexFreshness, LifecycleStatus,
