@@ -14,6 +14,7 @@ use std::{
 use fastembed::{
     InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
 };
+use sha2::{Digest, Sha256};
 
 use crate::{
     domain::{
@@ -33,6 +34,7 @@ struct ProjectedRecord {
 struct ProjectionState {
     model_root: PathBuf,
     model_identity: String,
+    model_manifest: Option<String>,
     records: BTreeMap<String, ProjectedRecord>,
     state_generation: u64,
     projection_generation: Option<u64>,
@@ -76,6 +78,7 @@ impl LocalE5Vector {
             state: Mutex::new(ProjectionState {
                 model_root: model_root.into(),
                 model_identity: model_identity.into(),
+                model_manifest: None,
                 records: BTreeMap::new(),
                 state_generation: 0,
                 projection_generation: None,
@@ -92,9 +95,16 @@ impl LocalE5Vector {
         records: &[CanonicalRecord],
         state_generation: u64,
     ) -> Result<LifecycleStatus, FastSearchError> {
-        let (root, identity, unchanged) = {
+        let (root, identity) = {
             let state = self.lock()?;
-            let unchanged = state.freshness == IndexFreshness::Current
+            (state.model_root.clone(), state.model_identity.clone())
+        };
+        let manifest =
+            model_manifest(&root).map_err(|error| self.provider_failed(state_generation, error))?;
+        let unchanged = {
+            let state = self.lock()?;
+            state.freshness == IndexFreshness::Current
+                && state.model_manifest.as_deref() == Some(&manifest)
                 && state.records.len() == records.len()
                 && records.iter().all(|record| {
                     state
@@ -103,12 +113,7 @@ impl LocalE5Vector {
                         .is_some_and(|projected| {
                             projected.content_hash == record.content_hash().as_str()
                         })
-                });
-            (
-                state.model_root.clone(),
-                state.model_identity.clone(),
-                unchanged,
-            )
+                })
         };
         if unchanged {
             let mut state = self.lock()?;
@@ -137,12 +142,19 @@ impl LocalE5Vector {
         }
         let mut state = self.lock()?;
         // Reconfiguration during embedding is a causal stale result, never Current.
-        if state.model_identity != identity || state.model_root != root {
+        if state.model_identity != identity
+            || state.model_root != root
+            || state
+                .model_manifest
+                .as_deref()
+                .is_some_and(|current| current != manifest)
+        {
             state.freshness = IndexFreshness::Stale;
             state.detail = "model identity changed while projection was building".to_owned();
             return Ok(status(&state));
         }
         state.records = next;
+        state.model_manifest = Some(manifest);
         state.state_generation = state_generation;
         state.projection_generation = Some(state_generation);
         state.freshness = IndexFreshness::Current;
@@ -167,6 +179,7 @@ impl LocalE5Vector {
         let mut state = self.lock()?;
         state.model_root = model_root.into();
         state.model_identity = model_identity.into();
+        state.model_manifest = None;
         state.records.clear();
         state.projection_generation = None;
         state.freshness = IndexFreshness::Stale;
@@ -242,19 +255,20 @@ impl LocalE5Vector {
 
 impl VectorRetrieval for LocalE5Vector {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        let (root, entries, freshness) = {
+        let (root, entries, freshness, generation) = {
             let state = self.lock()?;
             (
                 state.model_root.clone(),
                 state.records.values().cloned().collect::<Vec<_>>(),
                 state.freshness,
+                state.state_generation,
             )
         };
         if freshness != IndexFreshness::Current {
             return Ok(SearchResponse::with_freshness(Vec::new(), freshness));
         }
         let query_vector = embed_texts(&root, &[query.text().to_owned()])
-            .map_err(|error| self.provider_failed(0, error))?
+            .map_err(|error| self.provider_failed(generation, error))?
             .into_iter()
             .next()
             .ok_or_else(|| {
@@ -356,6 +370,55 @@ fn local_model(root: &Path) -> Result<UserDefinedEmbeddingModel, FastSearchError
         },
     )
     .with_pooling(Pooling::Mean))
+}
+
+/// B1 accepted complete E5 cache set: canonical locator/bytes/full-SHA256 root.
+const B1_E5_MANIFEST_ROOT: &str =
+    "63A0FA9AEC56D0A3F5080D82956111F4BBEE57BF0A3637371CF16E451B194D0E";
+
+fn model_manifest(root: &Path) -> Result<String, FastSearchError> {
+    fn collect(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), FastSearchError> {
+        for entry in fs::read_dir(directory).map_err(provider_error)? {
+            let entry = entry.map_err(provider_error)?;
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                collect(&path, files)?;
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    collect(root, &mut files)?;
+    files.sort();
+    let mut lines = Vec::new();
+    for path in files {
+        let bytes = fs::read(&path).map_err(provider_error)?;
+        let hash = format!("{:X}", Sha256::digest(&bytes));
+        let locator = path
+            .strip_prefix(root)
+            .map_err(provider_error)?
+            .to_string_lossy()
+            .replace('/', "\\");
+        lines.push(format!("{locator}|{}|{hash}", bytes.len()));
+    }
+    let root_hash = format!(
+        "{:X}",
+        Sha256::digest(format!("{}\n", lines.join("\n")).as_bytes())
+    );
+    if root_hash != B1_E5_MANIFEST_ROOT {
+        return Err(FastSearchError::new(
+            ErrorKind::CapabilityUnavailable {
+                capability: Capability::VectorRetrieval,
+            },
+            "B2_LOCAL_E5_MANIFEST_MISMATCH",
+        ));
+    }
+    Ok(root_hash)
 }
 
 fn provider_error(error: impl std::fmt::Display) -> FastSearchError {
