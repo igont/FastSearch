@@ -1,0 +1,4 @@
+---
+mode: UNKNOWN
+---
+# Invalid map

@@ -1,0 +1,3 @@
+# Root identity transition passport
+
+Accepted policy is `named-root-v1` with mandatory DT2 legacy rebuild. Source key is the ordered tuple `logical_root_id`, normalized relative locator, selector kind and selector value. Its distinct components prove that equal relative locators in different named roots cannot collide; an equal full tuple is rejected as a typed duplicate before state/projection mutation. Open/update of legacy DT2 state is `Stale`; rebuild writes the new versioned identity, then source and projection generations may become `Current`. Rename is delete+add; duplicate and collision never silently overwrite.
