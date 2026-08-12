@@ -1,0 +1,8 @@
+[package]
+name = "dt3-vector-spike"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "=1.0.104"
+fastembed = "=5.17.4"
