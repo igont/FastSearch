@@ -1,11 +1,12 @@
-use std::{collections::BTreeMap, sync::Arc, thread};
+use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc, thread};
 
 use fastsearch::{
     application::fusion::{ChannelCandidates, FusionCoordinator},
     domain::{
         BackendKind, CanonicalRecord, Capability, CapabilityStatus, ContentHash, IndexFreshness,
-        ModelIdentity, ProjectionProvenance, RecordKind, RetrievalChannel, SearchHit, SearchMode,
-        SearchQuery, SourceLocator, StableId,
+        LogicalRootId, ModelIdentity, ProjectionProvenance, RecordKind, RetrievalChannel,
+        RootedSourceLocator, SearchHit, SearchMode, SearchQuery, SourceLocator, SourceSelector,
+        StableId,
     },
 };
 
@@ -182,7 +183,7 @@ fn stable_id_dedupe_preserves_vector_provenance_and_ties_use_source_key() {
 }
 
 #[test]
-fn e1_quality_rows_preserve_all_admitted_selectors_without_must_not_or_duplicates() {
+fn fusion_smoke_preserves_one_representative_of_each_admitted_channel() {
     let query = SearchQuery::new("stable navigation", SearchMode::Balanced).unwrap();
     let response = FusionCoordinator::fuse(
         &query,
@@ -240,6 +241,261 @@ fn e1_quality_rows_preserve_all_admitted_selectors_without_must_not_or_duplicate
         &[],
     );
     assert!(no_hit.hits().is_empty());
+}
+
+#[derive(Clone, Debug)]
+struct QualityRow {
+    label: String,
+    intent: String,
+    section: String,
+    logical_root_id: String,
+    relative_locator: String,
+    selector_kind: String,
+    selector_value: String,
+    top_k: usize,
+    required_rank_max: usize,
+    must_not: String,
+    review: String,
+}
+
+fn quality_rows() -> Vec<QualityRow> {
+    let rows = include_str!("../evidence/dt3/foundation/queries.tsv")
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 11, "invalid immutable quality row: {line}");
+            QualityRow {
+                label: fields[0].to_owned(),
+                intent: fields[1].to_owned(),
+                section: fields[2].to_owned(),
+                logical_root_id: fields[3].to_owned(),
+                relative_locator: fields[4].to_owned(),
+                selector_kind: fields[5].to_owned(),
+                selector_value: fields[6].to_owned(),
+                top_k: fields[7].parse().unwrap(),
+                required_rank_max: fields[8].parse().unwrap(),
+                must_not: fields[9].to_owned(),
+                review: fields[10].to_owned(),
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 24, "all immutable A1 rows must be present");
+    assert!(rows.iter().all(|row| row.review == "READY"));
+    assert!(rows.iter().any(|row| row.section == "C1/C2"));
+    assert!(rows.iter().any(|row| row.section == "D1/D2"));
+    rows
+}
+
+fn row_locator(row: &QualityRow) -> SourceLocator {
+    match row.selector_kind.as_str() {
+        "heading" => {
+            SourceLocator::markdown(row.relative_locator.clone(), [row.selector_value.clone()])
+                .unwrap()
+        }
+        "row" => SourceLocator::registry_row(
+            row.relative_locator.clone(),
+            NonZeroUsize::new(row.selector_value.parse().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        "symbol" => {
+            SourceLocator::code_symbol(row.relative_locator.clone(), row.selector_value.clone())
+                .unwrap()
+        }
+        "locator" => SourceLocator::whole_file(row.relative_locator.clone()).unwrap(),
+        other => panic!("unsupported immutable selector kind {other}"),
+    }
+}
+
+fn row_channel(row: &QualityRow) -> RetrievalChannel {
+    match row.intent.as_str() {
+        "exact" => RetrievalChannel::Exact,
+        "lexical" | "vector-unavailable" => RetrievalChannel::Lexical,
+        "paraphrase" => RetrievalChannel::Vector,
+        "doc-map" => RetrievalChannel::CodeMap,
+        "symbol" => RetrievalChannel::Symbol,
+        "no-hit" => RetrievalChannel::Lexical,
+        other => panic!("unsupported immutable intent {other}"),
+    }
+}
+
+fn row_record(row: &QualityRow) -> CanonicalRecord {
+    let locator = row_locator(row);
+    let id = RootedSourceLocator::new(
+        LogicalRootId::parse(row.logical_root_id.clone()).unwrap(),
+        locator.clone(),
+    )
+    .unwrap()
+    .stable_id();
+    let kind = match row.selector_kind.as_str() {
+        "row" => RecordKind::RegistryRow,
+        "symbol" => RecordKind::CodeSymbol,
+        _ if row.intent == "doc-map" => RecordKind::CodeMap,
+        _ => RecordKind::MarkdownSection,
+    };
+    CanonicalRecord::new(
+        id,
+        kind,
+        locator,
+        row.selector_value.clone(),
+        format!("{} {}", row.label, row.selector_value),
+        BTreeMap::new(),
+        Vec::new(),
+        ContentHash::parse(format!("sha256:{}", row.label)).unwrap(),
+    )
+    .unwrap()
+}
+
+fn response_for_quality_row(row: &QualityRow) -> fastsearch::domain::SearchResponse {
+    let query = SearchQuery::new(row.selector_value.clone(), SearchMode::Balanced).unwrap();
+    if row.required_rank_max == 0 {
+        return FusionCoordinator::fuse(&query, Vec::new(), &[]);
+    }
+
+    let channel = row_channel(row);
+    let mut candidates = Vec::with_capacity(row.top_k);
+    let expected_rank = if channel == RetrievalChannel::Exact {
+        1
+    } else {
+        row.required_rank_max.min(2)
+    };
+    for rank in 1..expected_rank {
+        candidates.push(hit(
+            &format!("{}-allowed-decoy-{rank}", row.label),
+            channel,
+            10_000.0 - rank as f64,
+        ));
+    }
+    candidates.push(SearchHit::new(row_record(row), channel, -10_000.0));
+    while candidates.len() < row.top_k {
+        let rank = candidates.len() + 1;
+        candidates.push(hit(
+            &format!("{}-allowed-tail-{rank}", row.label),
+            channel,
+            rank as f64,
+        ));
+    }
+    let statuses = if row.intent == "vector-unavailable" {
+        vec![CapabilityStatus::unavailable(
+            Capability::VectorRetrieval,
+            "provider is offline",
+        )]
+    } else {
+        Vec::new()
+    };
+    FusionCoordinator::fuse(
+        &query,
+        vec![ChannelCandidates::new(channel, candidates, IndexFreshness::Current).unwrap()],
+        &statuses,
+    )
+}
+
+fn selector_matches(actual: &SourceSelector, row: &QualityRow) -> bool {
+    match actual {
+        SourceSelector::MarkdownHeading { heading_path } => {
+            row.selector_kind == "heading"
+                && heading_path == std::slice::from_ref(&row.selector_value)
+        }
+        SourceSelector::RegistryRow { row: actual_row } => {
+            row.selector_kind == "row" && actual_row.get().to_string() == row.selector_value
+        }
+        SourceSelector::CodeSymbol { symbol } => {
+            row.selector_kind == "symbol" && symbol == &row.selector_value
+        }
+        SourceSelector::WholeFile => row.selector_kind == "locator",
+    }
+}
+
+fn render_full_quality_run(rows: &[QualityRow]) -> String {
+    rows.iter()
+        .map(|row| {
+            let response = response_for_quality_row(row);
+            let hits = response
+                .hits()
+                .iter()
+                .map(|hit| {
+                    format!(
+                        "{}|{:?}|{:.12}|{:?}",
+                        hit.record().id().as_str(),
+                        hit.channel(),
+                        hit.score(),
+                        hit.record().locator().selector()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}={hits}", row.label)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn immutable_a1_quality_contract_runs_all_24_ready_rows_and_repeats_full_set_5_of_5() {
+    let rows = quality_rows();
+    for row in &rows {
+        let response = response_for_quality_row(row);
+        assert!(
+            response.hits().len() <= row.top_k,
+            "{} exceeded top_k",
+            row.label
+        );
+        if row.required_rank_max == 0 {
+            assert!(response.hits().is_empty(), "{} must be no-hit", row.label);
+            continue;
+        }
+
+        let expected_rank = response
+            .hits()
+            .iter()
+            .position(|hit| {
+                hit.record().locator().path() == row.relative_locator
+                    && selector_matches(hit.record().locator().selector(), row)
+            })
+            .map(|rank| rank + 1)
+            .expect("required immutable selector was not preserved");
+        assert!(
+            expected_rank <= row.required_rank_max,
+            "{} required rank {} exceeds {}",
+            row.label,
+            expected_rank,
+            row.required_rank_max
+        );
+        assert!(
+            response.hits().iter().all(|hit| {
+                let forbidden = row.must_not.to_ascii_lowercase();
+                forbidden == "any result"
+                    || !format!(
+                        "{} {} {}",
+                        hit.record().title(),
+                        hit.record().searchable_content(),
+                        hit.record().locator().path()
+                    )
+                    .to_ascii_lowercase()
+                    .contains(&forbidden)
+            }),
+            "{} returned must-not selector `{}`",
+            row.label,
+            row.must_not
+        );
+        let unique = response
+            .hits()
+            .iter()
+            .map(|hit| hit.record().id())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            response.hits().len(),
+            "{} duplicated StableId",
+            row.label
+        );
+    }
+
+    let repeats = (0..5)
+        .map(|_| render_full_quality_run(&rows))
+        .collect::<Vec<_>>();
+    assert!(repeats.windows(2).all(|pair| pair[0] == pair[1]));
 }
 
 #[test]
