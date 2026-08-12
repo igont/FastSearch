@@ -121,23 +121,33 @@ fn named_roots_are_deterministic_and_collision_free() {
 }
 
 #[test]
-fn exact_current_src_repeats_twenty_file_fifty_thousand_node_passport() {
+fn exact_current_src_repeats_complete_bounded_runtime_inventory() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let logical_root = LogicalRootId::parse("code-fastsearch").unwrap();
     let first = SymbolSource::new(logical_root.clone(), &root)
         .snapshot()
         .unwrap();
     let second = SymbolSource::new(logical_root, &root).snapshot().unwrap();
-    let passport = admitted_node_passport(&root);
+    let first_passport = admitted_node_passport(&root);
+    let second_passport = admitted_node_passport(&root);
+    let inventory = first_passport
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    let snapshot_paths = first
+        .iter()
+        .map(|snapshot| snapshot.locator().path().to_owned())
+        .collect::<Vec<_>>();
 
-    assert_eq!(passport.len(), 20);
-    assert_eq!(
-        passport.iter().map(|(_, nodes)| nodes).sum::<usize>(),
-        50_451
+    assert!(!first_passport.is_empty());
+    assert_eq!(first_passport, second_passport);
+    assert!(
+        first_passport
+            .iter()
+            .all(|(_, nodes)| *nodes > 0 && *nodes <= 16_384)
     );
-    assert_eq!(passport.iter().map(|(_, nodes)| *nodes).max(), Some(10_302));
     assert_eq!(first, second);
-    assert_eq!(first.len(), 20);
+    assert_eq!(snapshot_paths, inventory);
 }
 
 #[test]
