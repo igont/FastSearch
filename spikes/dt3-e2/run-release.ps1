@@ -47,8 +47,18 @@ function Invoke-Measured {
     $stdout = Join-Path $resolvedWork ($Label + '.stdout.txt')
     $stderr = Join-Path $resolvedWork ($Label + '.stderr.txt')
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $resolvedBinary -ArgumentList $Arguments -PassThru -NoNewWindow `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $resolvedBinary
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    [void]$process.Start()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
     $peak = 0L
     while (-not $process.HasExited) {
         $process.Refresh()
@@ -56,17 +66,29 @@ function Invoke-Measured {
         Start-Sleep -Milliseconds 25
     }
     $process.WaitForExit()
+    $stdoutText = $stdoutTask.GetAwaiter().GetResult()
+    $stderrText = $stderrTask.GetAwaiter().GetResult()
+    [System.IO.File]::WriteAllText($stdout, $stdoutText, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($stderr, $stderrText, [System.Text.UTF8Encoding]::new($false))
     $process.Refresh()
     if ($process.PeakWorkingSet64 -gt $peak) { $peak = $process.PeakWorkingSet64 }
     $watch.Stop()
-    if ((Get-Item -LiteralPath $stderr).Length -ne 0 -or (Get-Item -LiteralPath $stdout).Length -eq 0) {
-        throw "$Label failed: $([System.IO.File]::ReadAllText($stderr))"
+    if ($process.ExitCode -ne 0 -or $stderrText.Length -ne 0 -or $stdoutText.Length -eq 0) {
+        throw "$Label failed with exit $($process.ExitCode): $stderrText"
+    }
+    if ($Label -like 'cold-*' -or $Label -like 'vector-cold-*') {
+        if ($stdoutText -notmatch 'freshness=Current' -or $stdoutText -notmatch 'CodeMaps=Real' -or $stdoutText -notmatch 'Symbols=Real') {
+            throw "$Label semantic status assertion failed"
+        }
+    } else {
+        if ($stdoutText -notmatch 'hits=[1-9]') { throw "$Label semantic search assertion failed" }
     }
     [pscustomobject][ordered]@{
         label = $Label
         milliseconds = [math]::Round($watch.Elapsed.TotalMilliseconds, 3)
         peak_working_set_bytes = $peak
         output_sha256 = (Get-FileHash -LiteralPath $stdout -Algorithm SHA256).Hash.ToLowerInvariant()
+        exit_code = $process.ExitCode
     }
 }
 
@@ -121,6 +143,11 @@ $vectorPeak = if ($vector.Count -eq 0) { 0 } else {
 $result = [ordered]@{
     schema = 'dt3-e2-release-v1'
     run_id = $runId
+    candidate_revision = (git -C (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) rev-parse HEAD).Trim()
+    binary_sha256 = (Get-FileHash -LiteralPath $resolvedBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    rustc = (rustc --version).Trim()
+    cargo = (cargo --version).Trim()
+    command = 'spikes/dt3-e2/run-release.ps1 release 5 cold + 5 warm + optional E5 5 cold + 5 warm'
     cold = $cold
     warm = $warm
     vector = $vector

@@ -6,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 use crate::{
     adapters::{
         lexical::TantivyLexical,
@@ -84,8 +87,10 @@ impl ProductionRuntime {
     pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
         let document_root = canonical_directory(&config.document_root, "document root")?;
         let code_root = canonical_directory(&config.code_root, "code root")?;
+        validate_service_path_before_write(&document_root, &code_root, &config.service_root)?;
         fs::create_dir_all(&config.service_root)
             .map_err(|error| failure(ErrorKind::StateFailure, "create service root", error))?;
+        ensure_no_reparse_points(&config.service_root)?;
         let service_root = canonical_directory(&config.service_root, "service root")?;
         validate_service_containment(&document_root, &code_root, &service_root)?;
         let vector_configured = config.e5_root.is_some();
@@ -121,6 +126,8 @@ impl ProductionRuntime {
             .map_err(|error| failure(ErrorKind::StateFailure, "create run directory", error))?;
         fs::write(run.join("owner.marker"), marker.as_bytes())
             .map_err(|error| failure(ErrorKind::StateFailure, "write run marker", error))?;
+        fs::write(run.join("schema.marker"), b"fastsearch-run-v1")
+            .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))?;
         Ok(run)
     }
 
@@ -140,9 +147,38 @@ impl ProductionRuntime {
                 "run cleanup marker does not match the exact requested owner",
             ));
         }
-        fs::remove_dir_all(&run).map_err(|error| {
-            failure(ErrorKind::StateFailure, "remove exact run directory", error)
-        })?;
+        ensure_no_reparse_points(&run)?;
+        let schema_path = run.join("schema.marker");
+        if fs::read_to_string(&schema_path)
+            .map_err(|error| failure(ErrorKind::StateFailure, "read run schema", error))?
+            != "fastsearch-run-v1"
+        {
+            return Err(FastSearchError::new(
+                ErrorKind::StateFailure,
+                "run cleanup schema does not match fastsearch-run-v1",
+            ));
+        }
+        let entries = fs::read_dir(&run)
+            .map_err(|error| failure(ErrorKind::StateFailure, "read exact run directory", error))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| failure(ErrorKind::StateFailure, "read exact run entry", error))?;
+        if entries.iter().any(|entry| {
+            !matches!(
+                entry.file_name().to_str(),
+                Some("owner.marker" | "schema.marker")
+            )
+        }) {
+            return Err(FastSearchError::new(
+                ErrorKind::StateFailure,
+                "run cleanup refuses unknown files or directories",
+            ));
+        }
+        fs::remove_file(&marker_path)
+            .map_err(|error| failure(ErrorKind::StateFailure, "remove owner marker", error))?;
+        fs::remove_file(&schema_path)
+            .map_err(|error| failure(ErrorKind::StateFailure, "remove schema marker", error))?;
+        fs::remove_dir(&run)
+            .map_err(|error| failure(ErrorKind::StateFailure, "remove empty exact run", error))?;
         Ok(true)
     }
 
@@ -343,14 +379,119 @@ fn validate_service_containment(
         || service.starts_with(code)
         || documents.starts_with(service)
         || code.starts_with(service);
-    let reserved = service
-        .components()
-        .any(|component| component.as_os_str() == ".cfknowledge");
-    if overlaps && !reserved {
+    let allowed = service
+        .strip_prefix(documents)
+        .ok()
+        .is_some_and(is_exact_reserved_descendant)
+        || service
+            .strip_prefix(code)
+            .ok()
+            .is_some_and(is_exact_reserved_descendant);
+    if overlaps && !allowed {
         return Err(FastSearchError::new(
             ErrorKind::InvalidContent,
             "service root may overlap a source root only inside the reserved .cfknowledge zone",
         ));
+    }
+    Ok(())
+}
+
+fn validate_service_path_before_write(
+    documents: &Path,
+    code: &Path,
+    requested: &Path,
+) -> Result<(), FastSearchError> {
+    let requested = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))?
+            .join(requested)
+    };
+    let requested = canonicalize_existing_ancestor(&requested)?;
+    ensure_no_reparse_points(&requested)?;
+    let overlaps = requested.starts_with(documents)
+        || requested.starts_with(code)
+        || documents.starts_with(&requested)
+        || code.starts_with(&requested);
+    let allowed = requested
+        .strip_prefix(documents)
+        .ok()
+        .is_some_and(is_exact_reserved_descendant)
+        || requested
+            .strip_prefix(code)
+            .ok()
+            .is_some_and(is_exact_reserved_descendant);
+    if overlaps && !allowed {
+        return Err(FastSearchError::new(
+            ErrorKind::InvalidContent,
+            "service root must be isolated or exactly <source>/.cfknowledge/<run>",
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_existing_ancestor(path: &Path) -> Result<PathBuf, FastSearchError> {
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    while !ancestor.exists() {
+        let name = ancestor.file_name().ok_or_else(|| {
+            FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "service root has no existing ancestor",
+            )
+        })?;
+        missing.push(name.to_os_string());
+        ancestor = ancestor.parent().ok_or_else(|| {
+            FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "service root has no existing ancestor",
+            )
+        })?;
+    }
+    let mut resolved = ancestor.canonicalize().map_err(|error| {
+        failure(
+            ErrorKind::SourceFailure,
+            "canonicalize service ancestor",
+            error,
+        )
+    })?;
+    for name in missing.into_iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
+}
+
+fn is_exact_reserved_descendant(relative: &Path) -> bool {
+    let parts = relative.components().collect::<Vec<_>>();
+    parts.len() == 2
+        && parts[0].as_os_str() == ".cfknowledge"
+        && matches!(parts[1], std::path::Component::Normal(_))
+}
+
+fn ensure_no_reparse_points(path: &Path) -> Result<(), FastSearchError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if !current.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| failure(ErrorKind::SourceFailure, "inspect service path", error))?;
+        #[cfg(windows)]
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "service root path contains a reparse point",
+            ));
+        }
+        #[cfg(not(windows))]
+        if metadata.file_type().is_symlink() {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "service root path contains a symbolic link",
+            ));
+        }
     }
     Ok(())
 }

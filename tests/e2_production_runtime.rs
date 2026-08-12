@@ -2,6 +2,7 @@ use std::{
     fs,
     path::PathBuf,
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,13 +18,19 @@ use fastsearch::{
 
 struct Temp(PathBuf);
 
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 impl Temp {
     fn new() -> Self {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("fastsearch-e2-{suffix}"));
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "fastsearch-e2-{}-{suffix}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -119,7 +126,6 @@ fn one_production_composition_indexes_reopens_fuses_and_resolves_map_to_symbol()
     assert_eq!(fused.freshness(), IndexFreshness::Stale);
 
     let exact_run = runtime.record_run_marker("E2-run-001").unwrap();
-    fs::write(exact_run.join("owned.tmp"), "owned").unwrap();
     assert!(!runtime.cleanup_run("E2-run-002").unwrap());
     assert!(exact_run.exists());
     assert!(runtime.cleanup_run("E2-run-001").unwrap());
@@ -207,13 +213,47 @@ fn production_configuration_rejects_overlapping_service_and_source_roots() {
     let code = temp.child("code");
     fs::create_dir_all(&documents).unwrap();
     fs::create_dir_all(&code).unwrap();
-    let error = ProductionRuntime::open(ProductionConfig::new(
-        &documents,
-        &code,
-        documents.join("unsafe-service"),
-    ))
-    .expect_err("service containment must fail closed");
+    let unsafe_service = documents.join("unsafe-service");
+    let error = ProductionRuntime::open(ProductionConfig::new(&documents, &code, &unsafe_service))
+        .expect_err("service containment must fail closed");
     assert!(error.to_string().contains("service root"));
+    assert!(!unsafe_service.exists(), "reject must happen before write");
+
+    let allowed = documents.join(".cfknowledge").join("E2-allowed");
+    let runtime = ProductionRuntime::open(ProductionConfig::new(&documents, &code, &allowed));
+    assert!(runtime.is_ok());
+
+    let isolated = temp.child("isolated-service");
+    assert!(ProductionRuntime::open(ProductionConfig::new(&documents, &code, &isolated)).is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn service_junction_is_rejected_before_external_state_write() {
+    let temp = Temp::new();
+    let documents = temp.child("documents");
+    let code = temp.child("code");
+    let external = temp.child("external");
+    fs::create_dir_all(documents.join(".cfknowledge")).unwrap();
+    fs::create_dir_all(&code).unwrap();
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("sentinel.txt"), "unchanged").unwrap();
+    let junction = documents.join(".cfknowledge").join("E2-junction");
+    let output = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&external)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let error = ProductionRuntime::open(ProductionConfig::new(&documents, &code, &junction))
+        .expect_err("junction service must fail closed");
+    assert!(error.to_string().contains("reparse point"));
+    assert!(!external.join("state.sqlite").exists());
+    assert_eq!(
+        fs::read_to_string(external.join("sentinel.txt")).unwrap(),
+        "unchanged"
+    );
 }
 
 #[test]
@@ -302,4 +342,120 @@ fn parameterized_cli_reopens_in_separate_process_and_has_no_alternate_provider_r
     assert!(!help_text.contains("mock"));
     assert!(!help_text.contains("provider"));
     assert!(!help_text.contains("test-fail"));
+}
+
+#[test]
+fn copied_document_only_service_never_exposes_wrong_get_before_production_rebuild() {
+    let temp = Temp::new();
+    let documents = temp.child("legacy-documents");
+    let code = temp.child("production-code");
+    let service = temp.child("copied-legacy-service");
+    fs::create_dir_all(&documents).unwrap();
+    fs::create_dir_all(&code).unwrap();
+    fs::write(
+        documents.join("legacy.md"),
+        "# Legacy\n\nold state identity",
+    )
+    .unwrap();
+    fs::create_dir_all(&service).unwrap();
+    let connection = rusqlite::Connection::open(service.join("state.sqlite")).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE state_records (id TEXT PRIMARY KEY, kind INTEGER NOT NULL, locator_path TEXT NOT NULL, selector_kind INTEGER NOT NULL, title TEXT NOT NULL, searchable_content TEXT NOT NULL, content_hash TEXT NOT NULL);
+         INSERT INTO state_records VALUES ('legacy-id', 1, 'legacy.md', 4, 'legacy', 'legacy', 'sha256:legacy');",
+    ).unwrap();
+    drop(connection);
+    let legacy_id = fastsearch::domain::StableId::parse("legacy-id").unwrap();
+
+    let mut production =
+        ProductionRuntime::open(ProductionConfig::new(&documents, &code, &service)).unwrap();
+    assert_ne!(
+        production.index_status().freshness(),
+        IndexFreshness::Current
+    );
+    assert!(
+        production.get(&legacy_id).unwrap().is_none(),
+        "legacy identity must not leak wrong get"
+    );
+    production.rebuild().unwrap();
+    assert_eq!(
+        production.index_status().freshness(),
+        IndexFreshness::Current
+    );
+    assert!(production.get(&legacy_id).unwrap().is_none());
+    let current_id = FilesystemSource::new(&documents)
+        .records()
+        .unwrap()
+        .remove(0)
+        .id()
+        .clone();
+    assert!(production.get(&current_id).unwrap().is_some());
+}
+
+#[test]
+#[ignore = "requires FASTSEARCH_E5_MODEL_ROOT accepted complete local cache"]
+fn configured_provider_failure_preserves_authority_then_recovers_without_false_hits() {
+    let temp = Temp::new();
+    let documents = temp.child("provider-documents");
+    let code = temp.child("provider-code");
+    let service = temp.child("provider-service");
+    fs::create_dir_all(&documents).unwrap();
+    fs::create_dir_all(&code).unwrap();
+    fs::write(
+        documents.join("provider.md"),
+        "# Provider\n\nsemantic recovery",
+    )
+    .unwrap();
+    let id = FilesystemSource::new(&documents)
+        .records()
+        .unwrap()
+        .remove(0)
+        .id()
+        .clone();
+    let model = PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap());
+    let mut runtime = ProductionRuntime::open(
+        ProductionConfig::new(&documents, &code, &service).with_e5_root(&model),
+    )
+    .unwrap();
+    runtime.rebuild().unwrap();
+    assert!(matches!(
+        runtime
+            .status()
+            .into_iter()
+            .find(|s| s.capability() == Capability::VectorRetrieval)
+            .unwrap()
+            .state(),
+        CapabilityState::Available { .. }
+    ));
+    let mutation = model.join("e2-provider-mutation.tmp");
+    fs::write(&mutation, "mutation").unwrap();
+    let response = runtime
+        .search(&SearchQuery::new("semantic recovery", SearchMode::Balanced).unwrap())
+        .unwrap();
+    assert!(
+        runtime.get(&id).unwrap().is_some(),
+        "authority survives derived provider failure"
+    );
+    assert!(
+        response
+            .hits()
+            .iter()
+            .all(|hit| hit.channel() != fastsearch::domain::RetrievalChannel::Vector)
+    );
+    assert_ne!(response.freshness(), IndexFreshness::Current);
+    fs::remove_file(&mutation).unwrap();
+    drop(runtime);
+    let mut recovered = ProductionRuntime::open(
+        ProductionConfig::new(&documents, &code, &service).with_e5_root(&model),
+    )
+    .unwrap();
+    recovered.rebuild().unwrap();
+    assert!(matches!(
+        recovered
+            .status()
+            .into_iter()
+            .find(|s| s.capability() == Capability::VectorRetrieval)
+            .unwrap()
+            .state(),
+        CapabilityState::Available { .. }
+    ));
 }
