@@ -67,6 +67,17 @@ where
             .collect::<Vec<_>>();
         // A successful full source scan has exactly one state authority transition.
         let changes = self.state.reconcile_snapshots(&snapshots)?;
+        let lexical_status = self.lexical.lifecycle_status();
+        let projection_is_already_current = lexical_status.freshness() == IndexFreshness::Current
+            && lexical_status.projection_generation() == Some(changes.durable_generation());
+        let source_set_is_unchanged = changes
+            .changes()
+            .iter()
+            .all(|change| *change == StateChange::Unchanged);
+        if !rebuild && source_set_is_unchanged && projection_is_already_current {
+            self.projection_failure = None;
+            return Ok(lexical_status);
+        }
         let projection = if rebuild {
             self.lexical.rebuild(&records, changes.durable_generation())
         } else {
@@ -211,7 +222,7 @@ impl AgentSurface for RealRuntime {
         self.coordinator.status()
     }
 }
-use crate::ports::{AgentSurface, LexicalRetrieval, SourcePort, StateStore};
+use crate::ports::{AgentSurface, LexicalRetrieval, SourcePort, StateChange, StateStore};
 
 #[cfg(test)]
 mod real_runtime_recovery_tests {

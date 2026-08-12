@@ -1,10 +1,12 @@
 //! Filesystem boundary for read-only document sources.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
+use ignore::WalkBuilder;
 use sha2::{Digest, Sha256};
 
 use crate::domain::{
@@ -17,6 +19,7 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
     ".agents",
     ".cfknowledge",
     ".git",
+    ".obsidian",
     "build",
     "generated",
     "service",
@@ -50,9 +53,45 @@ fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
         ));
     }
 
-    let exclusions = RootExclusions::read(&root)?;
     let mut sources = Vec::new();
-    scan_directory(&root, &root, &exclusions, &mut sources)?;
+    let mut builder = WalkBuilder::new(&root);
+    builder
+        .hidden(false)
+        .parents(false)
+        .ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .git_ignore(true)
+        .require_git(false)
+        .follow_links(false);
+    for entry in builder
+        .filter_entry(|entry| {
+            !entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_dir())
+                || !EXCLUDED_DIRECTORIES
+                    .iter()
+                    .any(|excluded| entry.file_name() == OsStr::new(excluded))
+        })
+        .build()
+    {
+        let entry = entry.map_err(|error| {
+            FastSearchError::new(
+                ErrorKind::SourceFailure,
+                format!("walk source tree: {error}"),
+            )
+        })?;
+        if entry.depth() == 0
+            || !entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_file())
+        {
+            continue;
+        }
+        if let Some(kind) = source_kind(entry.path()) {
+            sources.push(read_source(&root, entry.into_path(), kind)?);
+        }
+    }
     sources.sort_by(|left, right| left.locator.cmp(&right.locator));
     Ok(sources)
 }
@@ -120,53 +159,19 @@ fn collect_snapshots(
     scan_sources(root)?
         .iter()
         .filter(|source| kind.is_none_or(|expected| source.kind == expected))
-        .map(|source| match source.kind {
-            ScannedSourceKind::Markdown => parse_markdown_source(source),
-            ScannedSourceKind::Tsv => parse_tsv_source(source),
+        .map(|source| {
+            let parsed = match source.kind {
+                ScannedSourceKind::Markdown => parse_markdown_source(source),
+                ScannedSourceKind::Tsv => parse_tsv_source(source),
+            };
+            parsed.map_err(|error| {
+                FastSearchError::new(
+                    error.kind().clone(),
+                    format!("{}: {}", source.locator, error.message()),
+                )
+            })
         })
         .collect()
-}
-
-fn scan_directory(
-    root: &Path,
-    directory: &Path,
-    exclusions: &RootExclusions,
-    sources: &mut Vec<ScannedSource>,
-) -> Result<(), FastSearchError> {
-    let entries =
-        fs::read_dir(directory).map_err(|error| source_failure("read source directory", error))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| source_failure("read source directory entry", error))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| source_failure("read source entry type", error))?;
-        if file_type.is_symlink() {
-            continue;
-        }
-
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_str().ok_or_else(|| {
-            FastSearchError::new(ErrorKind::SourceFailure, "source entry name is not UTF-8")
-        })?;
-        if file_type.is_dir() {
-            if EXCLUDED_DIRECTORIES.contains(&name)
-                || exclusions
-                    .directories
-                    .iter()
-                    .any(|excluded| excluded == name)
-            {
-                continue;
-            }
-            scan_directory(root, &path, exclusions, sources)?;
-        } else if file_type.is_file()
-            && !exclusions.files.iter().any(|excluded| excluded == name)
-            && let Some(kind) = source_kind(&path)
-        {
-            sources.push(read_source(root, path, kind)?);
-        }
-    }
-    Ok(())
 }
 
 fn read_source(
@@ -485,7 +490,7 @@ fn parse_frontmatter(document: &str) -> Result<MarkdownFrontmatter, FastSearchEr
         })?;
         let key = key.trim();
         let value = value.trim();
-        if key.is_empty() || value.is_empty() || !is_plain_scalar(value) {
+        if key.is_empty() || value.is_empty() || !is_supported_frontmatter_value(value) {
             return Err(FastSearchError::new(
                 ErrorKind::SourceFailure,
                 "frontmatter requires non-empty UTF-8 scalar key: value entries",
@@ -525,8 +530,14 @@ fn parse_frontmatter(document: &str) -> Result<MarkdownFrontmatter, FastSearchEr
     })
 }
 
-fn is_plain_scalar(value: &str) -> bool {
-    !value.starts_with(['[', '{', '|', '>'])
+fn is_supported_frontmatter_value(value: &str) -> bool {
+    match value.as_bytes().first() {
+        Some(b'|') | Some(b'>') => false,
+        Some(b'[') => value.ends_with(']'),
+        Some(b'{') => value.ends_with('}'),
+        Some(_) => true,
+        None => false,
+    }
 }
 
 fn markdown_heading(line: &str) -> Result<Option<(usize, String)>, FastSearchError> {
@@ -622,54 +633,6 @@ fn source_contract_failure(message: &str) -> FastSearchError {
     FastSearchError::new(ErrorKind::SourceFailure, message)
 }
 
-#[derive(Default)]
-struct RootExclusions {
-    files: Vec<String>,
-    directories: Vec<String>,
-}
-
-impl RootExclusions {
-    fn read(root: &Path) -> Result<Self, FastSearchError> {
-        let path = root.join(".gitignore");
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let content = fs::read_to_string(path)
-            .map_err(|error| source_failure("read root .gitignore", error))?;
-        let mut exclusions = Self::default();
-        for line in content
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        {
-            let (literal, is_directory) = parse_root_gitignore_literal(line)?;
-            if is_directory {
-                exclusions.directories.push(literal);
-            } else {
-                exclusions.files.push(literal);
-            }
-        }
-        Ok(exclusions)
-    }
-}
-
-fn parse_root_gitignore_literal(line: &str) -> Result<(String, bool), FastSearchError> {
-    let line = line.strip_prefix('/').unwrap_or(line);
-    let is_directory = line.ends_with('/');
-    let literal = line.trim_end_matches('/');
-    let unsupported = literal.is_empty()
-        || literal.contains(['/', '\\', '*', '?', '[', ']', '!'])
-        || literal == "."
-        || literal == "..";
-    if unsupported {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            format!("unsupported root .gitignore rule: {line}"),
-        ));
-    }
-    Ok((literal.to_owned(), is_directory))
-}
-
 fn source_failure(context: &str, error: std::io::Error) -> FastSearchError {
     FastSearchError::new(ErrorKind::SourceFailure, format!("{context}: {error}"))
 }
@@ -696,6 +659,8 @@ mod tests {
         fixture.write("ignored.md", "ignored");
         fixture.write("ignored-dir/hidden.tsv", "hidden");
         fixture.write("target/build.md", "generated");
+        fixture.write(".cfknowledge/derived.md", "derived state");
+        fixture.write(".obsidian/config.md", "editor configuration");
         fixture.write("notes.txt", "unsupported");
         fixture.write(".gitignore", "ignored.md\nignored-dir/\n");
 
@@ -748,16 +713,21 @@ mod tests {
     }
 
     #[test]
-    fn scanner_rejects_unsupported_root_gitignore_rule() {
+    fn scanner_supports_gitignore_globs_negation_and_nested_paths() {
         let fixture = Fixture::new();
-        fixture.write("allowed.md", "valid");
-        fixture.write(".gitignore", "*.md\n");
+        fixture.write("drop.md", "ignored by glob");
+        fixture.write("keep.md", "restored by negation");
+        fixture.write("nested/drop.tsv", "ignored nested path");
+        fixture.write("registry.tsv", "id\ttitle\n2433\tkept");
+        fixture.write(".gitignore", "*.md\n!keep.md\nnested/**\n");
 
-        let error = scan_sources(fixture.path())
-            .expect_err("glob rule must not be misrepresented as supported");
+        let scanned = scan_sources(fixture.path()).expect("standard gitignore rules must work");
+        let locators = scanned
+            .iter()
+            .map(|source| source.locator.as_str())
+            .collect::<Vec<_>>();
 
-        assert_eq!(error.kind(), &ErrorKind::SourceFailure);
-        assert!(error.message().contains("unsupported root .gitignore rule"));
+        assert_eq!(locators, ["keep.md", "registry.tsv"]);
     }
 
     #[test]
@@ -784,7 +754,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "docs/guide.md",
-            "\u{feff}---\r\nalignment: CURRENT\r\nrelations: TDR-17, TDR-42\r\n# comment\r\nowner: Search team\r\n---\r\n\r\n# Руководство \r\nОбщий текст, не входящий в дочерние разделы.\r\n\r\n## Текущий поиск\r\n  русская фраза  \r\n\r\n### Детали\r\nТолько детали.\r\n\r\n## Пустой\r\n",
+            "\u{feff}---\r\nalignment: CURRENT\r\nrelations: TDR-17, TDR-42\r\ntdr_refs: [TDR-17, TDR-42]\r\n# comment\r\nowner: Search team\r\n---\r\n\r\n# Руководство \r\nОбщий текст, не входящий в дочерние разделы.\r\n\r\n## Текущий поиск\r\n  русская фраза  \r\n\r\n### Детали\r\nТолько детали.\r\n\r\n## Пустой\r\n",
         );
         let snapshot = markdown_snapshots(fixture.path())
             .expect("Markdown fixture must parse")
@@ -794,7 +764,7 @@ mod tests {
         assert_eq!(snapshot.locator().path(), "docs/guide.md");
         assert_eq!(
             snapshot.file_hash().as_str(),
-            "sha256:v1:049137aac37fc6c181cf7578aae0edd86febfbf709551bae0478d72ded30ce5b"
+            "sha256:v1:bdcc47be2c980e49e83cccb883eff460c897cd609a431e64a5e2b53104aa68b4"
         );
         assert_eq!(
             snapshot.records().len(),
@@ -826,6 +796,10 @@ mod tests {
             Some("Search team")
         );
         assert_eq!(
+            current.metadata().get("tdr_refs").map(String::as_str),
+            Some("[TDR-17, TDR-42]")
+        );
+        assert_eq!(
             current
                 .relations()
                 .iter()
@@ -835,7 +809,7 @@ mod tests {
         );
         assert_eq!(
             current.content_hash().as_str(),
-            "sha256:v1:2cfb1043a39b4505f3ea19fec06303d418d97ecd24dcadfe151949bbe56a6175"
+            "sha256:v1:8b738824dd3ea8368d6b4c59a797322d393145830d95262512149f29324bd153"
         );
         assert_eq!(
             current.locator().selector(),
@@ -852,7 +826,7 @@ mod tests {
         assert_eq!(details.searchable_content(), "Только детали.");
         assert_eq!(
             details.content_hash().as_str(),
-            "sha256:v1:5fde02ced3c5d848eb99d67ba424a2c3a59a43b83fa71a8ab7190c3ad274de60"
+            "sha256:v1:b62d58c21bf327c9786dd14461e558264182023cb8b810dcf616d47f80085c9b"
         );
     }
 
@@ -870,8 +844,8 @@ mod tests {
                 "malformed Markdown frontmatter entry",
             ),
             (
-                "non-scalar.md",
-                "---\ntags: [a, b]\n---\n# Broken\ntext",
+                "block-scalar.md",
+                "---\nnotes: |\n  multiline\n---\n# Broken\ntext",
                 "scalar key: value",
             ),
             (
@@ -889,6 +863,10 @@ mod tests {
 
             assert_eq!(error.kind(), &ErrorKind::SourceFailure);
             assert!(error.message().contains(expected_message));
+            assert!(
+                error.message().contains(name),
+                "source diagnostics must identify the failing relative path"
+            );
         }
     }
 

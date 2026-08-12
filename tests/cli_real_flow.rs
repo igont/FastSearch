@@ -151,6 +151,64 @@ fn real_cli_lifecycle_modes_get_and_cross_process_failure_recovery_are_observabl
 }
 
 #[test]
+fn real_cli_accepts_an_arbitrary_source_root_with_service_state_inside_its_reserved_zone() {
+    let temporary = TemporaryDirectory::new();
+    let source = temporary.child("replaceable-target-root");
+    let service = source.join(".cfknowledge");
+    fs::create_dir_all(&service).expect("reserved service zone");
+    fs::write(
+        source.join("guide.md"),
+        "---\ntdr_refs: [TDR-1, TDR-2]\n---\n# Target document\n\ntargetdoc",
+    )
+    .expect("source fixture");
+    fs::write(
+        service.join("must-not-be-indexed.md"),
+        "# Derived sentinel\n\nderivedsentinel",
+    )
+    .expect("derived sentinel");
+
+    let source = source.to_string_lossy().into_owned();
+    let service = service.to_string_lossy().into_owned();
+    let rebuild = run(&args(&["index", "rebuild", &source, &service]));
+    assert!(
+        rebuild.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild.stderr)
+    );
+    assert!(String::from_utf8_lossy(&rebuild.stdout).contains("freshness=Current"));
+    let marker_path = std::path::Path::new(&service)
+        .join("lexical")
+        .join("projection.marker");
+    let marker_before = fs::read(&marker_path).expect("current projection marker");
+
+    let unchanged_update = run(&args(&["index", "update", &source, &service]));
+    assert!(unchanged_update.status.success());
+    let marker_after = fs::read(&marker_path).expect("unchanged projection marker");
+    assert_eq!(
+        marker_after, marker_before,
+        "an unchanged source set must not rebuild the current lexical projection"
+    );
+
+    let source_hit = run(&args(&[
+        "search",
+        &source,
+        &service,
+        "balanced",
+        "targetdoc",
+    ]));
+    assert!(String::from_utf8_lossy(&source_hit.stdout).contains("hits=1"));
+
+    let derived_miss = run(&args(&[
+        "search",
+        &source,
+        &service,
+        "balanced",
+        "derivedsentinel",
+    ]));
+    assert!(String::from_utf8_lossy(&derived_miss.stdout).contains("hits=0"));
+}
+
+#[test]
 fn fault_flag_is_literal_final_update_only_and_absent_from_normal_help() {
     let help = run(&args(&[]));
     assert_eq!(help.status.code(), Some(2));
