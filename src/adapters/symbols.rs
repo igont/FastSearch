@@ -48,12 +48,10 @@ impl SymbolSource {
 
     fn parse_file(&self, root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearchError> {
         let locator = normalized_relative(root, path)?;
+        ensure_bounded_file(path)?;
         let bytes = fs::read(path).map_err(|e| source_failure("read code file", e))?;
         let text = std::str::from_utf8(&bytes).map_err(|_| invalid("code file must be UTF-8"))?;
         let (language_name, language, query_text) = language_for(path)?;
-        if bytes.len() > MAX_SOURCE_BYTES as usize {
-            return Err(invalid("code file exceeds configured size limit"));
-        }
         let mut parser = Parser::new();
         parser
             .set_language(&language)
@@ -202,9 +200,10 @@ fn collect_files(
         let path = entry.path();
         if ty.is_dir() {
             collect_files(root, &path, depth + 1, files)?;
-        } else if ty.is_file()
-            && matches!(path.extension().and_then(|e| e.to_str()), Some("rs" | "py"))
-        {
+        } else if ty.is_file() {
+            if !matches!(path.extension().and_then(|e| e.to_str()), Some("rs" | "py")) {
+                return Err(invalid("unsupported code language"));
+            }
             let canonical = path
                 .canonicalize()
                 .map_err(|e| source_failure("canonicalize code file", e))?;
@@ -216,6 +215,15 @@ fn collect_files(
             }
             files.push(canonical);
         }
+    }
+    Ok(())
+}
+fn ensure_bounded_file(path: &Path) -> Result<(), FastSearchError> {
+    let length = fs::metadata(path)
+        .map_err(|e| source_failure("read code file metadata", e))?
+        .len();
+    if length > MAX_SOURCE_BYTES {
+        return Err(invalid("code file exceeds configured size limit"));
     }
     Ok(())
 }

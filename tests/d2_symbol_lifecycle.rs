@@ -2,7 +2,7 @@ use fastsearch::{
     adapters::{state::SqliteStateStore, symbols::SymbolSource},
     domain::SearchMode,
     domain::SearchQuery,
-    domain::{ErrorKind, LogicalRootId},
+    domain::{ErrorKind, LogicalRootId, StableId},
     ports::{SourcePort, StateChange, StateStore, SymbolPort},
 };
 use std::{
@@ -59,7 +59,9 @@ fn symbols_search_and_state_lifecycle_cover_rename_delete_reopen_and_rebuild() {
     let f = Fixture::new();
     f.write("src/nav.rs", "pub fn rebuild_index() {}\n");
     let s = source(&f, "code-fastsearch");
-    let mut state = SqliteStateStore::open(f.0.join("state.sqlite")).unwrap();
+    let old_id = s.records().unwrap()[0].id().clone();
+    let state_path = f.0.with_extension("state.sqlite");
+    let mut state = SqliteStateStore::open(&state_path).unwrap();
     assert_eq!(
         state
             .reconcile_snapshots(&s.snapshot().unwrap())
@@ -87,22 +89,13 @@ fn symbols_search_and_state_lifecycle_cover_rename_delete_reopen_and_rebuild() {
         &[StateChange::Deleted]
     );
     drop(state);
-    let reopened = SqliteStateStore::open(f.0.join("state.sqlite")).unwrap();
-    assert!(
-        reopened
-            .get(
-                &s.records()
-                    .unwrap_or_default()
-                    .first()
-                    .map(|r| r.id().clone())
-                    .unwrap_or_else(|| fastsearch::domain::StableId::parse("none").unwrap())
-            )
-            .unwrap()
-            .is_none()
-    );
+    let reopened = SqliteStateStore::open(&state_path).unwrap();
+    assert!(reopened.get(&old_id).unwrap().is_none());
+    drop(reopened);
+    fs::remove_file(state_path).unwrap();
 }
 #[test]
-fn parse_failure_or_unsupported_file_returns_no_partial_snapshot() {
+fn parse_failure_unsupported_or_oversized_file_returns_no_partial_snapshot() {
     let f = Fixture::new();
     f.write("ok.rs", "fn ok() {}\n");
     f.write("bad.py", "def broken(\n");
@@ -111,6 +104,32 @@ fn parse_failure_or_unsupported_file_returns_no_partial_snapshot() {
         &ErrorKind::InvalidContent
     );
     fs::remove_file(f.0.join("bad.py")).unwrap();
-    f.write("ignored.txt", "fn fabricated() {}");
-    assert_eq!(source(&f, "code").records().unwrap().len(), 1);
+    f.write("unsupported.txt", "fn fabricated() {}");
+    assert_eq!(
+        source(&f, "code").snapshot().unwrap_err().kind(),
+        &ErrorKind::InvalidContent
+    );
+    fs::remove_file(f.0.join("unsupported.txt")).unwrap();
+    f.write("big.rs", &format!("// {}", "x".repeat(64 * 1024)));
+    assert_eq!(
+        source(&f, "code").snapshot().unwrap_err().kind(),
+        &ErrorKind::InvalidContent
+    );
+}
+
+#[test]
+fn duplicate_structural_names_remain_distinct_in_production_snapshot() {
+    let f = Fixture::new();
+    f.write(
+        "src/repeated.rs",
+        "fn repeated() {}\nmod nested { fn repeated() {} }\n",
+    );
+    let symbols = source(&f, "code").records().unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_ne!(symbols[0].id(), symbols[1].id());
+    assert!(
+        symbols
+            .iter()
+            .all(|symbol| symbol.id() != &StableId::parse("none").unwrap())
+    );
 }
