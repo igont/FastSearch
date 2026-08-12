@@ -260,6 +260,7 @@ fn service_junction_is_rejected_before_external_state_write() {
     fs::create_dir_all(&code).unwrap();
     fs::create_dir_all(&external).unwrap();
     fs::write(external.join("sentinel.txt"), "unchanged").unwrap();
+    fs::write(external.join("sentinel.txt"), "unchanged").unwrap();
     let junction = documents.join(".cfknowledge").join("E2-junction");
     let output = Command::new("cmd")
         .args(["/c", "mklink", "/J"])
@@ -282,6 +283,44 @@ fn service_junction_is_rejected_before_external_state_write() {
         .expect_err("missing child beneath junction must fail before create");
     assert!(error.to_string().contains("reparse point"));
     assert!(!external.join("missing-child").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn run_junction_added_after_open_is_rejected_before_external_marker_write() {
+    let temp = Temp::new();
+    let documents = temp.child("documents");
+    let code = temp.child("code");
+    let service = temp.child("service");
+    let external = temp.child("external-runs");
+    fs::create_dir_all(&documents).unwrap();
+    fs::create_dir_all(&code).unwrap();
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("sentinel.txt"), "unchanged").unwrap();
+    fs::write(documents.join("safe.md"), "# Safe").unwrap();
+    fs::write(code.join("safe.rs"), "pub fn safe() {}").unwrap();
+    let runtime =
+        ProductionRuntime::open(ProductionConfig::new(&documents, &code, &service)).unwrap();
+    let runs = service.join("runs");
+    let command = format!(
+        "rmdir \"{}\" && mklink /J \"{}\" \"{}\"",
+        runs.display(),
+        runs.display(),
+        external.display()
+    );
+    let output = Command::new("cmd")
+        .args(["/d", "/s", "/c", &command])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "guard must prevent junction swap");
+    let run = runtime.record_run_marker("E2-run").unwrap();
+    assert!(run.exists());
+    assert!(!external.join("E2-run").exists());
+    assert_eq!(
+        fs::read_to_string(external.join("sentinel.txt")).unwrap(),
+        "unchanged"
+    );
+    assert!(runtime.cleanup_run("E2-run").unwrap());
 }
 
 #[test]

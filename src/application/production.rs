@@ -12,6 +12,18 @@ use std::{
 };
 
 #[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
+    Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    },
+};
+
+#[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
 use crate::{
@@ -80,6 +92,7 @@ pub struct ProductionRuntime {
     vector: LocalE5Vector,
     vector_configured: bool,
     owned_runs: Mutex<BTreeMap<String, String>>,
+    _path_guards: PathGuards,
 }
 
 impl std::fmt::Debug for ProductionRuntime {
@@ -100,6 +113,11 @@ impl ProductionRuntime {
         ensure_no_reparse_points(&config.service_root)?;
         let service_root = canonical_directory(&config.service_root, "service root")?;
         validate_service_containment(&document_root, &code_root, &service_root)?;
+        let runs_root = service_root.join("runs");
+        fs::create_dir_all(&runs_root)
+            .map_err(|error| failure(ErrorKind::StateFailure, "create runs root", error))?;
+        ensure_no_reparse_points(&runs_root)?;
+        let path_guards = PathGuards::acquire(&service_root, &runs_root)?;
         let vector_configured = config.e5_root.is_some();
         let model_root = config
             .e5_root
@@ -115,6 +133,7 @@ impl ProductionRuntime {
             vector: LocalE5Vector::open(model_root, E5_IDENTITY),
             vector_configured,
             owned_runs: Mutex::new(BTreeMap::new()),
+            _path_guards: path_guards,
         })
     }
 
@@ -130,8 +149,10 @@ impl ProductionRuntime {
     pub fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
         validate_marker(marker)?;
         let runs = self.service_root.join("runs");
+        ensure_no_reparse_points(&runs)?;
         fs::create_dir_all(&runs)
             .map_err(|error| failure(ErrorKind::StateFailure, "create runs directory", error))?;
+        ensure_no_reparse_points(&runs)?;
         let run = runs.join(marker);
         fs::create_dir(&run)
             .map_err(|error| failure(ErrorKind::StateFailure, "create run directory", error))?;
@@ -565,6 +586,75 @@ fn write_new_run_markers(run: &Path, token: &str) -> Result<(), FastSearchError>
     schema
         .write_all(b"fastsearch-run-v1")
         .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))
+}
+
+#[cfg(windows)]
+struct PathGuards {
+    service: HANDLE,
+    runs: HANDLE,
+}
+
+#[cfg(windows)]
+impl PathGuards {
+    fn acquire(service: &Path, runs: &Path) -> Result<Self, FastSearchError> {
+        let service = open_directory_without_delete_share(service)?;
+        let runs = match open_directory_without_delete_share(runs) {
+            Ok(handle) => handle,
+            Err(error) => {
+                unsafe { CloseHandle(service) };
+                return Err(error);
+            }
+        };
+        Ok(Self { service, runs })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PathGuards {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.runs);
+            CloseHandle(self.service);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_directory_without_delete_share(path: &Path) -> Result<HANDLE, FastSearchError> {
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(failure(
+            ErrorKind::StateFailure,
+            "lock service directory against replacement",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(handle)
+}
+
+#[cfg(not(windows))]
+struct PathGuards;
+
+#[cfg(not(windows))]
+impl PathGuards {
+    fn acquire(_service: &Path, _runs: &Path) -> Result<Self, FastSearchError> {
+        Ok(Self)
+    }
 }
 
 fn failure(kind: ErrorKind, context: &str, error: std::io::Error) -> FastSearchError {
