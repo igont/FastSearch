@@ -29,6 +29,8 @@ $missingArgs = @('"e5"', ('"' + (Join-Path $cache 'models\missing') + '"'), ('"'
 $missing = Start-Process -FilePath $exe -ArgumentList $missingArgs -NoNewWindow -PassThru -Wait -RedirectStandardOutput (Join-Path $cache 'missing.out') -RedirectStandardError (Join-Path $cache 'missing.err')
 if ($missing.ExitCode -eq 0) { throw 'MISSING_CACHE_NOT_REJECTED' }
 $latencies = @($runs | ForEach-Object { [int]([regex]::Match($_.output,'"elapsed_ms":(\d+)')).Groups[1].Value } | Sort-Object)
-$payload = [ordered]@{schema='dt3-b1-operational-v1'; fixture_root='document-representative-b1-fixture'; cold=$runs[0..4]; warm=$runs[5..9]; p95_ms=$latencies[-1]; peak_working_set_bytes=($runs.peak_bytes | Measure-Object -Maximum).Maximum; missing_cache='rejected'; qwen='unavailable: internal-network loopback route absent'; bge='unavailable: adapter requires three outputs'}
+$peak = ($runs.peak_bytes | Measure-Object -Maximum).Maximum
+if ($peak -gt 2147483648) { throw 'E5_VECTOR_CHILD_MEMORY_BUDGET_EXCEEDED' }
+$payload = [ordered]@{schema='dt3-b1-operational-v1'; fixture_root='document-representative-b1-fixture'; cold=$runs[0..4]; warm=$runs[5..9]; p95_ms=$latencies[-1]; peak_working_set_bytes=$peak; vector_child_budget_bytes=2147483648; missing_cache='rejected'; qwen='unavailable: internal-network loopback route absent'; bge='unavailable: adapter requires three outputs'}
 $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $cache 'operational.json') -Encoding UTF8
 Write-Output ($payload | ConvertTo-Json -Compress)
