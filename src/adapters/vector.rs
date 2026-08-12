@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     domain::{
         BackendKind, CanonicalRecord, Capability, CapabilityStatus, ErrorKind, FastSearchError,
-        IndexFreshness, LifecycleStatus, RetrievalChannel, SearchHit, SearchQuery, SearchResponse,
+        IndexFreshness, LifecycleStatus, ModelIdentity, ProjectionProvenance, RetrievalChannel,
+        SearchHit, SearchQuery, SearchResponse,
     },
     ports::VectorRetrieval,
 };
@@ -255,13 +256,24 @@ impl LocalE5Vector {
 
 impl VectorRetrieval for LocalE5Vector {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        let (root, entries, freshness, generation) = {
+        let (
+            root,
+            entries,
+            freshness,
+            generation,
+            projection_generation,
+            declared_identity,
+            manifest,
+        ) = {
             let state = self.lock()?;
             (
                 state.model_root.clone(),
                 state.records.values().cloned().collect::<Vec<_>>(),
                 state.freshness,
                 state.state_generation,
+                state.projection_generation,
+                state.model_identity.clone(),
+                state.model_manifest.clone(),
             )
         };
         if freshness != IndexFreshness::Current {
@@ -274,14 +286,24 @@ impl VectorRetrieval for LocalE5Vector {
             .ok_or_else(|| {
                 FastSearchError::new(ErrorKind::ProjectionFailure, "E5 returned no query vector")
             })?;
+        let provenance = projection_generation
+            .zip(manifest)
+            .map(|(projection, fingerprint)| {
+                projection_provenance(&declared_identity, fingerprint, generation, projection)
+            })
+            .transpose()?;
         let mut hits = entries
             .into_iter()
             .map(|entry| {
-                SearchHit::new(
+                let hit = SearchHit::new(
                     entry.record,
                     RetrievalChannel::Vector,
                     f64::from(cosine(&query_vector, &entry.vector)),
-                )
+                );
+                match &provenance {
+                    Some(value) => hit.with_projection_provenance(value.clone()),
+                    None => hit,
+                }
             })
             .collect::<Vec<_>>();
         hits.sort_by(|left, right| {
@@ -304,6 +326,26 @@ fn status(state: &ProjectionState) -> LifecycleStatus {
         state.projection_generation,
         &state.detail,
     )
+}
+
+fn projection_provenance(
+    declared: &str,
+    fingerprint: String,
+    state_generation: u64,
+    projection_generation: u64,
+) -> Result<ProjectionProvenance, FastSearchError> {
+    let (model, revision) = declared.rsplit_once('@').ok_or_else(|| {
+        FastSearchError::new(
+            ErrorKind::InvalidIdentifier,
+            "local E5 model identity must be model@upstream-revision",
+        )
+    })?;
+    let identity = ModelIdentity::new(model, revision, fingerprint)?;
+    Ok(ProjectionProvenance::new(
+        identity,
+        state_generation,
+        projection_generation,
+    ))
 }
 
 fn embed(root: &Path, records: &[CanonicalRecord]) -> Result<Vec<Vec<f32>>, FastSearchError> {

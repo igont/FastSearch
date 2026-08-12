@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use fastsearch::{
     adapters::vector::LocalE5Vector,
@@ -58,11 +58,6 @@ fn local_e5_lifecycle_invalidates_and_recovers_deterministically() {
         adapter.apply(&initial, 1).unwrap().freshness(),
         IndexFreshness::Current
     );
-    assert_eq!(
-        adapter.provenance().model_identity(),
-        "multilingual-e5-small@614241f"
-    );
-    assert_eq!(adapter.provenance().projection_generation(), Some(1));
     let query = SearchQuery::new(
         "semantic navigation optional provider fallback",
         SearchMode::Balanced,
@@ -77,6 +72,17 @@ fn local_e5_lifecycle_invalidates_and_recovers_deterministically() {
         baseline.hits().first().unwrap().channel(),
         fastsearch::domain::RetrievalChannel::Vector
     );
+    let port: &dyn VectorRetrieval = &adapter;
+    let port_response = port.search(&query).unwrap();
+    let provenance = port_response.hits()[0].projection_provenance().unwrap();
+    assert_eq!(provenance.model_identity().model(), "multilingual-e5-small");
+    assert_eq!(provenance.model_identity().upstream_revision(), "614241f");
+    assert_eq!(
+        provenance.model_identity().artifact_manifest_sha256().len(),
+        64
+    );
+    assert_eq!(provenance.authoritative_state_generation(), 1);
+    assert_eq!(provenance.derived_projection_generation(), 1);
     assert!(baseline.hits().iter().all(|hit| hit.score().is_finite()));
     for _ in 0..5 {
         assert_eq!(adapter.search(&query).unwrap().hits(), baseline.hits());
@@ -112,9 +118,8 @@ fn local_e5_lifecycle_invalidates_and_recovers_deterministically() {
         adapter.rebuild(&changed, 3).unwrap().freshness(),
         IndexFreshness::Current
     );
-    adapter
-        .reconfigure("missing-local-e5", "missing-model")
-        .unwrap();
+    let mutation = root.join("b2-model-bytes-mutation.tmp");
+    fs::write(&mutation, b"mutation").unwrap();
     let error = adapter.rebuild(&changed, 4).unwrap_err();
     assert_eq!(
         error.kind(),
@@ -126,6 +131,8 @@ fn local_e5_lifecycle_invalidates_and_recovers_deterministically() {
         adapter.lifecycle_status().freshness(),
         IndexFreshness::Degraded
     );
+    assert_eq!(adapter.lifecycle_status().state_generation(), 4);
+    fs::remove_file(&mutation).unwrap();
     adapter
         .reconfigure(root, "multilingual-e5-small@614241f")
         .unwrap();
