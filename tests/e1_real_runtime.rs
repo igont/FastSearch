@@ -11,6 +11,17 @@ use fastsearch::{
     ports::{AgentSurface, SourcePort},
 };
 
+#[test]
+fn public_real_runtime_is_exported_from_a_dedicated_compatibility_owner() {
+    let application = include_str!("../src/application/mod.rs");
+
+    assert!(
+        application.contains("mod compatibility;")
+            && application.contains("pub use compatibility::RealRuntime;"),
+        "RealRuntime must be exported from the dedicated compatibility module"
+    );
+}
+
 struct TemporaryDirectory(PathBuf);
 
 impl TemporaryDirectory {

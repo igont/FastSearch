@@ -1,100 +1,18 @@
 //! Filesystem boundary for read-only document sources.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
-use std::fs;
-use std::num::NonZeroUsize;
-use std::path::{Component, Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
-use ignore::WalkBuilder;
 use sha2::{Digest, Sha256};
 
-use crate::domain::{
-    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
-    SourceSnapshot, StableId,
-};
+use crate::domain::{CanonicalRecord, ErrorKind, FastSearchError, SourceSnapshot};
 use crate::ports::SourcePort;
 
-const EXCLUDED_DIRECTORIES: &[&str] = &[
-    ".agents",
-    ".cfknowledge",
-    ".git",
-    ".obsidian",
-    "build",
-    "generated",
-    "service",
-    "target",
-    "vendor",
-];
+mod markdown;
+mod scanner;
+mod tsv;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ScannedSourceKind {
-    Markdown,
-    Tsv,
-}
-
-/// A verified filesystem source awaiting B2/B3 parsing.
-#[derive(Debug)]
-struct ScannedSource {
-    path: PathBuf,
-    locator: String,
-    bytes: Vec<u8>,
-    kind: ScannedSourceKind,
-}
-
-fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
-    let root = root
-        .canonicalize()
-        .map_err(|error| source_failure("canonicalize source root", error))?;
-    if !root.is_dir() {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "source root must be a directory",
-        ));
-    }
-
-    let mut sources = Vec::new();
-    let mut builder = WalkBuilder::new(&root);
-    builder
-        .hidden(false)
-        .parents(false)
-        .ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        .git_ignore(true)
-        .require_git(false)
-        .follow_links(false);
-    for entry in builder
-        .filter_entry(|entry| {
-            !entry
-                .file_type()
-                .is_some_and(|file_type| file_type.is_dir())
-                || !EXCLUDED_DIRECTORIES
-                    .iter()
-                    .any(|excluded| entry.file_name() == OsStr::new(excluded))
-        })
-        .build()
-    {
-        let entry = entry.map_err(|error| {
-            FastSearchError::new(
-                ErrorKind::SourceFailure,
-                format!("walk source tree: {error}"),
-            )
-        })?;
-        if entry.depth() == 0
-            || !entry
-                .file_type()
-                .is_some_and(|file_type| file_type.is_file())
-        {
-            continue;
-        }
-        if let Some(kind) = source_kind(entry.path()) {
-            sources.push(read_source(&root, entry.into_path(), kind)?);
-        }
-    }
-    sources.sort_by(|left, right| left.locator.cmp(&right.locator));
-    Ok(sources)
-}
+use scanner::{ScannedSourceKind, scan_sources};
 
 /// Reads canonical Markdown snapshots from the verified source root.
 pub fn markdown_snapshots(root: &Path) -> Result<Vec<SourceSnapshot>, FastSearchError> {
@@ -160,10 +78,7 @@ fn collect_snapshots(
         .iter()
         .filter(|source| kind.is_none_or(|expected| source.kind == expected))
         .map(|source| {
-            let parsed = match source.kind {
-                ScannedSourceKind::Markdown => parse_markdown_source(source),
-                ScannedSourceKind::Tsv => parse_tsv_source(source),
-            };
+            let parsed = parse_source(source.kind, &source.locator, &source.bytes);
             parsed.map_err(|error| {
                 FastSearchError::new(
                     error.kind().clone(),
@@ -174,282 +89,18 @@ fn collect_snapshots(
         .collect()
 }
 
-fn read_source(
-    root: &Path,
-    path: PathBuf,
+fn parse_source(
     kind: ScannedSourceKind,
-) -> Result<ScannedSource, FastSearchError> {
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|error| source_failure("canonicalize source file", error))?;
-    let relative = canonical_path.strip_prefix(root).map_err(|_| {
-        FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "source file escapes configured root",
-        )
-    })?;
-    if !relative
-        .components()
-        .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "source locator is not a contained relative path",
-        ));
-    }
-    let bytes =
-        fs::read(&canonical_path).map_err(|error| source_failure("read source file", error))?;
-    std::str::from_utf8(&bytes)
-        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
-
-    Ok(ScannedSource {
-        locator: relative.to_string_lossy().replace('\\', "/"),
-        path: canonical_path,
-        bytes,
-        kind,
-    })
-}
-
-fn source_kind(path: &Path) -> Option<ScannedSourceKind> {
-    if path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".cfmap.md"))
-    {
-        return None;
-    }
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some("md") => Some(ScannedSourceKind::Markdown),
-        Some("tsv") => Some(ScannedSourceKind::Tsv),
-        _ => None,
+    locator: &str,
+    bytes: &[u8],
+) -> Result<SourceSnapshot, FastSearchError> {
+    match kind {
+        ScannedSourceKind::Markdown => markdown::parse(locator, bytes),
+        ScannedSourceKind::Tsv => tsv::parse(locator, bytes),
     }
 }
 
-fn parse_markdown_source(source: &ScannedSource) -> Result<SourceSnapshot, FastSearchError> {
-    if source.kind != ScannedSourceKind::Markdown {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "expected Markdown source",
-        ));
-    }
-    if !source.path.is_absolute() {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "Markdown source path must remain canonical and absolute",
-        ));
-    }
-    let document = std::str::from_utf8(&source.bytes)
-        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
-    let document = normalize_document(document);
-    let frontmatter = parse_frontmatter(&document)?;
-    let mut sections = Vec::new();
-    let mut headings = Vec::new();
-    let mut current: Option<MarkdownSection> = None;
-
-    for line in frontmatter.markdown.lines() {
-        if let Some((level, heading)) = markdown_heading(line)? {
-            if let Some(section) = current.take() {
-                sections.push(section);
-            }
-            headings.truncate(level.saturating_sub(1));
-            headings.push(heading.clone());
-            current = Some(MarkdownSection {
-                headings: headings.clone(),
-                title: heading,
-                body: Vec::new(),
-            });
-        } else if let Some(section) = &mut current {
-            section.body.push(line.to_owned());
-        }
-    }
-    if let Some(section) = current {
-        sections.push(section);
-    }
-
-    let records = sections
-        .into_iter()
-        .map(|section| {
-            canonical_markdown_record(
-                &source.locator,
-                &frontmatter.metadata,
-                &frontmatter.relations,
-                section,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    let locator = SourceLocator::whole_file(&source.locator)
-        .map_err(|error| source_contract_failure(error.message()))?;
-    let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
-        .map_err(|error| source_contract_failure(error.message()))?;
-    Ok(SourceSnapshot::new(locator, file_hash, records))
-}
-
-fn parse_tsv_source(source: &ScannedSource) -> Result<SourceSnapshot, FastSearchError> {
-    if source.kind != ScannedSourceKind::Tsv {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "expected TSV source",
-        ));
-    }
-    if !source.path.is_absolute() {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "TSV source path must remain canonical and absolute",
-        ));
-    }
-    let document = std::str::from_utf8(&source.bytes)
-        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
-    let document = normalize_document(document);
-    let mut lines = document.lines().enumerate();
-    let Some((_, header)) = lines.next() else {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "TSV source requires a header row",
-        ));
-    };
-    let headers = parse_tsv_header(header)?;
-    let records = lines
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| parse_tsv_record(&source.locator, index + 1, &headers, line))
-        .collect::<Result<Vec<_>, _>>()?;
-    let locator = SourceLocator::whole_file(&source.locator)
-        .map_err(|error| source_contract_failure(error.message()))?;
-    let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
-        .map_err(|error| source_contract_failure(error.message()))?;
-    Ok(SourceSnapshot::new(locator, file_hash, records))
-}
-
-fn parse_tsv_header(header: &str) -> Result<Vec<String>, FastSearchError> {
-    let headers = header
-        .split('\t')
-        .map(str::trim)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if headers.len() < 2 || headers.iter().any(|header| header.is_empty()) {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "TSV header requires nonblank title and metadata columns",
-        ));
-    }
-    let unique = headers.iter().skip(1).collect::<BTreeSet<_>>();
-    if unique.len() != headers.len() - 1 || headers.iter().skip(1).any(|header| header == "format")
-    {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "TSV metadata headers must be unique and must not override format",
-        ));
-    }
-    Ok(headers)
-}
-
-fn parse_tsv_record(
-    path: &str,
-    row: usize,
-    headers: &[String],
-    line: &str,
-) -> Result<CanonicalRecord, FastSearchError> {
-    let cells = line.split('\t').map(str::trim).collect::<Vec<_>>();
-    if cells.len() != headers.len() {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "TSV data row does not match header arity",
-        ));
-    }
-    let title = cells[0];
-    if title.is_empty() {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "TSV data row title must not be blank",
-        ));
-    }
-    let row = NonZeroUsize::new(row).ok_or_else(|| {
-        FastSearchError::new(ErrorKind::SourceFailure, "TSV row number must be non-zero")
-    })?;
-    let content = cells.join("\t");
-    let metadata = std::iter::once(("format".to_owned(), "tsv".to_owned()))
-        .chain(
-            headers
-                .iter()
-                .skip(1)
-                .zip(cells.iter().skip(1))
-                .map(|(header, cell)| (header.clone(), (*cell).to_owned())),
-        )
-        .collect::<BTreeMap<_, _>>();
-    let id = StableId::parse(format!("registry:{path}#row={row}"))
-        .map_err(|error| source_contract_failure(error.message()))?;
-    let locator = SourceLocator::registry_row(path, row)
-        .map_err(|error| source_contract_failure(error.message()))?;
-    let content_hash = ContentHash::parse(tsv_record_hash(path, row, title, &content, &metadata))
-        .map_err(|error| source_contract_failure(error.message()))?;
-    CanonicalRecord::new(
-        id,
-        RecordKind::RegistryRow,
-        locator,
-        title,
-        content,
-        metadata,
-        Vec::new(),
-        content_hash,
-    )
-    .map_err(|error| source_contract_failure(error.message()))
-}
-
-#[derive(Debug)]
-struct MarkdownSection {
-    headings: Vec<String>,
-    title: String,
-    body: Vec<String>,
-}
-
-#[derive(Debug)]
-struct MarkdownFrontmatter {
-    metadata: BTreeMap<String, String>,
-    relations: Vec<StableId>,
-    markdown: String,
-}
-
-fn canonical_markdown_record(
-    path: &str,
-    metadata: &BTreeMap<String, String>,
-    relations: &[StableId],
-    section: MarkdownSection,
-) -> Result<Option<CanonicalRecord>, FastSearchError> {
-    let content = section.body.join("\n").trim().to_owned();
-    if content.is_empty() {
-        return Ok(None);
-    }
-    let heading_path = section.headings.join("/");
-    let id = StableId::parse(format!("markdown:{path}#{heading_path}"))
-        .map_err(|error| source_contract_failure(error.message()))?;
-    let locator = SourceLocator::markdown(path, section.headings.iter().cloned())
-        .map_err(|error| source_contract_failure(error.message()))?;
-    let content_hash = ContentHash::parse(markdown_record_hash(
-        path,
-        &section.headings,
-        &section.title,
-        &content,
-        metadata,
-        relations,
-    ))
-    .map_err(|error| source_contract_failure(error.message()))?;
-    CanonicalRecord::new(
-        id,
-        RecordKind::MarkdownSection,
-        locator,
-        section.title,
-        content,
-        metadata.clone(),
-        relations.to_vec(),
-        content_hash,
-    )
-    .map(Some)
-    .map_err(|error| source_contract_failure(error.message()))
-}
-
-fn normalize_document(document: &str) -> String {
+pub(super) fn normalize_document(document: &str) -> String {
     document
         .strip_prefix('\u{feff}')
         .unwrap_or(document)
@@ -457,171 +108,7 @@ fn normalize_document(document: &str) -> String {
         .replace('\r', "\n")
 }
 
-fn parse_frontmatter(document: &str) -> Result<MarkdownFrontmatter, FastSearchError> {
-    let Some(after_open) = document.strip_prefix("---\n") else {
-        return Ok(MarkdownFrontmatter {
-            metadata: BTreeMap::new(),
-            relations: Vec::new(),
-            markdown: document.to_owned(),
-        });
-    };
-    let (frontmatter, markdown) = after_open
-        .strip_prefix("---\n")
-        .map(|markdown| ("", markdown))
-        .or_else(|| (after_open == "---").then_some(("", "")))
-        .or_else(|| after_open.split_once("\n---\n"))
-        .or_else(|| {
-            after_open
-                .strip_suffix("\n---")
-                .map(|frontmatter| (frontmatter, ""))
-        })
-        .ok_or_else(|| {
-            FastSearchError::new(
-                ErrorKind::SourceFailure,
-                "unterminated Markdown frontmatter",
-            )
-        })?;
-    let mut metadata = BTreeMap::new();
-    let mut relations = Vec::new();
-    let mut relations_seen = false;
-    for line in frontmatter.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let (key, value) = line.split_once(':').ok_or_else(|| {
-            FastSearchError::new(
-                ErrorKind::SourceFailure,
-                "malformed Markdown frontmatter entry",
-            )
-        })?;
-        let key = key.trim();
-        let value = value.trim();
-        if key.is_empty() || value.is_empty() || !is_supported_frontmatter_value(value) {
-            return Err(FastSearchError::new(
-                ErrorKind::SourceFailure,
-                "frontmatter requires non-empty UTF-8 scalar key: value entries",
-            ));
-        }
-        if key == "relations" {
-            if relations_seen {
-                return Err(FastSearchError::new(
-                    ErrorKind::SourceFailure,
-                    "duplicate frontmatter key: relations",
-                ));
-            }
-            relations_seen = true;
-            relations = value
-                .split(',')
-                .map(str::trim)
-                .map(|relation| {
-                    StableId::parse(relation.to_owned()).map_err(|_| {
-                        FastSearchError::new(
-                            ErrorKind::SourceFailure,
-                            "frontmatter relations must be comma-separated non-empty StableIds",
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-        } else if metadata.insert(key.to_owned(), value.to_owned()).is_some() {
-            return Err(FastSearchError::new(
-                ErrorKind::SourceFailure,
-                format!("duplicate frontmatter key: {key}"),
-            ));
-        }
-    }
-    Ok(MarkdownFrontmatter {
-        metadata,
-        relations,
-        markdown: markdown.to_owned(),
-    })
-}
-
-fn is_supported_frontmatter_value(value: &str) -> bool {
-    match value.as_bytes().first() {
-        Some(b'|') | Some(b'>') => false,
-        Some(b'[') => value.ends_with(']'),
-        Some(b'{') => value.ends_with('}'),
-        Some(_) => true,
-        None => false,
-    }
-}
-
-fn markdown_heading(line: &str) -> Result<Option<(usize, String)>, FastSearchError> {
-    let level = line.bytes().take_while(|byte| *byte == b'#').count();
-    if level == 0 {
-        return Ok(None);
-    }
-    let Some(rest) = line.get(level..) else {
-        return Ok(None);
-    };
-    if level > 6 || !rest.starts_with(char::is_whitespace) {
-        return Ok(None);
-    }
-    let heading = rest.trim().trim_end_matches('#').trim();
-    if heading.is_empty() {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "Markdown heading must not be blank",
-        ));
-    }
-    Ok(Some((level, heading.to_owned())))
-}
-
-fn markdown_record_hash(
-    path: &str,
-    headings: &[String],
-    title: &str,
-    content: &str,
-    metadata: &BTreeMap<String, String>,
-    relations: &[StableId],
-) -> String {
-    let mut fields = vec![
-        "markdown".to_owned(),
-        path.to_owned(),
-        headings.len().to_string(),
-    ];
-    fields.extend(headings.iter().cloned());
-    fields.extend([
-        title.to_owned(),
-        content.to_owned(),
-        metadata.len().to_string(),
-    ]);
-    for (key, value) in metadata {
-        fields.extend([key.clone(), value.clone()]);
-    }
-    fields.push(relations.len().to_string());
-    fields.extend(
-        relations
-            .iter()
-            .map(|relation| relation.as_str().to_owned()),
-    );
-    versioned_hash("record", fields.iter().map(String::as_str))
-}
-
-fn tsv_record_hash(
-    path: &str,
-    row: NonZeroUsize,
-    title: &str,
-    content: &str,
-    metadata: &BTreeMap<String, String>,
-) -> String {
-    let mut fields = vec![
-        "registry".to_owned(),
-        path.to_owned(),
-        row.to_string(),
-        title.to_owned(),
-        content.to_owned(),
-        metadata.len().to_string(),
-    ];
-    for (key, value) in metadata {
-        fields.extend([key.clone(), value.clone()]);
-    }
-    fields.push("0".to_owned());
-    versioned_hash("record", fields.iter().map(String::as_str))
-}
-
-fn versioned_hash<'a>(scope: &str, fields: impl IntoIterator<Item = &'a str>) -> String {
+pub(super) fn versioned_hash<'a>(scope: &str, fields: impl IntoIterator<Item = &'a str>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"fastsearch:sha256:v1\0");
     update_hash_field(&mut hasher, scope);
@@ -636,12 +123,8 @@ fn update_hash_field(hasher: &mut Sha256, field: &str) {
     hasher.update(field.as_bytes());
 }
 
-fn source_contract_failure(message: &str) -> FastSearchError {
+pub(super) fn source_contract_failure(message: &str) -> FastSearchError {
     FastSearchError::new(ErrorKind::SourceFailure, message)
-}
-
-fn source_failure(context: &str, error: std::io::Error) -> FastSearchError {
-    FastSearchError::new(ErrorKind::SourceFailure, format!("{context}: {error}"))
 }
 
 #[cfg(test)]
@@ -653,9 +136,22 @@ mod tests {
     use crate::domain::{ErrorKind, RecordKind, SourceSelector};
     use crate::ports::SourcePort;
 
-    use super::{FilesystemSource, ScannedSourceKind, markdown_snapshots, scan_sources};
+    use super::{
+        FilesystemSource, ScannedSourceKind, markdown, markdown_snapshots, scan_sources, tsv,
+    };
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn format_parsers_accept_admitted_content_without_filesystem_discovery() {
+        let markdown = markdown::parse("docs/guide.md", b"# Guide\nbody")
+            .expect("bounded Markdown content must parse without a filesystem path");
+        let tsv = tsv::parse("registry.tsv", b"id\tstatus\n2433\tcurrent\n")
+            .expect("bounded TSV content must parse without a filesystem path");
+
+        assert_eq!(markdown.locator().path(), "docs/guide.md");
+        assert_eq!(tsv.locator().path(), "registry.tsv");
+    }
 
     #[test]
     fn scanner_returns_only_allowed_contained_utf8_sources_in_locator_order() {
@@ -681,15 +177,6 @@ mod tests {
             locators,
             ["docs/alpha.md", "docs/zeta.md", "registry.tsv"],
             "scanner must exclude ignored/build/unsupported files and sort lexically"
-        );
-        let canonical_root = fixture
-            .path()
-            .canonicalize()
-            .expect("canonical fixture root");
-        assert!(
-            scanned
-                .iter()
-                .all(|source| source.path.starts_with(&canonical_root))
         );
         assert!(
             scanned
