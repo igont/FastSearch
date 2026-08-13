@@ -134,10 +134,11 @@ fn exact_current_src_repeats_complete_bounded_runtime_inventory() {
         .iter()
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
-    let snapshot_paths = first
+    let mut snapshot_paths = first
         .iter()
         .map(|snapshot| snapshot.locator().path().to_owned())
         .collect::<Vec<_>>();
+    snapshot_paths.sort();
 
     assert!(!first_passport.is_empty());
     assert_eq!(first_passport, second_passport);
