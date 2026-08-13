@@ -1,8 +1,9 @@
 use crate::{
     application::{ProductionConfig, ProductionRuntime, RealRuntime},
     domain::{
-        BackendKind, Capability, CapabilityState, ErrorKind, FastSearchError, IndexFreshness,
-        RecordKind, RelatedQuery, RetrievalChannel, SearchMode, SearchQuery, StableId,
+        BackendKind, CanonicalRecord, Capability, CapabilityState, CapabilityStatus, ErrorKind,
+        FastSearchError, IndexFreshness, LifecycleStatus, RecordKind, RelatedQuery,
+        RetrievalChannel, SearchMode, SearchQuery, SearchResponse, StableId,
     },
     ports::AgentSurface,
 };
@@ -74,95 +75,350 @@ pub fn execute_cli_formatted(
     arguments: Vec<String>,
     format: OutputFormat,
 ) -> Result<String, CliError> {
-    if let [index, action, source, service, flag] = arguments.as_slice()
-        && index == "index"
-        && action == "update"
-        && flag == "--test-fail-projection"
-    {
-        let mut runtime = open(source, service)?;
-        runtime
-            .index_with_test_projection_failure()
-            .map_err(runtime_error)?;
-        unreachable!("the controlled projection fault always fails")
+    Ok(render_outcome(
+        execute_command(parse_command(arguments)?)?,
+        format,
+    ))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Command {
+    Production {
+        config: ProductionCommandConfig,
+        action: CommandAction,
+    },
+    Compatibility {
+        source: String,
+        service: String,
+        action: CommandAction,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ProductionCommandConfig {
+    documents: String,
+    code: String,
+    service: String,
+    e5: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CommandAction {
+    Init,
+    Index { rebuild: bool },
+    Search { mode: SearchMode, text: String },
+    Get { id: String },
+    Related { id: String },
+    Status,
+    TestProjectionFailure,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum CommandOutcome {
+    Status {
+        status: LifecycleStatus,
+        capabilities: Vec<CapabilityStatus>,
+    },
+    Search(SearchResponse),
+    Record(Option<CanonicalRecord>),
+    Related(Vec<CanonicalRecord>),
+}
+
+impl CommandOutcome {
+    #[cfg(test)]
+    fn status_for_test() -> Self {
+        Self::Status {
+            status: LifecycleStatus::not_configured("test presenter outcome"),
+            capabilities: Vec::new(),
+        }
     }
+}
+
+impl Command {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Production { action, .. } | Self::Compatibility { action, .. } => action.name(),
+        }
+    }
+}
+
+impl CommandAction {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Index { .. } | Self::TestProjectionFailure => "index",
+            Self::Search { .. } => "search",
+            Self::Get { .. } => "get",
+            Self::Related { .. } => "related",
+            Self::Status => "status",
+        }
+    }
+}
+
+/// Parses only the private direct-CLI grammar. This is not an application or MCP DTO.
+fn parse_command(arguments: Vec<String>) -> Result<Command, CliError> {
     if arguments
         .iter()
-        .any(|argument| argument == "--test-fail-projection")
+        .any(|value| value == "--test-fail-projection")
     {
-        return Err(CliError::Usage);
+        return match arguments.as_slice() {
+            [index, action, source, service, flag]
+                if index == "index" && action == "update" && flag == "--test-fail-projection" =>
+            {
+                Ok(Command::Compatibility {
+                    source: source.clone(),
+                    service: service.clone(),
+                    action: CommandAction::TestProjectionFailure,
+                })
+            }
+            _ => Err(CliError::Usage),
+        };
     }
     match arguments.as_slice() {
-        [command, documents, code, service] if command == "init" => {
-            let runtime = open_production(documents, code, service, None)?;
-            Ok(render_status(&runtime, format))
-        }
-        [command, documents, code, service, e5] if command == "init" => {
-            let runtime = open_production(documents, code, service, Some(e5))?;
-            Ok(render_status(&runtime, format))
-        }
+        [command, documents, code, service] if command == "init" || command == "status" => Ok(
+            production_command(documents, code, service, None, command_action(command)?),
+        ),
+        [command, documents, code, service, e5] if command == "init" || command == "status" => Ok(
+            production_command(documents, code, service, Some(e5), command_action(command)?),
+        ),
         [index, action, documents, code, service]
             if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
         {
-            execute_production_index(action, documents, code, service, None, format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                None,
+                index_action(action),
+            ))
         }
         [index, action, documents, code, service, e5]
             if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
         {
-            execute_production_index(action, documents, code, service, Some(e5), format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                Some(e5),
+                index_action(action),
+            ))
         }
         [command, documents, code, service, mode, query] if command == "search" => {
-            execute_production_search(documents, code, service, mode, query, None, format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                None,
+                CommandAction::Search {
+                    mode: parse_mode(mode)?,
+                    text: query.clone(),
+                },
+            ))
         }
         [command, documents, code, service, mode, query, e5] if command == "search" => {
-            execute_production_search(documents, code, service, mode, query, Some(e5), format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                Some(e5),
+                CommandAction::Search {
+                    mode: parse_mode(mode)?,
+                    text: query.clone(),
+                },
+            ))
         }
-        [command, documents, code, service, id] if command == "get" || command == "related" => {
-            execute_production_record(command, documents, code, service, id, None, format)
-        }
+        [command, documents, code, service, id] if command == "get" || command == "related" => Ok(
+            production_command(documents, code, service, None, record_action(command, id)),
+        ),
         [command, documents, code, service, id, e5] if command == "get" || command == "related" => {
-            execute_production_record(command, documents, code, service, id, Some(e5), format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                Some(e5),
+                record_action(command, id),
+            ))
         }
-        [command, documents, code, service] if command == "status" => {
-            let runtime = open_production(documents, code, service, None)?;
-            Ok(render_status(&runtime, format))
-        }
-        [command, documents, code, service, e5] if command == "status" => {
-            let runtime = open_production(documents, code, service, Some(e5))?;
-            Ok(render_status(&runtime, format))
-        }
-        // Backward-compatible DT2 document-only commands remain accepted, but are
-        // not advertised as the DT3 production surface.
-        [command, source, service] if command == "init" => {
-            let runtime = open(source, service)?;
-            Ok(render_status(&runtime, format))
-        }
-        [index, action, source, service] if index == "index" && action == "update" => {
-            let mut runtime = open(source, service)?;
-            runtime.index().map_err(runtime_error)?;
-            Ok(render_status(&runtime, format))
-        }
-        [index, action, source, service] if index == "index" && action == "rebuild" => {
-            let mut runtime = open(source, service)?;
-            runtime.rebuild().map_err(runtime_error)?;
-            Ok(render_status(&runtime, format))
+        [command, source, service] if command == "init" || command == "status" => Ok(
+            compatibility_command(source, service, command_action(command)?),
+        ),
+        [index, action, source, service]
+            if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
+        {
+            Ok(compatibility_command(source, service, index_action(action)))
         }
         [command, source, service, mode, query] if command == "search" => {
-            let runtime = open(source, service)?;
-            let query = SearchQuery::new(query, parse_mode(mode)?).map_err(runtime_error)?;
-            let response = runtime.search(&query).map_err(runtime_error)?;
-            Ok(render_search(&response, format))
+            Ok(compatibility_command(
+                source,
+                service,
+                CommandAction::Search {
+                    mode: parse_mode(mode)?,
+                    text: query.clone(),
+                },
+            ))
         }
-        [command, source, service, id] if command == "get" => {
-            let runtime = open(source, service)?;
-            let id = StableId::parse(id).map_err(runtime_error)?;
-            let record = runtime.get(&id).map_err(runtime_error)?;
-            Ok(render_get(record.as_ref(), format))
-        }
-        [command, source, service] if command == "status" => {
-            let runtime = open(source, service)?;
-            Ok(render_status(&runtime, format))
-        }
+        [command, source, service, id] if command == "get" => Ok(compatibility_command(
+            source,
+            service,
+            record_action(command, id),
+        )),
         _ => Err(CliError::Usage),
+    }
+}
+
+pub(super) fn production_command(
+    documents: &str,
+    code: &str,
+    service: &str,
+    e5: Option<&String>,
+    action: CommandAction,
+) -> Command {
+    Command::Production {
+        config: ProductionCommandConfig {
+            documents: documents.to_owned(),
+            code: code.to_owned(),
+            service: service.to_owned(),
+            e5: e5.cloned(),
+        },
+        action,
+    }
+}
+
+fn compatibility_command(source: &str, service: &str, action: CommandAction) -> Command {
+    Command::Compatibility {
+        source: source.to_owned(),
+        service: service.to_owned(),
+        action,
+    }
+}
+
+fn command_action(command: &str) -> Result<CommandAction, CliError> {
+    match command {
+        "init" => Ok(CommandAction::Init),
+        "status" => Ok(CommandAction::Status),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn index_action(action: &str) -> CommandAction {
+    CommandAction::Index {
+        rebuild: action == "rebuild",
+    }
+}
+
+fn record_action(command: &str, id: &str) -> CommandAction {
+    if command == "related" {
+        CommandAction::Related { id: id.to_owned() }
+    } else {
+        CommandAction::Get { id: id.to_owned() }
+    }
+}
+
+/// Executes one private CLI command. It deliberately stays below the public application surface.
+pub(super) fn execute_command(command: Command) -> Result<CommandOutcome, CliError> {
+    match command {
+        Command::Production { config, action } => execute_production_command(config, action),
+        Command::Compatibility {
+            source,
+            service,
+            action,
+        } => execute_compatibility_command(&source, &service, action),
+    }
+}
+
+fn execute_production_command(
+    config: ProductionCommandConfig,
+    action: CommandAction,
+) -> Result<CommandOutcome, CliError> {
+    let mut runtime = open_production(
+        &config.documents,
+        &config.code,
+        &config.service,
+        config.e5.as_ref(),
+    )?;
+    match action {
+        CommandAction::Init | CommandAction::Status => Ok(status_outcome(&runtime)),
+        CommandAction::Index { rebuild } => {
+            if rebuild {
+                runtime.rebuild().map_err(runtime_error)?;
+            } else {
+                runtime.index().map_err(runtime_error)?;
+            }
+            Ok(status_outcome(&runtime))
+        }
+        CommandAction::Search { mode, text } => {
+            // A CLI search is a process boundary. Reconcile the in-memory local-E5
+            // projection from the committed authority before querying.
+            runtime.index().map_err(runtime_error)?;
+            let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
+            Ok(CommandOutcome::Search(
+                runtime.search(&query).map_err(runtime_error)?,
+            ))
+        }
+        CommandAction::Get { id } => record_outcome(&runtime, &id, false),
+        CommandAction::Related { id } => record_outcome(&runtime, &id, true),
+        CommandAction::TestProjectionFailure => Err(CliError::Usage),
+    }
+}
+
+fn execute_compatibility_command(
+    source: &str,
+    service: &str,
+    action: CommandAction,
+) -> Result<CommandOutcome, CliError> {
+    let mut runtime = open(source, service)?;
+    match action {
+        CommandAction::Init | CommandAction::Status => Ok(status_outcome(&runtime)),
+        CommandAction::Index { rebuild } => {
+            if rebuild {
+                runtime.rebuild().map_err(runtime_error)?;
+            } else {
+                runtime.index().map_err(runtime_error)?;
+            }
+            Ok(status_outcome(&runtime))
+        }
+        CommandAction::Search { mode, text } => {
+            let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
+            Ok(CommandOutcome::Search(
+                runtime.search(&query).map_err(runtime_error)?,
+            ))
+        }
+        CommandAction::Get { id } => record_outcome(&runtime, &id, false),
+        CommandAction::TestProjectionFailure => {
+            runtime
+                .index_with_test_projection_failure()
+                .map_err(runtime_error)?;
+            unreachable!("the controlled projection fault always fails")
+        }
+        CommandAction::Related { .. } => Err(CliError::Usage),
+    }
+}
+
+fn status_outcome(runtime: &impl AgentSurface) -> CommandOutcome {
+    CommandOutcome::Status {
+        status: runtime.index_status(),
+        capabilities: runtime.status(),
+    }
+}
+
+fn record_outcome(
+    runtime: &impl AgentSurface,
+    raw_id: &str,
+    related: bool,
+) -> Result<CommandOutcome, CliError> {
+    let id = StableId::parse(raw_id).map_err(runtime_error)?;
+    if related {
+        Ok(CommandOutcome::Related(
+            runtime
+                .related(&RelatedQuery::new(id))
+                .map_err(runtime_error)?,
+        ))
+    } else {
+        Ok(CommandOutcome::Record(
+            runtime.get(&id).map_err(runtime_error)?,
+        ))
     }
 }
 
@@ -178,68 +434,6 @@ fn open_production(
         None => config,
     };
     ProductionRuntime::open(config).map_err(runtime_error)
-}
-
-fn execute_production_index(
-    action: &str,
-    documents: &str,
-    code: &str,
-    service: &str,
-    e5: Option<&String>,
-    format: OutputFormat,
-) -> Result<String, CliError> {
-    let mut runtime = open_production(documents, code, service, e5)?;
-    if action == "rebuild" {
-        runtime.rebuild().map_err(runtime_error)?;
-    } else {
-        runtime.index().map_err(runtime_error)?;
-    }
-    Ok(render_status(&runtime, format))
-}
-
-fn execute_production_search(
-    documents: &str,
-    code: &str,
-    service: &str,
-    mode: &str,
-    text: &str,
-    e5: Option<&String>,
-    format: OutputFormat,
-) -> Result<String, CliError> {
-    let mut runtime = open_production(documents, code, service, e5)?;
-    // A CLI search is a process boundary. Reconcile before querying so the
-    // in-memory local-E5 projection is rebuilt from the same committed authority
-    // as lexical/maps/symbols instead of reporting a false cross-process Current.
-    runtime.index().map_err(runtime_error)?;
-    let query = SearchQuery::new(text, parse_mode(mode)?).map_err(runtime_error)?;
-    Ok(render_search(
-        &runtime.search(&query).map_err(runtime_error)?,
-        format,
-    ))
-}
-
-fn execute_production_record(
-    command: &str,
-    documents: &str,
-    code: &str,
-    service: &str,
-    id: &str,
-    e5: Option<&String>,
-    format: OutputFormat,
-) -> Result<String, CliError> {
-    let runtime = open_production(documents, code, service, e5)?;
-    let id = StableId::parse(id).map_err(runtime_error)?;
-    if command == "related" {
-        let records = runtime
-            .related(&RelatedQuery::new(id))
-            .map_err(runtime_error)?;
-        Ok(render_records(&records, format))
-    } else {
-        Ok(render_get(
-            runtime.get(&id).map_err(runtime_error)?.as_ref(),
-            format,
-        ))
-    }
 }
 
 fn open(source: &str, service: &str) -> Result<RealRuntime, CliError> {
@@ -275,159 +469,181 @@ fn parse_mode(value: &str) -> Result<SearchMode, CliError> {
     }
 }
 
-fn render_status(runtime: &impl AgentSurface, format: OutputFormat) -> String {
-    let status = runtime.index_status();
-    if format == OutputFormat::Json {
-        let capabilities = runtime
-            .status()
-            .into_iter()
-            .map(|capability| {
-                let (state, detail) = capability_state_json(capability.state());
-                json!({
-                    "name": capability_name(capability.capability()),
-                    "state": state,
-                    "detail": detail,
-                })
-            })
-            .collect::<Vec<_>>();
-        return pretty_json(json!({
-            "schema_version": 1,
-            "status": "ok",
-            "kind": "index_status",
-            "freshness": freshness_name(status.freshness()),
-            "state_generation": status.state_generation(),
-            "projection_generation": status.projection_generation(),
-            "detail": status.detail(),
-            "capabilities": capabilities,
-        }));
+pub(in crate::application) use presenters::render_outcome;
+
+/// Pure CLI presentation: typed outcomes in, text out. It owns no runtime or filesystem work.
+mod presenters {
+    use super::*;
+
+    pub(in crate::application) fn render_outcome(
+        outcome: CommandOutcome,
+        format: OutputFormat,
+    ) -> String {
+        match outcome {
+            CommandOutcome::Status {
+                status,
+                capabilities,
+            } => render_status(&status, &capabilities, format),
+            CommandOutcome::Search(response) => render_search(&response, format),
+            CommandOutcome::Record(record) => render_get(record.as_ref(), format),
+            CommandOutcome::Related(records) => render_records(&records, format),
+        }
     }
-    if format == OutputFormat::Human {
+
+    fn render_status(
+        status: &LifecycleStatus,
+        capabilities: &[CapabilityStatus],
+        format: OutputFormat,
+    ) -> String {
+        if format == OutputFormat::Json {
+            let capabilities = capabilities
+                .iter()
+                .map(|capability| {
+                    let (state, detail) = capability_state_json(capability.state());
+                    json!({
+                        "name": capability_name(capability.capability()),
+                        "state": state,
+                        "detail": detail,
+                    })
+                })
+                .collect::<Vec<_>>();
+            return pretty_json(json!({
+                "schema_version": 1,
+                "status": "ok",
+                "kind": "index_status",
+                "freshness": freshness_name(status.freshness()),
+                "state_generation": status.state_generation(),
+                "projection_generation": status.projection_generation(),
+                "detail": status.detail(),
+                "capabilities": capabilities,
+            }));
+        }
+        if format == OutputFormat::Human {
+            let mut lines = vec![
+                "Состояние индекса".to_owned(),
+                format!("  Актуальность: {}", human_freshness(status.freshness())),
+                format!("  Поколение данных: {}", status.state_generation()),
+                format!(
+                    "  Поколение проекции: {}",
+                    status
+                        .projection_generation()
+                        .map_or_else(|| "нет".to_owned(), |value| value.to_string())
+                ),
+                format!("  Подробности: {}", status.detail()),
+                String::new(),
+                "Возможности".to_owned(),
+            ];
+            lines.extend(capabilities.iter().map(|capability| {
+                format!(
+                    "  {} — {}",
+                    capability_name(capability.capability()),
+                    human_capability_state(capability.state())
+                )
+            }));
+            return lines.join("\n");
+        }
         let mut lines = vec![
-            "Состояние индекса".to_owned(),
-            format!("  Актуальность: {}", human_freshness(status.freshness())),
-            format!("  Поколение данных: {}", status.state_generation()),
+            format!("freshness={:?}", status.freshness()),
+            format!("state-generation={}", status.state_generation()),
             format!(
-                "  Поколение проекции: {}",
+                "projection-generation={}",
                 status
                     .projection_generation()
-                    .map_or_else(|| "нет".to_owned(), |value| value.to_string())
+                    .map_or_else(|| "none".to_owned(), |generation| generation.to_string())
             ),
-            format!("  Подробности: {}", status.detail()),
-            String::new(),
-            "Возможности".to_owned(),
         ];
-        lines.extend(runtime.status().into_iter().map(|capability| {
+        lines.extend(
+            capabilities
+                .iter()
+                .map(|capability| match capability.state() {
+                    CapabilityState::Available { backend } => {
+                        format!("{:?}={backend:?}", capability.capability())
+                    }
+                    CapabilityState::Unavailable { .. } => {
+                        format!("{:?}=Unavailable", capability.capability())
+                    }
+                    CapabilityState::Stale { .. } => format!("{:?}=Stale", capability.capability()),
+                    CapabilityState::Degraded { .. } => {
+                        format!("{:?}=Degraded", capability.capability())
+                    }
+                }),
+        );
+        lines.join("\n")
+    }
+
+    fn render_search(response: &crate::domain::SearchResponse, format: OutputFormat) -> String {
+        if format == OutputFormat::Json {
+            let hits = response
+                .hits()
+                .iter()
+                .map(|hit| {
+                    json!({
+                        "id": hit.record().id().as_str(),
+                        "title": hit.record().title(),
+                        "path": hit.record().locator().path(),
+                        "record_kind": record_kind_name(hit.record().kind()),
+                        "channel": channel_name(hit.channel()),
+                        "score": hit.score(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            return pretty_json(json!({
+                "schema_version": 1,
+                "status": "ok",
+                "kind": "search",
+                "freshness": freshness_name(response.freshness()),
+                "hit_count": hits.len(),
+                "hits": hits,
+            }));
+        }
+        if format == OutputFormat::Human {
+            let mut lines = vec![
+                "Результаты поиска".to_owned(),
+                format!("  Актуальность: {}", human_freshness(response.freshness())),
+                format!("  Найдено: {}", response.hits().len()),
+            ];
+            for (index, hit) in response.hits().iter().enumerate() {
+                lines.extend([
+                    String::new(),
+                    format!("{}. {}", index + 1, hit.record().title()),
+                    format!("   ID: {}", hit.record().id().as_str()),
+                    format!("   Файл: {}", hit.record().locator().path()),
+                    format!("   Канал: {}", channel_name(hit.channel())),
+                    format!("   Оценка: {:.4}", hit.score()),
+                ]);
+            }
+            return lines.join("\n");
+        }
+        let mut lines = vec![
+            format!("freshness={:?}", response.freshness()),
+            format!("hits={}", response.hits().len()),
+        ];
+        lines.extend(response.hits().iter().map(|hit| {
             format!(
-                "  {} — {}",
-                capability_name(capability.capability()),
-                human_capability_state(capability.state())
+                "record={}\tchannel={:?}\tscore={}",
+                hit.record().id().as_str(),
+                hit.channel(),
+                hit.score()
             )
         }));
-        return lines.join("\n");
+        lines.join("\n")
     }
-    let mut lines = vec![
-        format!("freshness={:?}", status.freshness()),
-        format!("state-generation={}", status.state_generation()),
-        format!(
-            "projection-generation={}",
-            status
-                .projection_generation()
-                .map_or_else(|| "none".to_owned(), |generation| generation.to_string())
-        ),
-    ];
-    lines.extend(
-        runtime
-            .status()
-            .into_iter()
-            .map(|capability| match capability.state() {
-                CapabilityState::Available { backend } => {
-                    format!("{:?}={backend:?}", capability.capability())
-                }
-                CapabilityState::Unavailable { .. } => {
-                    format!("{:?}=Unavailable", capability.capability())
-                }
-                CapabilityState::Stale { .. } => format!("{:?}=Stale", capability.capability()),
-                CapabilityState::Degraded { .. } => {
-                    format!("{:?}=Degraded", capability.capability())
-                }
-            }),
-    );
-    lines.join("\n")
-}
 
-fn render_search(response: &crate::domain::SearchResponse, format: OutputFormat) -> String {
-    if format == OutputFormat::Json {
-        let hits = response
-            .hits()
-            .iter()
-            .map(|hit| {
-                json!({
-                    "id": hit.record().id().as_str(),
-                    "title": hit.record().title(),
-                    "path": hit.record().locator().path(),
-                    "record_kind": record_kind_name(hit.record().kind()),
-                    "channel": channel_name(hit.channel()),
-                    "score": hit.score(),
-                })
-            })
-            .collect::<Vec<_>>();
-        return pretty_json(json!({
-            "schema_version": 1,
-            "status": "ok",
-            "kind": "search",
-            "freshness": freshness_name(response.freshness()),
-            "hit_count": hits.len(),
-            "hits": hits,
-        }));
-    }
-    if format == OutputFormat::Human {
-        let mut lines = vec![
-            "Результаты поиска".to_owned(),
-            format!("  Актуальность: {}", human_freshness(response.freshness())),
-            format!("  Найдено: {}", response.hits().len()),
-        ];
-        for (index, hit) in response.hits().iter().enumerate() {
-            lines.extend([
-                String::new(),
-                format!("{}. {}", index + 1, hit.record().title()),
-                format!("   ID: {}", hit.record().id().as_str()),
-                format!("   Файл: {}", hit.record().locator().path()),
-                format!("   Канал: {}", channel_name(hit.channel())),
-                format!("   Оценка: {:.4}", hit.score()),
-            ]);
+    fn render_get(record: Option<&crate::domain::CanonicalRecord>, format: OutputFormat) -> String {
+        if format == OutputFormat::Json {
+            return pretty_json(json!({
+                "schema_version": 1,
+                "status": "ok",
+                "kind": "record",
+                "found": record.is_some(),
+                "record": record.map(record_json),
+            }));
         }
-        return lines.join("\n");
-    }
-    let mut lines = vec![
-        format!("freshness={:?}", response.freshness()),
-        format!("hits={}", response.hits().len()),
-    ];
-    lines.extend(response.hits().iter().map(|hit| {
-        format!(
-            "record={}\tchannel={:?}\tscore={}",
-            hit.record().id().as_str(),
-            hit.channel(),
-            hit.score()
-        )
-    }));
-    lines.join("\n")
-}
-
-fn render_get(record: Option<&crate::domain::CanonicalRecord>, format: OutputFormat) -> String {
-    if format == OutputFormat::Json {
-        return pretty_json(json!({
-            "schema_version": 1,
-            "status": "ok",
-            "kind": "record",
-            "found": record.is_some(),
-            "record": record.map(record_json),
-        }));
-    }
-    if format == OutputFormat::Human {
-        return record.map_or_else(
-            || "Запись не найдена.".to_owned(),
-            |record| {
-                format!(
+        if format == OutputFormat::Human {
+            return record.map_or_else(
+                || "Запись не найдена.".to_owned(),
+                |record| {
+                    format!(
                     "Запись\n  Заголовок: {}\n  ID: {}\n  Тип: {}\n  Файл: {}\n\nСодержимое\n{}",
                     record.title(),
                     record.id().as_str(),
@@ -435,143 +651,171 @@ fn render_get(record: Option<&crate::domain::CanonicalRecord>, format: OutputFor
                     record.locator().path(),
                     record.searchable_content()
                 )
+                },
+            );
+        }
+        record.map_or_else(
+            || "found=false".to_owned(),
+            |record| {
+                format!(
+                    "found=true\nrecord={}\ntitle={}",
+                    record.id().as_str(),
+                    record.title()
+                )
             },
+        )
+    }
+
+    fn render_records(records: &[crate::domain::CanonicalRecord], format: OutputFormat) -> String {
+        if format == OutputFormat::Json {
+            return pretty_json(json!({
+                "schema_version": 1,
+                "status": "ok",
+                "kind": "related",
+                "record_count": records.len(),
+                "records": records.iter().map(record_json).collect::<Vec<_>>(),
+            }));
+        }
+        if format == OutputFormat::Human {
+            let mut lines = vec![
+                "Связанные записи".to_owned(),
+                format!("  Найдено: {}", records.len()),
+            ];
+            for (index, record) in records.iter().enumerate() {
+                lines.extend([
+                    String::new(),
+                    format!("{}. {}", index + 1, record.title()),
+                    format!("   ID: {}", record.id().as_str()),
+                    format!("   Файл: {}", record.locator().path()),
+                ]);
+            }
+            return lines.join("\n");
+        }
+        let mut lines = vec![format!("records={}", records.len())];
+        lines.extend(
+            records
+                .iter()
+                .map(|record| format!("record={}\ttitle={}", record.id().as_str(), record.title())),
         );
+        lines.join("\n")
     }
-    record.map_or_else(
-        || "found=false".to_owned(),
-        |record| {
-            format!(
-                "found=true\nrecord={}\ntitle={}",
-                record.id().as_str(),
-                record.title()
-            )
-        },
-    )
-}
 
-fn render_records(records: &[crate::domain::CanonicalRecord], format: OutputFormat) -> String {
-    if format == OutputFormat::Json {
-        return pretty_json(json!({
-            "schema_version": 1,
-            "status": "ok",
-            "kind": "related",
-            "record_count": records.len(),
-            "records": records.iter().map(record_json).collect::<Vec<_>>(),
-        }));
+    fn record_json(record: &crate::domain::CanonicalRecord) -> Value {
+        json!({
+            "id": record.id().as_str(),
+            "title": record.title(),
+            "record_kind": record_kind_name(record.kind()),
+            "path": record.locator().path(),
+            "content": record.searchable_content(),
+            "metadata": record.metadata(),
+            "relations": record.relations().iter().map(StableId::as_str).collect::<Vec<_>>(),
+        })
     }
-    if format == OutputFormat::Human {
-        let mut lines = vec![
-            "Связанные записи".to_owned(),
-            format!("  Найдено: {}", records.len()),
-        ];
-        for (index, record) in records.iter().enumerate() {
-            lines.extend([
-                String::new(),
-                format!("{}. {}", index + 1, record.title()),
-                format!("   ID: {}", record.id().as_str()),
-                format!("   Файл: {}", record.locator().path()),
-            ]);
+
+    fn capability_state_json(state: &CapabilityState) -> (&'static str, Option<String>) {
+        match state {
+            CapabilityState::Available { backend } => {
+                ("available", Some(backend_name(*backend).to_owned()))
+            }
+            CapabilityState::Unavailable { reason } => ("unavailable", Some(reason.clone())),
+            CapabilityState::Stale { detail } => ("stale", Some(detail.clone())),
+            CapabilityState::Degraded { detail } => ("degraded", Some(detail.clone())),
         }
-        return lines.join("\n");
     }
-    let mut lines = vec![format!("records={}", records.len())];
-    lines.extend(
-        records
-            .iter()
-            .map(|record| format!("record={}\ttitle={}", record.id().as_str(), record.title())),
-    );
-    lines.join("\n")
-}
 
-fn record_json(record: &crate::domain::CanonicalRecord) -> Value {
-    json!({
-        "id": record.id().as_str(),
-        "title": record.title(),
-        "record_kind": record_kind_name(record.kind()),
-        "path": record.locator().path(),
-        "content": record.searchable_content(),
-        "metadata": record.metadata(),
-        "relations": record.relations().iter().map(StableId::as_str).collect::<Vec<_>>(),
-    })
-}
-
-fn capability_state_json(state: &CapabilityState) -> (&'static str, Option<String>) {
-    match state {
-        CapabilityState::Available { backend } => {
-            ("available", Some(backend_name(*backend).to_owned()))
+    fn human_capability_state(state: &CapabilityState) -> String {
+        match state {
+            CapabilityState::Available { backend } => {
+                format!("доступно ({})", backend_name(*backend))
+            }
+            CapabilityState::Unavailable { reason } => format!("недоступно: {reason}"),
+            CapabilityState::Stale { detail } => format!("устарело: {detail}"),
+            CapabilityState::Degraded { detail } => format!("ограничено: {detail}"),
         }
-        CapabilityState::Unavailable { reason } => ("unavailable", Some(reason.clone())),
-        CapabilityState::Stale { detail } => ("stale", Some(detail.clone())),
-        CapabilityState::Degraded { detail } => ("degraded", Some(detail.clone())),
+    }
+
+    fn human_freshness(value: IndexFreshness) -> &'static str {
+        match value {
+            IndexFreshness::NotConfigured => "не настроен",
+            IndexFreshness::Current => "актуален",
+            IndexFreshness::Stale => "устарел",
+            IndexFreshness::Degraded => "работает с ограничениями",
+        }
+    }
+
+    fn freshness_name(value: IndexFreshness) -> &'static str {
+        match value {
+            IndexFreshness::NotConfigured => "not_configured",
+            IndexFreshness::Current => "current",
+            IndexFreshness::Stale => "stale",
+            IndexFreshness::Degraded => "degraded",
+        }
+    }
+
+    fn capability_name(value: Capability) -> &'static str {
+        match value {
+            Capability::Source => "source",
+            Capability::State => "state",
+            Capability::LexicalRetrieval => "lexical_retrieval",
+            Capability::VectorRetrieval => "vector_retrieval",
+            Capability::CodeMaps => "code_maps",
+            Capability::Symbols => "symbols",
+            Capability::AgentSurface => "agent_surface",
+        }
+    }
+
+    fn backend_name(value: BackendKind) -> &'static str {
+        match value {
+            BackendKind::Mock => "mock",
+            BackendKind::Real => "real",
+        }
+    }
+
+    fn record_kind_name(value: RecordKind) -> &'static str {
+        match value {
+            RecordKind::MarkdownSection => "markdown_section",
+            RecordKind::RegistryRow => "registry_row",
+            RecordKind::CodeMap => "code_map",
+            RecordKind::CodeSymbol => "code_symbol",
+        }
+    }
+
+    fn channel_name(value: RetrievalChannel) -> &'static str {
+        match value {
+            RetrievalChannel::Exact => "exact",
+            RetrievalChannel::Lexical => "lexical",
+            RetrievalChannel::Vector => "vector",
+            RetrievalChannel::CodeMap => "code_map",
+            RetrievalChannel::Symbol => "symbol",
+        }
+    }
+
+    fn pretty_json(value: Value) -> String {
+        serde_json::to_string_pretty(&value).expect("CLI success JSON is serializable")
     }
 }
 
-fn human_capability_state(state: &CapabilityState) -> String {
-    match state {
-        CapabilityState::Available { backend } => format!("доступно ({})", backend_name(*backend)),
-        CapabilityState::Unavailable { reason } => format!("недоступно: {reason}"),
-        CapabilityState::Stale { detail } => format!("устарело: {detail}"),
-        CapabilityState::Degraded { detail } => format!("ограничено: {detail}"),
-    }
-}
+#[cfg(test)]
+mod command_contract_tests {
+    use super::{CommandOutcome, OutputFormat, parse_command, render_outcome};
 
-fn human_freshness(value: IndexFreshness) -> &'static str {
-    match value {
-        IndexFreshness::NotConfigured => "не настроен",
-        IndexFreshness::Current => "актуален",
-        IndexFreshness::Stale => "устарел",
-        IndexFreshness::Degraded => "работает с ограничениями",
-    }
-}
+    #[test]
+    fn parses_a_production_status_command_once_before_dispatch() {
+        let command = parse_command(vec![
+            "status".to_owned(),
+            "documents".to_owned(),
+            "code".to_owned(),
+            "service".to_owned(),
+        ])
+        .expect("typed production command");
 
-fn freshness_name(value: IndexFreshness) -> &'static str {
-    match value {
-        IndexFreshness::NotConfigured => "not_configured",
-        IndexFreshness::Current => "current",
-        IndexFreshness::Stale => "stale",
-        IndexFreshness::Degraded => "degraded",
+        assert_eq!(command.name(), "status");
     }
-}
 
-fn capability_name(value: Capability) -> &'static str {
-    match value {
-        Capability::Source => "source",
-        Capability::State => "state",
-        Capability::LexicalRetrieval => "lexical_retrieval",
-        Capability::VectorRetrieval => "vector_retrieval",
-        Capability::CodeMaps => "code_maps",
-        Capability::Symbols => "symbols",
-        Capability::AgentSurface => "agent_surface",
+    #[test]
+    fn presenter_renders_a_typed_status_outcome_without_runtime_access() {
+        let output = render_outcome(CommandOutcome::status_for_test(), OutputFormat::Technical);
+
+        assert!(output.contains("freshness="));
     }
-}
-
-fn backend_name(value: BackendKind) -> &'static str {
-    match value {
-        BackendKind::Mock => "mock",
-        BackendKind::Real => "real",
-    }
-}
-
-fn record_kind_name(value: RecordKind) -> &'static str {
-    match value {
-        RecordKind::MarkdownSection => "markdown_section",
-        RecordKind::RegistryRow => "registry_row",
-        RecordKind::CodeMap => "code_map",
-        RecordKind::CodeSymbol => "code_symbol",
-    }
-}
-
-fn channel_name(value: RetrievalChannel) -> &'static str {
-    match value {
-        RetrievalChannel::Exact => "exact",
-        RetrievalChannel::Lexical => "lexical",
-        RetrievalChannel::Vector => "vector",
-        RetrievalChannel::CodeMap => "code_map",
-        RetrievalChannel::Symbol => "symbol",
-    }
-}
-
-fn pretty_json(value: Value) -> String {
-    serde_json::to_string_pretty(&value).expect("CLI success JSON is serializable")
 }
