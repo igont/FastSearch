@@ -1,8 +1,8 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
 use super::{
-    cli::{execute_command, production_command, render_outcome, CommandAction},
     OutputFormat,
+    cli::{CommandAction, execute_command, production_command, render_outcome},
 };
 
 const GREEN: &str = "\x1b[32m";
@@ -383,7 +383,7 @@ fn accent_first_line(text: &str, terminal: bool) -> String {
 mod tests {
     use std::io::Cursor;
 
-    use super::{interactive_action, run_interactive_with, CommandAction};
+    use super::{CommandAction, interactive_action, run_interactive_with};
 
     #[test]
     fn paths_with_spaces_are_kept_as_complete_prompt_values() {
