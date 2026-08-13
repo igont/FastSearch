@@ -56,6 +56,139 @@ use crate::{
 const E5_IDENTITY: &str = "multilingual-e5-small@614241f";
 static RUN_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+mod security {
+    use super::*;
+
+    /// Owns the service-root admission, pinned handles and exact run cleanup policy.
+    pub(super) struct ServiceRunBoundary {
+        service_root: PathBuf,
+        owned_runs: Mutex<BTreeMap<String, OwnedRun>>,
+        _path_guards: PathGuards,
+    }
+
+    impl ServiceRunBoundary {
+        pub(super) fn open(
+            document_root: &Path,
+            code_root: &Path,
+            requested_service_root: &Path,
+        ) -> Result<Self, FastSearchError> {
+            validate_service_path_before_write(document_root, code_root, requested_service_root)?;
+            let (service_root, path_guards) =
+                securely_create_and_pin_service(requested_service_root)?;
+            validate_service_containment(document_root, code_root, &service_root)?;
+            Ok(Self {
+                service_root,
+                owned_runs: Mutex::new(BTreeMap::new()),
+                _path_guards: path_guards,
+            })
+        }
+
+        pub(super) fn service_root(&self) -> &Path {
+            &self.service_root
+        }
+
+        pub(super) fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
+            validate_marker(marker)?;
+            let runs = self.service_root.join("runs");
+            ensure_no_reparse_points(&runs)?;
+            fs::create_dir_all(&runs).map_err(|error| {
+                failure(ErrorKind::StateFailure, "create runs directory", error)
+            })?;
+            ensure_no_reparse_points(&runs)?;
+            let run = runs.join(marker);
+            fs::create_dir(&run)
+                .map_err(|error| failure(ErrorKind::StateFailure, "create run directory", error))?;
+            let guard = match RunDirectoryGuard::acquire(&run) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    let _ = fs::remove_dir(&run);
+                    return Err(error);
+                }
+            };
+            let token = format!(
+                "{}-{}",
+                std::process::id(),
+                RUN_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
+            );
+            if let Err(error) = write_new_run_markers(&run, &token) {
+                let _ = fs::remove_file(run.join("schema.marker"));
+                let _ = fs::remove_file(run.join("owner.marker"));
+                let _ = guard.mark_for_delete(&run);
+                drop(guard);
+                return Err(error);
+            }
+            self.owned_runs
+                .lock()
+                .map_err(|_| {
+                    FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
+                })?
+                .insert(marker.to_owned(), OwnedRun { token, guard });
+            Ok(run)
+        }
+
+        pub(super) fn cleanup_run(&self, marker: &str) -> Result<bool, FastSearchError> {
+            validate_marker(marker)?;
+            let run = self.service_root.join("runs").join(marker);
+            if !run.exists() {
+                return Ok(false);
+            }
+            let marker_path = run.join("owner.marker");
+            let mut owned = self.owned_runs.lock().map_err(|_| {
+                FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
+            })?;
+            let owned_run = owned.get(marker).ok_or_else(|| {
+                FastSearchError::new(
+                    ErrorKind::StateFailure,
+                    "run directory is not owned by this runtime invocation",
+                )
+            })?;
+            let observed = fs::read_to_string(&marker_path)
+                .map_err(|error| failure(ErrorKind::StateFailure, "read run marker", error))?;
+            if observed != owned_run.token {
+                return Err(FastSearchError::new(
+                    ErrorKind::StateFailure,
+                    "run cleanup marker does not match the exact requested owner",
+                ));
+            }
+            ensure_no_reparse_points(&run)?;
+            let schema_path = run.join("schema.marker");
+            if fs::read_to_string(&schema_path)
+                .map_err(|error| failure(ErrorKind::StateFailure, "read run schema", error))?
+                != "fastsearch-run-v1"
+            {
+                return Err(FastSearchError::new(
+                    ErrorKind::StateFailure,
+                    "run cleanup schema does not match fastsearch-run-v1",
+                ));
+            }
+            let entries = fs::read_dir(&run)
+                .map_err(|error| {
+                    failure(ErrorKind::StateFailure, "read exact run directory", error)
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| failure(ErrorKind::StateFailure, "read exact run entry", error))?;
+            if entries.iter().any(|entry| {
+                !matches!(
+                    entry.file_name().to_str(),
+                    Some("owner.marker" | "schema.marker")
+                )
+            }) {
+                return Err(FastSearchError::new(
+                    ErrorKind::StateFailure,
+                    "run cleanup refuses unknown files or directories",
+                ));
+            }
+            fs::remove_file(&marker_path)
+                .map_err(|error| failure(ErrorKind::StateFailure, "remove owner marker", error))?;
+            fs::remove_file(&schema_path)
+                .map_err(|error| failure(ErrorKind::StateFailure, "remove schema marker", error))?;
+            owned_run.guard.mark_for_delete(&run)?;
+            owned.remove(marker);
+            Ok(true)
+        }
+    }
+}
+
 /// Replaceable machine paths for the one full production composition.
 #[derive(Clone, Debug)]
 pub struct ProductionConfig {
@@ -89,7 +222,7 @@ impl ProductionConfig {
 
 /// Filesystem + SQLite + Tantivy + local E5 + maps + symbols + E1 fusion.
 pub struct ProductionRuntime {
-    service_root: PathBuf,
+    service: security::ServiceRunBoundary,
     documents: FilesystemSource,
     maps: CodeMapSource,
     symbols: SymbolSource,
@@ -97,8 +230,6 @@ pub struct ProductionRuntime {
     lexical: TantivyLexical,
     vector: LocalE5Vector,
     vector_configured: bool,
-    owned_runs: Mutex<BTreeMap<String, OwnedRun>>,
-    _path_guards: PathGuards,
 }
 
 impl std::fmt::Debug for ProductionRuntime {
@@ -113,25 +244,22 @@ impl ProductionRuntime {
     pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
         let document_root = canonical_directory(&config.document_root, "document root")?;
         let code_root = canonical_directory(&config.code_root, "code root")?;
-        validate_service_path_before_write(&document_root, &code_root, &config.service_root)?;
-        let (service_root, path_guards) = securely_create_and_pin_service(&config.service_root)?;
-        validate_service_containment(&document_root, &code_root, &service_root)?;
+        let service =
+            security::ServiceRunBoundary::open(&document_root, &code_root, &config.service_root)?;
         let vector_configured = config.e5_root.is_some();
         let model_root = config
             .e5_root
-            .unwrap_or_else(|| service_root.join("unconfigured-e5"));
+            .unwrap_or_else(|| service.service_root().join("unconfigured-e5"));
 
         Ok(Self {
-            service_root: service_root.clone(),
+            state: SqliteStateStore::open(service.service_root().join("state.sqlite"))?,
+            lexical: TantivyLexical::open(service.service_root().join("lexical"))?,
+            service,
             documents: FilesystemSource::new(document_root.clone()),
             maps: CodeMapSource::new(document_root),
             symbols: SymbolSource::new(LogicalRootId::parse("code-fastsearch")?, code_root),
-            state: SqliteStateStore::open(service_root.join("state.sqlite"))?,
-            lexical: TantivyLexical::open(service_root.join("lexical"))?,
             vector: LocalE5Vector::open(model_root, E5_IDENTITY),
             vector_configured,
-            owned_runs: Mutex::new(BTreeMap::new()),
-            _path_guards: path_guards,
         })
     }
 
@@ -145,101 +273,12 @@ impl ProductionRuntime {
 
     /// Creates an exact run-owned directory used by acceptance jobs and batch callers.
     pub fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
-        validate_marker(marker)?;
-        let runs = self.service_root.join("runs");
-        ensure_no_reparse_points(&runs)?;
-        fs::create_dir_all(&runs)
-            .map_err(|error| failure(ErrorKind::StateFailure, "create runs directory", error))?;
-        ensure_no_reparse_points(&runs)?;
-        let run = runs.join(marker);
-        fs::create_dir(&run)
-            .map_err(|error| failure(ErrorKind::StateFailure, "create run directory", error))?;
-        let guard = match RunDirectoryGuard::acquire(&run) {
-            Ok(guard) => guard,
-            Err(error) => {
-                let _ = fs::remove_dir(&run);
-                return Err(error);
-            }
-        };
-        let token = format!(
-            "{}-{}",
-            std::process::id(),
-            RUN_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        if let Err(error) = write_new_run_markers(&run, &token) {
-            let _ = fs::remove_file(run.join("schema.marker"));
-            let _ = fs::remove_file(run.join("owner.marker"));
-            let _ = guard.mark_for_delete(&run);
-            drop(guard);
-            return Err(error);
-        }
-        self.owned_runs
-            .lock()
-            .map_err(|_| {
-                FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
-            })?
-            .insert(marker.to_owned(), OwnedRun { token, guard });
-        Ok(run)
+        self.service.record_run_marker(marker)
     }
 
     /// Removes only a directory whose marker content exactly matches the requested run.
     pub fn cleanup_run(&self, marker: &str) -> Result<bool, FastSearchError> {
-        validate_marker(marker)?;
-        let run = self.service_root.join("runs").join(marker);
-        if !run.exists() {
-            return Ok(false);
-        }
-        let marker_path = run.join("owner.marker");
-        let mut owned = self.owned_runs.lock().map_err(|_| {
-            FastSearchError::new(ErrorKind::StateFailure, "run ownership lock poisoned")
-        })?;
-        let owned_run = owned.get(marker).ok_or_else(|| {
-            FastSearchError::new(
-                ErrorKind::StateFailure,
-                "run directory is not owned by this runtime invocation",
-            )
-        })?;
-        let observed = fs::read_to_string(&marker_path)
-            .map_err(|error| failure(ErrorKind::StateFailure, "read run marker", error))?;
-        if observed != owned_run.token {
-            return Err(FastSearchError::new(
-                ErrorKind::StateFailure,
-                "run cleanup marker does not match the exact requested owner",
-            ));
-        }
-        ensure_no_reparse_points(&run)?;
-        let schema_path = run.join("schema.marker");
-        if fs::read_to_string(&schema_path)
-            .map_err(|error| failure(ErrorKind::StateFailure, "read run schema", error))?
-            != "fastsearch-run-v1"
-        {
-            return Err(FastSearchError::new(
-                ErrorKind::StateFailure,
-                "run cleanup schema does not match fastsearch-run-v1",
-            ));
-        }
-        let entries = fs::read_dir(&run)
-            .map_err(|error| failure(ErrorKind::StateFailure, "read exact run directory", error))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| failure(ErrorKind::StateFailure, "read exact run entry", error))?;
-        if entries.iter().any(|entry| {
-            !matches!(
-                entry.file_name().to_str(),
-                Some("owner.marker" | "schema.marker")
-            )
-        }) {
-            return Err(FastSearchError::new(
-                ErrorKind::StateFailure,
-                "run cleanup refuses unknown files or directories",
-            ));
-        }
-        fs::remove_file(&marker_path)
-            .map_err(|error| failure(ErrorKind::StateFailure, "remove owner marker", error))?;
-        fs::remove_file(&schema_path)
-            .map_err(|error| failure(ErrorKind::StateFailure, "remove schema marker", error))?;
-        owned_run.guard.mark_for_delete(&run)?;
-        owned.remove(marker);
-        Ok(true)
+        self.service.cleanup_run(marker)
     }
 
     fn project(&mut self, rebuild: bool) -> Result<LifecycleStatus, FastSearchError> {
