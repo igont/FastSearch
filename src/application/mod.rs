@@ -1,4 +1,4 @@
-//! Application composition for the real document runtime.
+//! Application coordination and production compositions for FastSearch.
 
 use std::{fs, path::Path};
 

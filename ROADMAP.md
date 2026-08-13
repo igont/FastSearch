@@ -6,13 +6,15 @@ FastSearch создаётся как один локальный инструм�
 
 Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Подробные ветки, листья, команды и ownership определяются только перед запуском соответствующего дерева по фактическому состоянию репозитория.
 
-## Фактическое состояние на 12.08.2026
+## Фактическое состояние на 13.08.2026
 
 - Дерево 1 принято как контрактный baseline.
 - Дерево 2 принято и слито в `main` ревизией `adc9ad95842047bf5b6c47cba127d7f40eeb09c9`.
 - Переходная коррекция `77a05be945970a371537ea5c84e34bf11aaa8f52` закрывает admission реального Obsidian-хранилища: параметризованный root, полные `.gitignore`-правила, inline frontmatter collections, локальная исключённая зона `.cfknowledge` и no-op projection update.
 - `C:\Users\Igor\Downloads\Obsidian` является проверенным представительным документальным корпусом, но не частью runtime-конфигурации и не захардкожен в коде или тестах.
-- Дерево 3 ещё не материализовано. До его запуска действуют фактический handoff [evidence/dt2-dt3-handoff.md](evidence/dt2-dt3-handoff.md) и повторное исследование текущего baseline; первым разрешённым горизонтом является измерительный/discovery-лист A1.
+- Дерево 3 принято и слито в `main` ревизией `5b25f5bf235309761f4376dc4143b246c8409c66`. Оно добавило named document/code roots, локальный E5 vector contour с честным fallback, `.cfmap.md`, Rust/Python structural symbols, deterministic fusion и единую production-композицию CLI.
+- Точный локальный baseline DT4 — `5b25f5bf235309761f4376dc4143b246c8409c66`. Обычная test suite, formatting, Clippy и release build на нём проходят; cache-gated E5 проверки требуют отдельно переданного локального model root и не считаются повторно подтверждёнными текущим запуском.
+- Дерево 4 ещё не материализовано. Его фактический вход, уточнённый контур и открытые решения зафиксированы в [evidence/dt3-dt4-handoff.md](evidence/dt3-dt4-handoff.md). До materialization запрещено считать выбранными MCP crate/version, protocol DTO, ownership indexing-команд, concurrency model и числовые resource limits.
 
 ## Общие правила движения
 
@@ -68,7 +70,7 @@ TODO блокирует закрытие текущего дерева, если
 | `SourcePort` и `DocumentParser` | Fixtures и mock records | Реальный обход файлов, Markdown sections, frontmatter и TSV rows | 2 |
 | `StateStore`, `LexicalIndex`, `Ranker` | In-memory state и предопределённая выдача | Hash lifecycle, SQLite, exact lookup, FTS и режимы ranking | 2 |
 | `VectorIndex`, `CodeMapService`, `SymbolExtractor` | Отключённые либо mock capabilities | Реальные vectors, карты, symbols и единая выдача | 3 |
-| `AgentTransport` | Внутренний facade без реального протокола | Реальный агентский transport поверх того же core | 4 |
+| `AgentSurface` и `Capability::AgentSurface` | Общий application port без protocol adapter; capability не объявлена доступной | Локальный MCP adapter поверх той же production-композиции, typed DTO и наблюдаемый transport status | 4 |
 
 Незапланированное изменение этой таблицы требует нового evidence и проверки влияния на следующие деревья.
 
@@ -205,50 +207,82 @@ TODO блокирует закрытие текущего дерева, если
 - symbols имеют стабильный source locator;
 - относящиеся к навигации runtime-mocks удалены.
 
+### Фактически принято
+
+- `AgentSurface` является общей application-границей `search/get/related/status/index_status`, а не transport-реализацией;
+- `ProductionRuntime` соединяет SQLite authority, Tantivy, optional local E5, maps, symbols и fusion;
+- CLI открывает production runtime и не содержит отдельной поисковой логики;
+- E5 model artifacts остаются внешним локальным cache, проверяемым по immutable manifest, и не входят в исполняемый файл;
+- test-only `BackendKind::Mock` и `ReferenceFixture` сохранены как oracle, но production mock route отсутствует;
+- compiler-resolved references, дополнительные языки, Linux qualification и MCP transport не заявлены результатом DT3.
+
 ## Дерево 4 — Агентский доступ и готовый инструмент
 
 ### Образ результата
 
-Собранный механизм получает надёжный внешний вход. Человек и агент обращаются к одному core, видят одинаковое поведение и могут понять состояние системы при нормальной работе и отказах.
+Принятый retrieval core получает узкий локальный MCP-вход. CLI и MCP используют одну production-композицию и возвращают семантически одинаковые результаты, ошибки, provenance и freshness, хотя их текстовое представление различается. Инструмент запускается и диагностируется без знания внутренних каталогов индекса.
 
 ### Вход
 
-- принятый общий retrieval core;
-- завершённые document, vector, map и symbol adapters;
-- regression dataset и измеренные baseline-показатели;
-- явный перечень оставшихся TODO и mock capabilities.
+- exact local `main` baseline `5b25f5bf235309761f4376dc4143b246c8409c66` и прочитанный DT3 archive/handoff;
+- принятые `AgentSurface`, `ProductionConfig` и `ProductionRuntime` без transport-specific типов внутри domain;
+- завершённые document, lexical, optional vector, map и symbol adapters;
+- regression dataset, DT3 release evidence и повторная проверка доступности локального E5 cache;
+- инвентаризация test-only mocks, protocol gaps, устаревших комментариев и реально открытых TODO;
+- принятые до implementation решения по transport, DTO, startup configuration, indexing ownership, concurrency и числовым resource limits.
 
 ### Что делает дерево
 
-- реализует реальный MCP поверх общего core;
-- проверяет паритет CLI и MCP;
-- ограничивает запросы, объём результатов и ресурсы;
-- закрывает failure modes, конфигурацию и credentials boundary;
-- измеряет производительность и контекстную экономию;
-- готовит воспроизводимую сборку одного бинарника;
-- удаляет либо изолирует все runtime-заглушки.
+- добавляет в тот же executable локальный MCP server; базовый кандидат transport — `stdio`, а любой listener/remote contour требует отдельного evidence и replan;
+- преобразует MCP input/output через отдельные typed protocol DTO, не сериализуя domain-модель как случайный публичный wire contract;
+- предоставляет agent tools для `search`, `get`, `related` и `status` поверх того же `AgentSurface`/`ProductionRuntime`;
+- определяет indexing ownership явно: `update/rebuild` остаются operator CLI либо становятся отдельными maintenance tools, но никогда не выполняются скрыто внутри каждого search request;
+- проверяет semantic parity CLI/MCP на общей contract suite: records, ordering, channels, provenance, freshness и structured errors;
+- вводит измеренные ограничения query length, result count, payload bytes, execution time и одновременно обслуживаемой работы; truncation и cancellation наблюдаемы;
+- фиксирует startup configuration для document/code/service/model roots, не возвращает machine-specific absolute paths и не требует credentials для локального `stdio` contour;
+- проверяет lifecycle долгоживущего процесса: startup, повторные requests, stale/degraded recovery, provider absence/failure и controlled shutdown;
+- готовит воспроизводимую Windows-first сборку, checksum, smoke из чистого каталога и документацию запуска MCP-клиентом;
+- сохраняет optional model cache внешним immutable artifact: «один бинарник» означает один FastSearch executable, а не встраивание весов E5;
+- подтверждает отсутствие production mock route и объявляет `Capability::AgentSurface` доступной только при реально запущенном protocol adapter.
 
 ### Какие проблемы решает
 
-- предоставляет стабильный агентский интерфейс;
-- делает отказы и деградацию наблюдаемыми;
-- подтверждает пригодность инструмента для регулярного использования;
-- закрывает release и эксплуатационные gates.
+- предоставляет стабильный локальный агентский интерфейс без дублирования retrieval logic;
+- устраняет дорогой shell/process и текстовый parsing boundary для каждого agent request;
+- делает protocol, indexing, provider и storage failures различимыми и наблюдаемыми;
+- ограничивает контекст и ресурсы на protocol boundary, а не полагается на дисциплину клиента;
+- подтверждает пригодность Windows-сборки для регулярного локального использования;
+- закрывает воспроизводимые release и эксплуатационные gates в заявленном platform scope.
 
 ### Какие проблемы не решает
 
 - не превращает FastSearch в RAG-chat;
-- не добавляет отдельную внешнюю поисковую платформу без evidence;
+- не добавляет HTTP service, multi-user daemon, cloud inference, auth subsystem или отдельную внешнюю поисковую платформу без нового evidence;
 - не расширяет scope новыми пользовательскими функциями;
 - не переоткрывает принятые контракты без регрессии или нового риска.
+- не обещает compiler-perfect references, semantic refactoring, dirty-buffer overlay, новые языки или Linux qualification;
+- не встраивает model weights в executable и не превращает optional E5 в обязательное условие lexical/code navigation.
 
 ### Состояние на завершении
 
-- CLI и MCP проходят общую contract suite;
-- обязательные runtime-capabilities используют реальные adapters;
-- отсутствие optional provider даёт штатную деградацию;
-- performance и bounded-resource gates имеют evidence;
-- выпускается проверенный бинарник и документация запуска.
+- локальный MCP client поднимает server, выполняет `search/get/related/status` и корректно завершает процесс;
+- CLI и MCP проходят общую semantic contract suite, включая ordering, provenance, freshness и typed failures;
+- startup configuration однозначна, machine paths не протекают в protocol payload, скрытых index mutations нет;
+- обязательные runtime-capabilities используют реальные adapters, а `AgentSurface` честно виден как Real только в MCP composition;
+- отсутствие optional provider даёт штатную деградацию без потери exact/FTS/maps/symbols;
+- query/result/payload/time/concurrency limits и context-economy measurements имеют причинное evidence;
+- выпускается проверенный Windows executable с checksum, fresh-directory smoke и инструкцией подключения локального MCP-клиента.
+
+### Gate materialization
+
+Перед созданием динамического дерева 4 требуется короткий bounded discovery, который не меняет product-код:
+
+1. выбрать и зафиксировать protocol/SDK version и проверить минимальный Rust `stdio` handshake на текущем toolchain;
+2. определить wire DTO и точное отображение domain errors/status без потери provenance;
+3. согласовать startup configuration и ownership `index update/rebuild`;
+4. выбрать последовательную либо явно синхронизированную модель долгоживущего runtime;
+5. измерить baseline payload/latency и только после этого назначить числовые limits;
+6. подтвердить доступность принятого E5 cache либо заранее классифицировать vector acceptance как отдельный cache-gated contour.
 
 ## Переходы между деревьями
 
@@ -261,4 +295,4 @@ TODO блокирует закрытие текущего дерева, если
 
 Следующее дерево не наследует предположения как факты. Перед его материализацией проверяются фактический baseline, актуальность TODO, оставшиеся mocks и результаты предыдущих спайков. Если изменились результат, scope, ownership, dependency, публичный контракт либо acceptance gate, контур следующего дерева пересматривается до запуска.
 
-Фактический переход DT2→DT3 зафиксирован в `evidence/dt2-dt3-handoff.md`. Он отделяет уже доказанные контракты документального поиска от измерительных и архитектурных решений, которые должны приниматься только в дереве 3.
+Фактический переход DT2→DT3 зафиксирован в `evidence/dt2-dt3-handoff.md`. Фактический переход DT3→DT4 зафиксирован в `evidence/dt3-dt4-handoff.md`: он отделяет принятый retrieval/runtime baseline от ещё не выбранного protocol и release contour.

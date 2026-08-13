@@ -1,13 +1,14 @@
-//! Общий core FastSearch.
-//!
-//! На этом этапе crate намеренно не предоставляет поисковые возможности.
+//! Общий core FastSearch: domain contracts, adapters и application compositions.
 
 pub mod adapters;
 pub mod application;
 pub mod domain;
 pub mod ports;
 
-/// Возвращает наблюдаемый статус минимального каркаса приложения.
+/// Исторический DT1 diagnostic, сохранённый до release-инвентаризации публичной поверхности.
+///
+/// Он не описывает состояние [`application::ProductionRuntime`]; production callers должны
+/// использовать `AgentSurface::status` и `AgentSurface::index_status`.
 #[must_use]
 pub const fn scaffold_status() -> &'static str {
     "FastSearch scaffold: search capability is not configured."

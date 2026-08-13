@@ -64,7 +64,7 @@ pub enum OutputFormat {
     Json,
 }
 
-/// Runs the single real document CLI composition.
+/// Runs the production semantic/code CLI and the retained DT2 compatibility commands.
 pub fn execute_cli(arguments: Vec<String>) -> Result<String, CliError> {
     execute_cli_formatted(arguments, OutputFormat::Technical)
 }

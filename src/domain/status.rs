@@ -87,7 +87,7 @@ impl LifecycleStatus {
     }
 }
 
-/// Статус одной capability для CLI, будущего agent surface и tests.
+/// Статус одной capability для CLI, protocol adapters и tests.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilityStatus {
     capability: Capability,

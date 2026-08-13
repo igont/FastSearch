@@ -1,6 +1,6 @@
 use super::{CanonicalRecord, ErrorKind, FastSearchError, IndexFreshness, StableId};
 
-/// Режим представления результата; ranking реализуется adapters позднее.
+/// Режим ranking общей retrieval/fusion composition.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SearchMode {
     #[default]

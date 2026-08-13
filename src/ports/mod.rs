@@ -126,7 +126,7 @@ pub trait SymbolPort {
     fn find_symbols(&self, query: &SearchQuery) -> Result<Vec<CanonicalRecord>, FastSearchError>;
 }
 
-/// Единая граница для будущих CLI и agent transports.
+/// Единая application-граница для CLI и protocol adapters.
 pub trait AgentSurface {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError>;
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError>;
