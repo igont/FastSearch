@@ -7,7 +7,7 @@ use crate::{
     },
     ports::AgentSurface,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const USAGE: &str = "usage:\n  fastsearch init <documents> <code> <service> [e5-root]\n  fastsearch index update <documents> <code> <service> [e5-root]\n  fastsearch index rebuild <documents> <code> <service> [e5-root]\n  fastsearch search <documents> <code> <service> <balanced|current|design> <query> [e5-root]\n  fastsearch get <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch related <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch status <documents> <code> <service> [e5-root]";
 
@@ -469,13 +469,16 @@ fn parse_mode(value: &str) -> Result<SearchMode, CliError> {
     }
 }
 
-pub(super) use presenters::render_outcome;
+pub(in crate::application) use presenters::render_outcome;
 
 /// Pure CLI presentation: typed outcomes in, text out. It owns no runtime or filesystem work.
 mod presenters {
     use super::*;
 
-    pub(super) fn render_outcome(outcome: CommandOutcome, format: OutputFormat) -> String {
+    pub(in crate::application) fn render_outcome(
+        outcome: CommandOutcome,
+        format: OutputFormat,
+    ) -> String {
         match outcome {
             CommandOutcome::Status {
                 status,
@@ -794,7 +797,7 @@ mod presenters {
 
 #[cfg(test)]
 mod command_contract_tests {
-    use super::{CommandOutcome, OutputFormat, parse_command, render_outcome};
+    use super::{parse_command, render_outcome, CommandOutcome, OutputFormat};
 
     #[test]
     fn parses_a_production_status_command_once_before_dispatch() {
