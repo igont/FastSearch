@@ -826,6 +826,16 @@ impl ProductionRuntime {
         }
     }
 
+    fn search_coordinator(&self) -> SearchCoordinator<'_> {
+        SearchCoordinator {
+            lexical: &self.lexical,
+            vector: &self.vector,
+            vector_configured: self.vector_configured,
+            maps: &self.maps,
+            symbols: &self.symbols,
+        }
+    }
+
     fn combined_records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
         let mut records = self.maps.records()?;
         records.extend(self.symbols.records()?);
@@ -839,14 +849,7 @@ impl ProductionRuntime {
 
 impl AgentSurface for ProductionRuntime {
     fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        SearchCoordinator {
-            lexical: &self.lexical,
-            vector: &self.vector,
-            vector_configured: self.vector_configured,
-            maps: &self.maps,
-            symbols: &self.symbols,
-        }
-        .search(query, self.status())
+        self.search_coordinator().search(query, self.status())
     }
 
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
@@ -854,14 +857,8 @@ impl AgentSurface for ProductionRuntime {
     }
 
     fn related(&self, query: &RelatedQuery) -> Result<Vec<CanonicalRecord>, FastSearchError> {
-        SearchCoordinator {
-            lexical: &self.lexical,
-            vector: &self.vector,
-            vector_configured: self.vector_configured,
-            maps: &self.maps,
-            symbols: &self.symbols,
-        }
-        .related(self.combined_records()?, query)
+        self.search_coordinator()
+            .related(self.combined_records()?, query)
     }
 
     fn status(&self) -> Vec<CapabilityStatus> {
