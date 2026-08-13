@@ -210,9 +210,9 @@ fn real_cli_accepts_an_arbitrary_source_root_with_service_state_inside_its_reser
 
 #[test]
 fn fault_flag_is_literal_final_update_only_and_absent_from_normal_help() {
-    let help = run(&args(&[]));
-    assert_eq!(help.status.code(), Some(2));
-    assert!(!String::from_utf8_lossy(&help.stderr).contains("--test-fail-projection"));
+    let help = run(&args(&["--help"]));
+    assert_eq!(help.status.code(), Some(0));
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("--test-fail-projection"));
 
     for invalid in [
         args(&["init", "--test-fail-projection", "source", "service"]),

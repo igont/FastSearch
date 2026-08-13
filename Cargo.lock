@@ -821,6 +821,7 @@ dependencies = [
  "fastembed",
  "ignore",
  "rusqlite",
+ "serde_json",
  "sha2",
  "tantivy",
  "tree-sitter",
