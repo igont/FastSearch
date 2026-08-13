@@ -67,7 +67,7 @@ mod security {
     }
 
     impl ServiceRunBoundary {
-        pub(super) fn open(
+        pub(super) fn admit_and_pin(
             document_root: &Path,
             code_root: &Path,
             requested_service_root: &Path,
@@ -244,8 +244,11 @@ impl ProductionRuntime {
     pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
         let document_root = canonical_directory(&config.document_root, "document root")?;
         let code_root = canonical_directory(&config.code_root, "code root")?;
-        let service =
-            security::ServiceRunBoundary::open(&document_root, &code_root, &config.service_root)?;
+        let service = security::ServiceRunBoundary::admit_and_pin(
+            &document_root,
+            &code_root,
+            &config.service_root,
+        )?;
         let vector_configured = config.e5_root.is_some();
         let model_root = config
             .e5_root
