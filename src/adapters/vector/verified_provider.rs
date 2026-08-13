@@ -8,8 +8,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Read,
     path::Path,
-    sync::Mutex,
 };
+
+#[cfg(test)]
+use std::sync::Mutex;
 
 #[cfg(windows)]
 use std::os::windows::{
