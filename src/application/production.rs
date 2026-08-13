@@ -1,36 +1,6 @@
 //! The single full production composition for semantic and code navigation.
 
-use std::{
-    collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-#[cfg(windows)]
-use std::{mem::size_of, os::windows::ffi::OsStrExt};
-
-#[cfg(all(test, windows))]
-use std::sync::{Arc, Barrier, OnceLock};
-
-#[cfg(windows)]
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
-    Storage::FileSystem::{
-        CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-        FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_LIST_DIRECTORY, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
-        FileDispositionInfo, GetFileInformationByHandleEx, OPEN_EXISTING,
-        SetFileInformationByHandle,
-    },
-};
-
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 use crate::{
     adapters::{
@@ -54,10 +24,40 @@ use crate::{
 };
 
 const E5_IDENTITY: &str = "multilingual-e5-small@614241f";
-static RUN_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 mod security {
-    use super::*;
+    use std::{
+        collections::BTreeMap,
+        fs::{self, OpenOptions},
+        io::Write,
+        path::{Path, PathBuf},
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
+
+    use crate::domain::{ErrorKind, FastSearchError};
+
+    #[cfg(windows)]
+    use std::{mem::size_of, os::windows::ffi::OsStrExt};
+
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
+
+    #[cfg(windows)]
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
+        Storage::FileSystem::{
+            CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+            FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_LIST_DIRECTORY, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
+            FileDispositionInfo, GetFileInformationByHandleEx, OPEN_EXISTING,
+            SetFileInformationByHandle,
+        },
+    };
+
+    static RUN_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
     /// Owns the service-root admission, pinned handles and exact run cleanup policy.
     pub(super) struct ServiceRunBoundary {
@@ -187,6 +187,207 @@ mod security {
             Ok(true)
         }
     }
+
+    fn validate_service_containment(
+        documents: &Path,
+        code: &Path,
+        service: &Path,
+    ) -> Result<(), FastSearchError> {
+        let overlaps = service.starts_with(documents)
+            || service.starts_with(code)
+            || documents.starts_with(service)
+            || code.starts_with(service);
+        let allowed = service
+            .strip_prefix(documents)
+            .ok()
+            .is_some_and(is_exact_reserved_descendant)
+            || service
+                .strip_prefix(code)
+                .ok()
+                .is_some_and(is_exact_reserved_descendant);
+        if overlaps && !allowed {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "service root may overlap a source root only inside the reserved .cfknowledge zone",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_service_path_before_write(
+        documents: &Path,
+        code: &Path,
+        requested: &Path,
+    ) -> Result<(), FastSearchError> {
+        let requested = absolute_service_path(requested)?;
+        ensure_no_reparse_points(&requested)?;
+        let requested = canonicalize_existing_ancestor(&requested)?;
+        ensure_no_reparse_points(&requested)?;
+        validate_service_containment(documents, code, &requested)
+    }
+
+    fn absolute_service_path(requested: &Path) -> Result<PathBuf, FastSearchError> {
+        if requested.is_absolute() {
+            Ok(requested.to_path_buf())
+        } else {
+            std::env::current_dir()
+                .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))
+                .map(|current| current.join(requested))
+        }
+    }
+
+    fn canonicalize_existing_ancestor(path: &Path) -> Result<PathBuf, FastSearchError> {
+        let mut missing = Vec::new();
+        let mut ancestor = path;
+        while !ancestor.exists() {
+            let name = ancestor.file_name().ok_or_else(|| {
+                FastSearchError::new(ErrorKind::InvalidContent, "service root has no existing ancestor")
+            })?;
+            missing.push(name.to_os_string());
+            ancestor = ancestor.parent().ok_or_else(|| {
+                FastSearchError::new(ErrorKind::InvalidContent, "service root has no existing ancestor")
+            })?;
+        }
+        let mut resolved = ancestor.canonicalize().map_err(|error| {
+            failure(ErrorKind::SourceFailure, "canonicalize service ancestor", error)
+        })?;
+        for name in missing.into_iter().rev() {
+            resolved.push(name);
+        }
+        Ok(resolved)
+    }
+
+    fn is_exact_reserved_descendant(relative: &Path) -> bool {
+        let parts = relative.components().collect::<Vec<_>>();
+        parts.len() == 2
+            && parts[0].as_os_str() == ".cfknowledge"
+            && matches!(parts[1], std::path::Component::Normal(_))
+    }
+
+    fn ensure_no_reparse_points(path: &Path) -> Result<(), FastSearchError> {
+        let mut current = PathBuf::new();
+        for component in path.components() {
+            current.push(component.as_os_str());
+            if !current.exists() {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&current)
+                .map_err(|error| failure(ErrorKind::SourceFailure, "inspect service path", error))?;
+            #[cfg(windows)]
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err(FastSearchError::new(
+                    ErrorKind::InvalidContent,
+                    "service root path contains a reparse point",
+                ));
+            }
+            #[cfg(not(windows))]
+            if metadata.file_type().is_symlink() {
+                return Err(FastSearchError::new(
+                    ErrorKind::InvalidContent,
+                    "service root path contains a symbolic link",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_marker(marker: &str) -> Result<(), FastSearchError> {
+        if marker.is_empty()
+            || marker.len() > 128
+            || !marker.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidIdentifier,
+                "run marker must be 1..128 ASCII letters, digits, '-' or '_'",
+            ));
+        }
+        Ok(())
+    }
+
+    fn write_new_run_markers(run: &Path, token: &str) -> Result<(), FastSearchError> {
+        let mut owner = OpenOptions::new().write(true).create_new(true).open(run.join("owner.marker"))
+            .map_err(|error| failure(ErrorKind::StateFailure, "create run marker", error))?;
+        owner.write_all(token.as_bytes())
+            .map_err(|error| failure(ErrorKind::StateFailure, "write run marker", error))?;
+        let mut schema = OpenOptions::new().write(true).create_new(true).open(run.join("schema.marker"))
+            .map_err(|error| failure(ErrorKind::StateFailure, "create run schema", error))?;
+        schema.write_all(b"fastsearch-run-v1")
+            .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))
+    }
+
+    struct OwnedRun { token: String, guard: RunDirectoryGuard }
+
+    #[cfg(windows)]
+    struct OwnedDirectoryHandle(HANDLE);
+    #[cfg(windows)]
+    impl Drop for OwnedDirectoryHandle { fn drop(&mut self) { unsafe { CloseHandle(self.0) }; } }
+    #[cfg(windows)]
+    struct RunDirectoryGuard(OwnedDirectoryHandle);
+    #[cfg(windows)]
+    impl RunDirectoryGuard {
+        fn acquire(path: &Path) -> Result<Self, FastSearchError> {
+            let handle = open_directory_handle(path, FILE_LIST_DIRECTORY | DELETE, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)?;
+            let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
+            let inspected = unsafe { GetFileInformationByHandleEx(handle.0, FileAttributeTagInfo, (&raw mut attributes).cast(), size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32) };
+            if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(FastSearchError::new(ErrorKind::InvalidContent, "run directory is or became a reparse point")); }
+            Ok(Self(handle))
+        }
+        fn mark_for_delete(&self, _path: &Path) -> Result<(), FastSearchError> {
+            let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+            let deleted = unsafe { SetFileInformationByHandle(self.0.0, FileDispositionInfo, (&raw const disposition).cast(), size_of::<FILE_DISPOSITION_INFO>() as u32) };
+            if deleted == 0 { return Err(failure(ErrorKind::StateFailure, "mark exact run directory for deletion", std::io::Error::last_os_error())); }
+            Ok(())
+        }
+    }
+    #[cfg(not(windows))] struct RunDirectoryGuard;
+    #[cfg(not(windows))] impl RunDirectoryGuard { fn acquire(_path: &Path) -> Result<Self, FastSearchError> { Ok(Self) } fn mark_for_delete(&self, path: &Path) -> Result<(), FastSearchError> { fs::remove_dir(path).map_err(|error| failure(ErrorKind::StateFailure, "remove empty exact run", error)) } }
+    #[cfg(windows)] struct PathGuards { _handles: Vec<OwnedDirectoryHandle> }
+    #[cfg(not(windows))] struct PathGuards;
+
+    #[cfg(windows)]
+    fn securely_create_and_pin_service(requested: &Path) -> Result<(PathBuf, PathGuards), FastSearchError> {
+        let absolute = absolute_service_path(requested)?;
+        let mut current = PathBuf::new(); let mut handles = Vec::new();
+        for component in absolute.components() { current.push(component.as_os_str()); if current.exists() { bootstrap_before_existing_component(&current); } else { fs::create_dir(&current).map_err(|error| failure(ErrorKind::StateFailure, "create pinned service directory", error))?; } handles.push(open_directory_without_delete_share(&current)?); }
+        let service = current.canonicalize().map_err(|error| failure(ErrorKind::SourceFailure, "canonicalize pinned service root", error))?;
+        let runs = service.join("runs"); if !runs.exists() { fs::create_dir(&runs).map_err(|error| failure(ErrorKind::StateFailure, "create pinned runs root", error))?; } handles.push(open_directory_without_delete_share(&runs)?);
+        Ok((service, PathGuards { _handles: handles }))
+    }
+    #[cfg(windows)]
+    fn open_directory_without_delete_share(path: &Path) -> Result<OwnedDirectoryHandle, FastSearchError> {
+        let handle = open_directory_handle(path, FILE_LIST_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)?;
+        let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
+        let inspected = unsafe { GetFileInformationByHandleEx(handle.0, FileAttributeTagInfo, (&raw mut attributes).cast(), size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32) };
+        if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(FastSearchError::new(ErrorKind::InvalidContent, "service bootstrap encountered a reparse point")); }
+        Ok(handle)
+    }
+    #[cfg(windows)]
+    fn open_directory_handle(path: &Path, desired_access: u32, flags: u32) -> Result<OwnedDirectoryHandle, FastSearchError> {
+        let wide = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<_>>();
+        let handle = unsafe { CreateFileW(wide.as_ptr(), desired_access, FILE_SHARE_READ | FILE_SHARE_WRITE, std::ptr::null(), OPEN_EXISTING, flags, std::ptr::null_mut()) };
+        if handle == INVALID_HANDLE_VALUE { return Err(failure(ErrorKind::StateFailure, "lock service directory against replacement", std::io::Error::last_os_error())); }
+        Ok(OwnedDirectoryHandle(handle))
+    }
+    #[cfg(not(windows))]
+    fn securely_create_and_pin_service(requested: &Path) -> Result<(PathBuf, PathGuards), FastSearchError> {
+        fs::create_dir_all(requested).map_err(|error| failure(ErrorKind::StateFailure, "create service root", error))?;
+        ensure_no_reparse_points(requested)?;
+        let service = requested.canonicalize().map_err(|error| failure(ErrorKind::SourceFailure, "canonicalize service root", error))?;
+        if !service.is_dir() { return Err(FastSearchError::new(ErrorKind::InvalidContent, "service root must be a directory")); }
+        fs::create_dir_all(service.join("runs")).map_err(|error| failure(ErrorKind::StateFailure, "create runs root", error))?;
+        Ok((service, PathGuards))
+    }
+    fn failure(kind: ErrorKind, context: &str, error: std::io::Error) -> FastSearchError { FastSearchError::new(kind, format!("{context}: {error}")) }
+
+    #[cfg(all(test, windows))]
+    #[derive(Clone)]
+    pub(super) struct BootstrapHook { pub(super) target: PathBuf, pub(super) reached: std::sync::Arc<std::sync::Barrier>, pub(super) resume: std::sync::Arc<std::sync::Barrier> }
+    #[cfg(all(test, windows))]
+    pub(super) static BOOTSTRAP_HOOK: std::sync::OnceLock<Mutex<Option<BootstrapHook>>> = std::sync::OnceLock::new();
+    #[cfg(all(test, windows))]
+    fn bootstrap_before_existing_component(path: &Path) { let hook = BOOTSTRAP_HOOK.get_or_init(|| Mutex::new(None)).lock().unwrap().clone(); if let Some(hook) = hook.filter(|hook| hook.target == path) { hook.reached.wait(); hook.resume.wait(); } }
+    #[cfg(not(all(test, windows)))]
+    fn bootstrap_before_existing_component(_path: &Path) {}
 }
 
 /// Replaceable machine paths for the one full production composition.
@@ -472,417 +673,17 @@ fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, FastSearchEr
     Ok(canonical)
 }
 
-fn validate_service_containment(
-    documents: &Path,
-    code: &Path,
-    service: &Path,
-) -> Result<(), FastSearchError> {
-    let overlaps = service.starts_with(documents)
-        || service.starts_with(code)
-        || documents.starts_with(service)
-        || code.starts_with(service);
-    let allowed = service
-        .strip_prefix(documents)
-        .ok()
-        .is_some_and(is_exact_reserved_descendant)
-        || service
-            .strip_prefix(code)
-            .ok()
-            .is_some_and(is_exact_reserved_descendant);
-    if overlaps && !allowed {
-        return Err(FastSearchError::new(
-            ErrorKind::InvalidContent,
-            "service root may overlap a source root only inside the reserved .cfknowledge zone",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_service_path_before_write(
-    documents: &Path,
-    code: &Path,
-    requested: &Path,
-) -> Result<(), FastSearchError> {
-    let requested = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))?
-            .join(requested)
-    };
-    // Inspect the unresolved path first: canonicalizing the nearest existing
-    // ancestor would otherwise erase the identity of a junction ancestor.
-    ensure_no_reparse_points(&requested)?;
-    let requested = canonicalize_existing_ancestor(&requested)?;
-    ensure_no_reparse_points(&requested)?;
-    let overlaps = requested.starts_with(documents)
-        || requested.starts_with(code)
-        || documents.starts_with(&requested)
-        || code.starts_with(&requested);
-    let allowed = requested
-        .strip_prefix(documents)
-        .ok()
-        .is_some_and(is_exact_reserved_descendant)
-        || requested
-            .strip_prefix(code)
-            .ok()
-            .is_some_and(is_exact_reserved_descendant);
-    if overlaps && !allowed {
-        return Err(FastSearchError::new(
-            ErrorKind::InvalidContent,
-            "service root must be isolated or exactly <source>/.cfknowledge/<run>",
-        ));
-    }
-    Ok(())
-}
-
-fn canonicalize_existing_ancestor(path: &Path) -> Result<PathBuf, FastSearchError> {
-    let mut missing = Vec::new();
-    let mut ancestor = path;
-    while !ancestor.exists() {
-        let name = ancestor.file_name().ok_or_else(|| {
-            FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "service root has no existing ancestor",
-            )
-        })?;
-        missing.push(name.to_os_string());
-        ancestor = ancestor.parent().ok_or_else(|| {
-            FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "service root has no existing ancestor",
-            )
-        })?;
-    }
-    let mut resolved = ancestor.canonicalize().map_err(|error| {
-        failure(
-            ErrorKind::SourceFailure,
-            "canonicalize service ancestor",
-            error,
-        )
-    })?;
-    for name in missing.into_iter().rev() {
-        resolved.push(name);
-    }
-    Ok(resolved)
-}
-
-fn is_exact_reserved_descendant(relative: &Path) -> bool {
-    let parts = relative.components().collect::<Vec<_>>();
-    parts.len() == 2
-        && parts[0].as_os_str() == ".cfknowledge"
-        && matches!(parts[1], std::path::Component::Normal(_))
-}
-
-fn ensure_no_reparse_points(path: &Path) -> Result<(), FastSearchError> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        current.push(component.as_os_str());
-        if !current.exists() {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&current)
-            .map_err(|error| failure(ErrorKind::SourceFailure, "inspect service path", error))?;
-        #[cfg(windows)]
-        if metadata.file_attributes() & 0x400 != 0 {
-            return Err(FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "service root path contains a reparse point",
-            ));
-        }
-        #[cfg(not(windows))]
-        if metadata.file_type().is_symlink() {
-            return Err(FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "service root path contains a symbolic link",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_marker(marker: &str) -> Result<(), FastSearchError> {
-    if marker.is_empty()
-        || marker.len() > 128
-        || !marker
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(FastSearchError::new(
-            ErrorKind::InvalidIdentifier,
-            "run marker must be 1..128 ASCII letters, digits, '-' or '_'",
-        ));
-    }
-    Ok(())
-}
-
-fn write_new_run_markers(run: &Path, token: &str) -> Result<(), FastSearchError> {
-    let mut owner = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(run.join("owner.marker"))
-        .map_err(|error| failure(ErrorKind::StateFailure, "create run marker", error))?;
-    owner
-        .write_all(token.as_bytes())
-        .map_err(|error| failure(ErrorKind::StateFailure, "write run marker", error))?;
-    let mut schema = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(run.join("schema.marker"))
-        .map_err(|error| failure(ErrorKind::StateFailure, "create run schema", error))?;
-    schema
-        .write_all(b"fastsearch-run-v1")
-        .map_err(|error| failure(ErrorKind::StateFailure, "write run schema", error))
-}
-
-struct OwnedRun {
-    token: String,
-    guard: RunDirectoryGuard,
-}
-
-#[cfg(windows)]
-struct OwnedDirectoryHandle(HANDLE);
-
-#[cfg(windows)]
-impl Drop for OwnedDirectoryHandle {
-    fn drop(&mut self) {
-        // SAFETY: this RAII value exclusively owns the valid HANDLE and drops once.
-        unsafe { CloseHandle(self.0) };
-    }
-}
-
-#[cfg(windows)]
-struct RunDirectoryGuard(OwnedDirectoryHandle);
-
-#[cfg(windows)]
-impl RunDirectoryGuard {
-    fn acquire(path: &Path) -> Result<Self, FastSearchError> {
-        let handle = open_directory_handle(
-            path,
-            FILE_LIST_DIRECTORY | DELETE,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-        )?;
-        let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
-        // SAFETY: `handle` is valid and owned; `attributes` is a live correctly-sized
-        // output buffer for FILE_ATTRIBUTE_TAG_INFO during the call.
-        let inspected = unsafe {
-            GetFileInformationByHandleEx(
-                handle.0,
-                FileAttributeTagInfo,
-                (&raw mut attributes).cast(),
-                size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
-            )
-        };
-        if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "run directory is or became a reparse point",
-            ));
-        }
-        Ok(Self(handle))
-    }
-
-    fn mark_for_delete(&self, _path: &Path) -> Result<(), FastSearchError> {
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-        // SAFETY: the pinned directory HANDLE remains valid for this call and
-        // `disposition` is a live correctly-sized FILE_DISPOSITION_INFO buffer.
-        let deleted = unsafe {
-            SetFileInformationByHandle(
-                self.0.0,
-                FileDispositionInfo,
-                (&raw const disposition).cast(),
-                size_of::<FILE_DISPOSITION_INFO>() as u32,
-            )
-        };
-        if deleted == 0 {
-            return Err(failure(
-                ErrorKind::StateFailure,
-                "mark exact run directory for deletion",
-                std::io::Error::last_os_error(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
-struct RunDirectoryGuard;
-
-#[cfg(not(windows))]
-impl RunDirectoryGuard {
-    fn acquire(_path: &Path) -> Result<Self, FastSearchError> {
-        Ok(Self)
-    }
-
-    fn mark_for_delete(&self, path: &Path) -> Result<(), FastSearchError> {
-        fs::remove_dir(path)
-            .map_err(|error| failure(ErrorKind::StateFailure, "remove empty exact run", error))
-    }
-}
-
-#[cfg(windows)]
-struct PathGuards {
-    _handles: Vec<OwnedDirectoryHandle>,
-}
-
-#[cfg(windows)]
-fn securely_create_and_pin_service(
-    requested: &Path,
-) -> Result<(PathBuf, PathGuards), FastSearchError> {
-    let absolute = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|error| failure(ErrorKind::SourceFailure, "resolve service path", error))?
-            .join(requested)
-    };
-    let mut current = PathBuf::new();
-    let mut handles = Vec::new();
-    for component in absolute.components() {
-        current.push(component.as_os_str());
-        if current.exists() {
-            bootstrap_before_existing_component(&current);
-        } else {
-            fs::create_dir(&current).map_err(|error| {
-                failure(
-                    ErrorKind::StateFailure,
-                    "create pinned service directory",
-                    error,
-                )
-            })?;
-        }
-        handles.push(open_directory_without_delete_share(&current)?);
-    }
-    let service = current.canonicalize().map_err(|error| {
-        failure(
-            ErrorKind::SourceFailure,
-            "canonicalize pinned service root",
-            error,
-        )
-    })?;
-    let runs = service.join("runs");
-    if !runs.exists() {
-        fs::create_dir(&runs)
-            .map_err(|error| failure(ErrorKind::StateFailure, "create pinned runs root", error))?;
-    }
-    handles.push(open_directory_without_delete_share(&runs)?);
-    Ok((service, PathGuards { _handles: handles }))
-}
-
-#[cfg(all(test, windows))]
-#[derive(Clone)]
-struct BootstrapHook {
-    target: PathBuf,
-    reached: Arc<Barrier>,
-    resume: Arc<Barrier>,
-}
-
-#[cfg(all(test, windows))]
-static BOOTSTRAP_HOOK: OnceLock<Mutex<Option<BootstrapHook>>> = OnceLock::new();
-
-#[cfg(all(test, windows))]
-fn bootstrap_before_existing_component(path: &Path) {
-    let hook = BOOTSTRAP_HOOK
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap()
-        .clone();
-    if let Some(hook) = hook.filter(|hook| hook.target == path) {
-        hook.reached.wait();
-        hook.resume.wait();
-    }
-}
-
-#[cfg(not(all(test, windows)))]
-fn bootstrap_before_existing_component(_path: &Path) {}
-
-#[cfg(windows)]
-fn open_directory_without_delete_share(
-    path: &Path,
-) -> Result<OwnedDirectoryHandle, FastSearchError> {
-    let handle = open_directory_handle(
-        path,
-        FILE_LIST_DIRECTORY,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-    )?;
-    let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
-    // SAFETY: `handle` is valid and the output buffer is live and correctly sized.
-    let inspected = unsafe {
-        GetFileInformationByHandleEx(
-            handle.0,
-            FileAttributeTagInfo,
-            (&raw mut attributes).cast(),
-            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
-        )
-    };
-    if inspected == 0 || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(FastSearchError::new(
-            ErrorKind::InvalidContent,
-            "service bootstrap encountered a reparse point",
-        ));
-    }
-    Ok(handle)
-}
-
-#[cfg(windows)]
-fn open_directory_handle(
-    path: &Path,
-    desired_access: u32,
-    flags: u32,
-) -> Result<OwnedDirectoryHandle, FastSearchError> {
-    let wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // SAFETY: `wide` is a live NUL-terminated UTF-16 buffer for the duration
-    // of the call; all optional pointers are null and the returned HANDLE is
-    // validated against INVALID_HANDLE_VALUE before ownership is accepted.
-    let handle = unsafe {
-        CreateFileW(
-            wide.as_ptr(),
-            desired_access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            flags,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(failure(
-            ErrorKind::StateFailure,
-            "lock service directory against replacement",
-            std::io::Error::last_os_error(),
-        ));
-    }
-    Ok(OwnedDirectoryHandle(handle))
-}
-
-#[cfg(not(windows))]
-struct PathGuards;
-
-#[cfg(not(windows))]
-fn securely_create_and_pin_service(
-    requested: &Path,
-) -> Result<(PathBuf, PathGuards), FastSearchError> {
-    fs::create_dir_all(requested)
-        .map_err(|error| failure(ErrorKind::StateFailure, "create service root", error))?;
-    ensure_no_reparse_points(requested)?;
-    let service = canonical_directory(requested, "service root")?;
-    fs::create_dir_all(service.join("runs"))
-        .map_err(|error| failure(ErrorKind::StateFailure, "create runs root", error))?;
-    Ok((service, PathGuards))
-}
-
-fn failure(kind: ErrorKind, context: &str, error: std::io::Error) -> FastSearchError {
-    FastSearchError::new(kind, format!("{context}: {error}"))
-}
-
 #[cfg(all(test, windows))]
 mod bootstrap_race_tests {
     use super::*;
-    use std::{process::Command, thread, time::SystemTime};
+    use super::security::{BootstrapHook, BOOTSTRAP_HOOK};
+    use std::{
+        fs,
+        process::Command,
+        sync::{Arc, Barrier, Mutex},
+        thread,
+        time::SystemTime,
+    };
 
     #[test]
     fn existing_parent_swap_is_denied_or_detected_before_external_state_write() {
@@ -967,7 +768,7 @@ mod bootstrap_race_tests {
                 .output()
                 .unwrap();
             assert!(linked.status.success());
-            let rejected = securely_create_and_pin_service(&rejected_parent.join("service"));
+            let rejected = security::securely_create_and_pin_service(&rejected_parent.join("service"));
             assert!(rejected.is_err());
             assert!(!rejected_external.join("state.sqlite").exists());
             let removed = Command::new("cmd")
