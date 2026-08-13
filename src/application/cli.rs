@@ -1,12 +1,13 @@
 use crate::{
     application::{ProductionConfig, ProductionRuntime, RealRuntime},
     domain::{
-        BackendKind, Capability, CapabilityState, ErrorKind, FastSearchError, IndexFreshness,
-        RecordKind, RelatedQuery, RetrievalChannel, SearchMode, SearchQuery, StableId,
+        BackendKind, CanonicalRecord, Capability, CapabilityState, CapabilityStatus, ErrorKind,
+        FastSearchError, IndexFreshness, LifecycleStatus, RecordKind, RelatedQuery,
+        RetrievalChannel, SearchMode, SearchQuery, SearchResponse, StableId,
     },
     ports::AgentSurface,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const USAGE: &str = "usage:\n  fastsearch init <documents> <code> <service> [e5-root]\n  fastsearch index update <documents> <code> <service> [e5-root]\n  fastsearch index rebuild <documents> <code> <service> [e5-root]\n  fastsearch search <documents> <code> <service> <balanced|current|design> <query> [e5-root]\n  fastsearch get <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch related <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch status <documents> <code> <service> [e5-root]";
 
@@ -74,11 +75,14 @@ pub fn execute_cli_formatted(
     arguments: Vec<String>,
     format: OutputFormat,
 ) -> Result<String, CliError> {
-    execute_command(parse_command(arguments)?, format)
+    Ok(render_outcome(
+        execute_command(parse_command(arguments)?)?,
+        format,
+    ))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum Command {
+pub(super) enum Command {
     Production {
         config: ProductionCommandConfig,
         action: CommandAction,
@@ -91,7 +95,7 @@ enum Command {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ProductionCommandConfig {
+pub(super) struct ProductionCommandConfig {
     documents: String,
     code: String,
     service: String,
@@ -99,7 +103,7 @@ struct ProductionCommandConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum CommandAction {
+pub(super) enum CommandAction {
     Init,
     Index { rebuild: bool },
     Search { mode: SearchMode, text: String },
@@ -107,6 +111,27 @@ enum CommandAction {
     Related { id: String },
     Status,
     TestProjectionFailure,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum CommandOutcome {
+    Status {
+        status: LifecycleStatus,
+        capabilities: Vec<CapabilityStatus>,
+    },
+    Search(SearchResponse),
+    Record(Option<CanonicalRecord>),
+    Related(Vec<CanonicalRecord>),
+}
+
+impl CommandOutcome {
+    #[cfg(test)]
+    fn status_for_test() -> Self {
+        Self::Status {
+            status: LifecycleStatus::not_configured("test presenter outcome"),
+            capabilities: Vec::new(),
+        }
+    }
 }
 
 impl Command {
@@ -243,7 +268,7 @@ fn parse_command(arguments: Vec<String>) -> Result<Command, CliError> {
     }
 }
 
-fn production_command(
+pub(super) fn production_command(
     documents: &str,
     code: &str,
     service: &str,
@@ -292,24 +317,21 @@ fn record_action(command: &str, id: &str) -> CommandAction {
 }
 
 /// Executes one private CLI command. It deliberately stays below the public application surface.
-fn execute_command(command: Command, format: OutputFormat) -> Result<String, CliError> {
+pub(super) fn execute_command(command: Command) -> Result<CommandOutcome, CliError> {
     match command {
-        Command::Production { config, action } => {
-            execute_production_command(config, action, format)
-        }
+        Command::Production { config, action } => execute_production_command(config, action),
         Command::Compatibility {
             source,
             service,
             action,
-        } => execute_compatibility_command(&source, &service, action, format),
+        } => execute_compatibility_command(&source, &service, action),
     }
 }
 
 fn execute_production_command(
     config: ProductionCommandConfig,
     action: CommandAction,
-    format: OutputFormat,
-) -> Result<String, CliError> {
+) -> Result<CommandOutcome, CliError> {
     let mut runtime = open_production(
         &config.documents,
         &config.code,
@@ -317,27 +339,26 @@ fn execute_production_command(
         config.e5.as_ref(),
     )?;
     match action {
-        CommandAction::Init | CommandAction::Status => Ok(render_status(&runtime, format)),
+        CommandAction::Init | CommandAction::Status => Ok(status_outcome(&runtime)),
         CommandAction::Index { rebuild } => {
             if rebuild {
                 runtime.rebuild().map_err(runtime_error)?;
             } else {
                 runtime.index().map_err(runtime_error)?;
             }
-            Ok(render_status(&runtime, format))
+            Ok(status_outcome(&runtime))
         }
         CommandAction::Search { mode, text } => {
             // A CLI search is a process boundary. Reconcile the in-memory local-E5
             // projection from the committed authority before querying.
             runtime.index().map_err(runtime_error)?;
             let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
-            Ok(render_search(
-                &runtime.search(&query).map_err(runtime_error)?,
-                format,
+            Ok(CommandOutcome::Search(
+                runtime.search(&query).map_err(runtime_error)?,
             ))
         }
-        CommandAction::Get { id } => render_record(&runtime, &id, false, format),
-        CommandAction::Related { id } => render_record(&runtime, &id, true, format),
+        CommandAction::Get { id } => record_outcome(&runtime, &id, false),
+        CommandAction::Related { id } => record_outcome(&runtime, &id, true),
         CommandAction::TestProjectionFailure => Err(CliError::Usage),
     }
 }
@@ -346,27 +367,25 @@ fn execute_compatibility_command(
     source: &str,
     service: &str,
     action: CommandAction,
-    format: OutputFormat,
-) -> Result<String, CliError> {
+) -> Result<CommandOutcome, CliError> {
     let mut runtime = open(source, service)?;
     match action {
-        CommandAction::Init | CommandAction::Status => Ok(render_status(&runtime, format)),
+        CommandAction::Init | CommandAction::Status => Ok(status_outcome(&runtime)),
         CommandAction::Index { rebuild } => {
             if rebuild {
                 runtime.rebuild().map_err(runtime_error)?;
             } else {
                 runtime.index().map_err(runtime_error)?;
             }
-            Ok(render_status(&runtime, format))
+            Ok(status_outcome(&runtime))
         }
         CommandAction::Search { mode, text } => {
             let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
-            Ok(render_search(
-                &runtime.search(&query).map_err(runtime_error)?,
-                format,
+            Ok(CommandOutcome::Search(
+                runtime.search(&query).map_err(runtime_error)?,
             ))
         }
-        CommandAction::Get { id } => render_record(&runtime, &id, false, format),
+        CommandAction::Get { id } => record_outcome(&runtime, &id, false),
         CommandAction::TestProjectionFailure => {
             runtime
                 .index_with_test_projection_failure()
@@ -377,24 +396,28 @@ fn execute_compatibility_command(
     }
 }
 
-fn render_record(
+fn status_outcome(runtime: &impl AgentSurface) -> CommandOutcome {
+    CommandOutcome::Status {
+        status: runtime.index_status(),
+        capabilities: runtime.status(),
+    }
+}
+
+fn record_outcome(
     runtime: &impl AgentSurface,
     raw_id: &str,
     related: bool,
-    format: OutputFormat,
-) -> Result<String, CliError> {
+) -> Result<CommandOutcome, CliError> {
     let id = StableId::parse(raw_id).map_err(runtime_error)?;
     if related {
-        Ok(render_records(
-            &runtime
+        Ok(CommandOutcome::Related(
+            runtime
                 .related(&RelatedQuery::new(id))
                 .map_err(runtime_error)?,
-            format,
         ))
     } else {
-        Ok(render_get(
-            runtime.get(&id).map_err(runtime_error)?.as_ref(),
-            format,
+        Ok(CommandOutcome::Record(
+            runtime.get(&id).map_err(runtime_error)?,
         ))
     }
 }
@@ -446,12 +469,26 @@ fn parse_mode(value: &str) -> Result<SearchMode, CliError> {
     }
 }
 
-fn render_status(runtime: &impl AgentSurface, format: OutputFormat) -> String {
-    let status = runtime.index_status();
+pub(super) fn render_outcome(outcome: CommandOutcome, format: OutputFormat) -> String {
+    match outcome {
+        CommandOutcome::Status {
+            status,
+            capabilities,
+        } => render_status(&status, &capabilities, format),
+        CommandOutcome::Search(response) => render_search(&response, format),
+        CommandOutcome::Record(record) => render_get(record.as_ref(), format),
+        CommandOutcome::Related(records) => render_records(&records, format),
+    }
+}
+
+fn render_status(
+    status: &LifecycleStatus,
+    capabilities: &[CapabilityStatus],
+    format: OutputFormat,
+) -> String {
     if format == OutputFormat::Json {
-        let capabilities = runtime
-            .status()
-            .into_iter()
+        let capabilities = capabilities
+            .iter()
             .map(|capability| {
                 let (state, detail) = capability_state_json(capability.state());
                 json!({
@@ -487,7 +524,7 @@ fn render_status(runtime: &impl AgentSurface, format: OutputFormat) -> String {
             String::new(),
             "Возможности".to_owned(),
         ];
-        lines.extend(runtime.status().into_iter().map(|capability| {
+        lines.extend(capabilities.iter().map(|capability| {
             format!(
                 "  {} — {}",
                 capability_name(capability.capability()),
@@ -507,9 +544,8 @@ fn render_status(runtime: &impl AgentSurface, format: OutputFormat) -> String {
         ),
     ];
     lines.extend(
-        runtime
-            .status()
-            .into_iter()
+        capabilities
+            .iter()
             .map(|capability| match capability.state() {
                 CapabilityState::Available { backend } => {
                     format!("{:?}={backend:?}", capability.capability())
@@ -749,7 +785,7 @@ fn pretty_json(value: Value) -> String {
 
 #[cfg(test)]
 mod command_contract_tests {
-    use super::parse_command;
+    use super::{parse_command, render_outcome, CommandOutcome, OutputFormat};
 
     #[test]
     fn parses_a_production_status_command_once_before_dispatch() {
@@ -762,5 +798,12 @@ mod command_contract_tests {
         .expect("typed production command");
 
         assert_eq!(command.name(), "status");
+    }
+
+    #[test]
+    fn presenter_renders_a_typed_status_outcome_without_runtime_access() {
+        let output = render_outcome(CommandOutcome::status_for_test(), OutputFormat::Technical);
+
+        assert!(output.contains("freshness="));
     }
 }

@@ -1,6 +1,9 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use super::{OutputFormat, execute_cli_formatted};
+use super::{
+    cli::{execute_command, production_command, render_outcome, CommandAction},
+    OutputFormat,
+};
 
 const GREEN: &str = "\x1b[32m";
 const RESET: &str = "\x1b[0m";
@@ -104,13 +107,20 @@ fn run_interactive_with(
             continue;
         }
 
-        match interactive_arguments(command, &context) {
-            Ok(arguments) => {
+        match interactive_action(command) {
+            Ok(action) => {
                 if format == OutputFormat::Human {
                     writeln!(output, "Выполняю команду…")?;
                     output.flush()?;
                 }
-                match execute_cli_formatted(arguments, format) {
+                let command = production_command(
+                    &context.documents,
+                    &context.code,
+                    &context.service,
+                    context.e5.as_ref(),
+                    action,
+                );
+                match execute_command(command).map(|outcome| render_outcome(outcome, format)) {
                     Ok(result) if format == OutputFormat::Human => {
                         writeln!(output, "{}\n", accent_first_line(&result, terminal))?
                     }
@@ -260,20 +270,21 @@ fn read_line(input: &mut impl BufRead) -> io::Result<Option<String>> {
     Ok(Some(line.trim_end_matches(['\r', '\n']).to_owned()))
 }
 
-fn interactive_arguments(
-    command: &str,
-    context: &SessionContext,
-) -> Result<Vec<String>, &'static str> {
+fn interactive_action(command: &str) -> Result<CommandAction, &'static str> {
     let mut words = command.split_whitespace();
     let Some(first) = words.next() else {
         return Err("пустая команда");
     };
-    let mut arguments = match first {
+    match first {
         "init" | "status" => {
             if words.next().is_some() {
                 return Err("эта команда не принимает параметры");
             }
-            vec![first.to_owned()]
+            Ok(if first == "init" {
+                CommandAction::Init
+            } else {
+                CommandAction::Status
+            })
         }
         "index" => {
             let Some(action @ ("update" | "rebuild")) = words.next() else {
@@ -282,7 +293,9 @@ fn interactive_arguments(
             if words.next().is_some() {
                 return Err("после действия лишние параметры");
             }
-            vec!["index".to_owned(), action.to_owned()]
+            Ok(CommandAction::Index {
+                rebuild: action == "rebuild",
+            })
         }
         "search" => {
             let Some(mode @ ("balanced" | "current" | "design")) = words.next() else {
@@ -292,34 +305,27 @@ fn interactive_arguments(
             if query.is_empty() {
                 return Err("после режима введите текст запроса");
             }
-            vec!["search".to_owned(), mode.to_owned(), query]
+            let mode = match mode {
+                "balanced" => crate::domain::SearchMode::Balanced,
+                "current" => crate::domain::SearchMode::Current,
+                "design" => crate::domain::SearchMode::Design,
+                _ => unreachable!("validated interactive mode"),
+            };
+            Ok(CommandAction::Search { mode, text: query })
         }
         "get" | "related" => {
             let id = words.collect::<Vec<_>>().join(" ");
             if id.is_empty() {
                 return Err("укажите стабильный ID записи");
             }
-            vec![first.to_owned(), id]
+            Ok(if first == "get" {
+                CommandAction::Get { id }
+            } else {
+                CommandAction::Related { id }
+            })
         }
-        _ => return Err("неизвестная команда"),
-    };
-    let insert_at = if arguments.first().is_some_and(|value| value == "index") {
-        2
-    } else {
-        1
-    };
-    arguments.splice(
-        insert_at..insert_at,
-        [
-            context.documents.clone(),
-            context.code.clone(),
-            context.service.clone(),
-        ],
-    );
-    if let Some(e5) = &context.e5 {
-        arguments.push(e5.clone());
+        _ => Err("неизвестная команда"),
     }
-    Ok(arguments)
 }
 
 #[must_use]
@@ -377,7 +383,7 @@ fn accent_first_line(text: &str, terminal: bool) -> String {
 mod tests {
     use std::io::Cursor;
 
-    use super::run_interactive_with;
+    use super::{interactive_action, run_interactive_with, CommandAction};
 
     #[test]
     fn paths_with_spaces_are_kept_as_complete_prompt_values() {
@@ -388,5 +394,12 @@ mod tests {
         assert!(output.contains("Документы: C:\\My docs"));
         assert!(output.contains("Код: C:\\My code"));
         assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn human_search_translates_directly_to_a_typed_command_action() {
+        let action = interactive_action("search current words with spaces").expect("typed action");
+
+        assert!(matches!(action, CommandAction::Search { .. }));
     }
 }
