@@ -2,13 +2,13 @@
 setlocal
 
 cd /d "%~dp0"
-set "RUSTFLAGS=%RUSTFLAGS% -C link-arg=/Brepro"
+set "FASTSEARCH_TARGET_DIR=%~dp0..\.cargo-target\FastSearch"
 
 echo Building release fastsearch.exe...
-cargo build --locked --release
+cargo build --locked --release --target-dir "%FASTSEARCH_TARGET_DIR%"
 if errorlevel 1 goto :build_error
 
-copy /Y "target\release\fastsearch.exe" "fastsearch.exe" >nul
+copy /Y "%FASTSEARCH_TARGET_DIR%\release\fastsearch.exe" "fastsearch.exe" >nul
 if errorlevel 1 goto :copy_error
 
 echo.

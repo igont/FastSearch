@@ -34,7 +34,7 @@ cargo build --locked
 .\build_fastsearch.bat
 ```
 
-Скрипт использует зафиксированный `Cargo.lock`, включает детерминированный режим линкера MSVC `/Brepro` и копирует готовый `fastsearch.exe` в корень проекта. Исходный release-бинарник остаётся в `target\release\fastsearch.exe`.
+Скрипт использует зафиксированный `Cargo.lock`, target-specific режим линкера MSVC `/Brepro` и копирует готовый `fastsearch.exe` в корень проекта. Cargo складывает общие артефакты FastSearch в соседний каталог `..\.cargo-target\FastSearch`, поэтому зависимости повторно используются во всех worktree. Исходный release-бинарник остаётся в `..\.cargo-target\FastSearch\release\fastsearch.exe`.
 
 ## Интерактивный режим
 
