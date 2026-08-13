@@ -327,6 +327,8 @@ fn execute_production_command(
             Ok(render_status(&runtime, format))
         }
         CommandAction::Search { mode, text } => {
+            // A CLI search is a process boundary. Reconcile the in-memory local-E5
+            // projection from the committed authority before querying.
             runtime.index().map_err(runtime_error)?;
             let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
             Ok(render_search(
@@ -409,68 +411,6 @@ fn open_production(
         None => config,
     };
     ProductionRuntime::open(config).map_err(runtime_error)
-}
-
-fn execute_production_index(
-    action: &str,
-    documents: &str,
-    code: &str,
-    service: &str,
-    e5: Option<&String>,
-    format: OutputFormat,
-) -> Result<String, CliError> {
-    let mut runtime = open_production(documents, code, service, e5)?;
-    if action == "rebuild" {
-        runtime.rebuild().map_err(runtime_error)?;
-    } else {
-        runtime.index().map_err(runtime_error)?;
-    }
-    Ok(render_status(&runtime, format))
-}
-
-fn execute_production_search(
-    documents: &str,
-    code: &str,
-    service: &str,
-    mode: &str,
-    text: &str,
-    e5: Option<&String>,
-    format: OutputFormat,
-) -> Result<String, CliError> {
-    let mut runtime = open_production(documents, code, service, e5)?;
-    // A CLI search is a process boundary. Reconcile before querying so the
-    // in-memory local-E5 projection is rebuilt from the same committed authority
-    // as lexical/maps/symbols instead of reporting a false cross-process Current.
-    runtime.index().map_err(runtime_error)?;
-    let query = SearchQuery::new(text, parse_mode(mode)?).map_err(runtime_error)?;
-    Ok(render_search(
-        &runtime.search(&query).map_err(runtime_error)?,
-        format,
-    ))
-}
-
-fn execute_production_record(
-    command: &str,
-    documents: &str,
-    code: &str,
-    service: &str,
-    id: &str,
-    e5: Option<&String>,
-    format: OutputFormat,
-) -> Result<String, CliError> {
-    let runtime = open_production(documents, code, service, e5)?;
-    let id = StableId::parse(id).map_err(runtime_error)?;
-    if command == "related" {
-        let records = runtime
-            .related(&RelatedQuery::new(id))
-            .map_err(runtime_error)?;
-        Ok(render_records(&records, format))
-    } else {
-        Ok(render_get(
-            runtime.get(&id).map_err(runtime_error)?.as_ref(),
-            format,
-        ))
-    }
 }
 
 fn open(source: &str, service: &str) -> Result<RealRuntime, CliError> {
