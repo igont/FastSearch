@@ -530,6 +530,62 @@ fn copied_document_only_service_never_exposes_wrong_get_before_production_rebuil
 }
 
 #[test]
+fn production_facade_delegates_service_and_run_security_to_internal_owner() {
+    let source = include_str!("../src/application/production.rs");
+    let facade = source
+        .split("impl ProductionRuntime")
+        .nth(1)
+        .expect("ProductionRuntime implementation is present")
+        .split("impl AgentSurface for ProductionRuntime")
+        .next()
+        .expect("production facade precedes AgentSurface implementation");
+
+    assert!(
+        source.contains("mod security") && source.contains("struct ServiceRunBoundary"),
+        "service/run security needs a dedicated internal owner"
+    );
+    for implementation_detail in [
+        "ensure_no_reparse_points(&runs)",
+        "RunDirectoryGuard::acquire(&run)",
+        "securely_create_and_pin_service(&config.service_root)",
+    ] {
+        assert!(
+            !facade.contains(implementation_detail),
+            "ProductionRuntime facade must delegate {implementation_detail}"
+        );
+    }
+}
+
+#[test]
+fn production_facade_delegates_indexing_and_search_policy_to_internal_coordinators() {
+    let source = include_str!("../src/application/production.rs");
+    let facade = source
+        .split("impl ProductionRuntime")
+        .nth(1)
+        .expect("ProductionRuntime implementation is present")
+        .split("impl AgentSurface for ProductionRuntime")
+        .next()
+        .expect("production facade precedes AgentSurface implementation");
+
+    assert!(
+        source.contains("struct IndexingCoordinator")
+            && source.contains("struct SearchCoordinator"),
+        "indexing and search each need a dedicated internal coordinator"
+    );
+    for direct_policy in [
+        "self.documents.snapshot()",
+        "self.state.reconcile_snapshots(&snapshots)",
+        "self.lexical.apply_projection(&records",
+        "FusionCoordinator::fuse(query, candidates, &self.status())",
+    ] {
+        assert!(
+            !facade.contains(direct_policy),
+            "ProductionRuntime facade must delegate {direct_policy}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires FASTSEARCH_E5_MODEL_ROOT accepted complete local cache"]
 fn configured_provider_failure_preserves_authority_then_recovers_without_false_hits() {
     let temp = Temp::new();
