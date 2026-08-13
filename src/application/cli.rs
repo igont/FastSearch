@@ -74,95 +74,326 @@ pub fn execute_cli_formatted(
     arguments: Vec<String>,
     format: OutputFormat,
 ) -> Result<String, CliError> {
-    if let [index, action, source, service, flag] = arguments.as_slice()
-        && index == "index"
-        && action == "update"
-        && flag == "--test-fail-projection"
-    {
-        let mut runtime = open(source, service)?;
-        runtime
-            .index_with_test_projection_failure()
-            .map_err(runtime_error)?;
-        unreachable!("the controlled projection fault always fails")
+    execute_command(parse_command(arguments)?, format)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Command {
+    Production {
+        config: ProductionCommandConfig,
+        action: CommandAction,
+    },
+    Compatibility {
+        source: String,
+        service: String,
+        action: CommandAction,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProductionCommandConfig {
+    documents: String,
+    code: String,
+    service: String,
+    e5: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CommandAction {
+    Init,
+    Index { rebuild: bool },
+    Search { mode: SearchMode, text: String },
+    Get { id: String },
+    Related { id: String },
+    Status,
+    TestProjectionFailure,
+}
+
+impl Command {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Production { action, .. } | Self::Compatibility { action, .. } => action.name(),
+        }
     }
+}
+
+impl CommandAction {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Index { .. } | Self::TestProjectionFailure => "index",
+            Self::Search { .. } => "search",
+            Self::Get { .. } => "get",
+            Self::Related { .. } => "related",
+            Self::Status => "status",
+        }
+    }
+}
+
+/// Parses only the private direct-CLI grammar. This is not an application or MCP DTO.
+fn parse_command(arguments: Vec<String>) -> Result<Command, CliError> {
     if arguments
         .iter()
-        .any(|argument| argument == "--test-fail-projection")
+        .any(|value| value == "--test-fail-projection")
     {
-        return Err(CliError::Usage);
+        return match arguments.as_slice() {
+            [index, action, source, service, flag]
+                if index == "index" && action == "update" && flag == "--test-fail-projection" =>
+            {
+                Ok(Command::Compatibility {
+                    source: source.clone(),
+                    service: service.clone(),
+                    action: CommandAction::TestProjectionFailure,
+                })
+            }
+            _ => Err(CliError::Usage),
+        };
     }
     match arguments.as_slice() {
-        [command, documents, code, service] if command == "init" => {
-            let runtime = open_production(documents, code, service, None)?;
-            Ok(render_status(&runtime, format))
-        }
-        [command, documents, code, service, e5] if command == "init" => {
-            let runtime = open_production(documents, code, service, Some(e5))?;
-            Ok(render_status(&runtime, format))
-        }
+        [command, documents, code, service] if command == "init" || command == "status" => Ok(
+            production_command(documents, code, service, None, command_action(command)?),
+        ),
+        [command, documents, code, service, e5] if command == "init" || command == "status" => Ok(
+            production_command(documents, code, service, Some(e5), command_action(command)?),
+        ),
         [index, action, documents, code, service]
             if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
         {
-            execute_production_index(action, documents, code, service, None, format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                None,
+                index_action(action),
+            ))
         }
         [index, action, documents, code, service, e5]
             if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
         {
-            execute_production_index(action, documents, code, service, Some(e5), format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                Some(e5),
+                index_action(action),
+            ))
         }
         [command, documents, code, service, mode, query] if command == "search" => {
-            execute_production_search(documents, code, service, mode, query, None, format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                None,
+                CommandAction::Search {
+                    mode: parse_mode(mode)?,
+                    text: query.clone(),
+                },
+            ))
         }
         [command, documents, code, service, mode, query, e5] if command == "search" => {
-            execute_production_search(documents, code, service, mode, query, Some(e5), format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                Some(e5),
+                CommandAction::Search {
+                    mode: parse_mode(mode)?,
+                    text: query.clone(),
+                },
+            ))
         }
-        [command, documents, code, service, id] if command == "get" || command == "related" => {
-            execute_production_record(command, documents, code, service, id, None, format)
-        }
+        [command, documents, code, service, id] if command == "get" || command == "related" => Ok(
+            production_command(documents, code, service, None, record_action(command, id)),
+        ),
         [command, documents, code, service, id, e5] if command == "get" || command == "related" => {
-            execute_production_record(command, documents, code, service, id, Some(e5), format)
+            Ok(production_command(
+                documents,
+                code,
+                service,
+                Some(e5),
+                record_action(command, id),
+            ))
         }
-        [command, documents, code, service] if command == "status" => {
-            let runtime = open_production(documents, code, service, None)?;
-            Ok(render_status(&runtime, format))
-        }
-        [command, documents, code, service, e5] if command == "status" => {
-            let runtime = open_production(documents, code, service, Some(e5))?;
-            Ok(render_status(&runtime, format))
-        }
-        // Backward-compatible DT2 document-only commands remain accepted, but are
-        // not advertised as the DT3 production surface.
-        [command, source, service] if command == "init" => {
-            let runtime = open(source, service)?;
-            Ok(render_status(&runtime, format))
-        }
-        [index, action, source, service] if index == "index" && action == "update" => {
-            let mut runtime = open(source, service)?;
-            runtime.index().map_err(runtime_error)?;
-            Ok(render_status(&runtime, format))
-        }
-        [index, action, source, service] if index == "index" && action == "rebuild" => {
-            let mut runtime = open(source, service)?;
-            runtime.rebuild().map_err(runtime_error)?;
-            Ok(render_status(&runtime, format))
+        [command, source, service] if command == "init" || command == "status" => Ok(
+            compatibility_command(source, service, command_action(command)?),
+        ),
+        [index, action, source, service]
+            if index == "index" && matches!(action.as_str(), "update" | "rebuild") =>
+        {
+            Ok(compatibility_command(source, service, index_action(action)))
         }
         [command, source, service, mode, query] if command == "search" => {
-            let runtime = open(source, service)?;
-            let query = SearchQuery::new(query, parse_mode(mode)?).map_err(runtime_error)?;
-            let response = runtime.search(&query).map_err(runtime_error)?;
-            Ok(render_search(&response, format))
+            Ok(compatibility_command(
+                source,
+                service,
+                CommandAction::Search {
+                    mode: parse_mode(mode)?,
+                    text: query.clone(),
+                },
+            ))
         }
-        [command, source, service, id] if command == "get" => {
-            let runtime = open(source, service)?;
-            let id = StableId::parse(id).map_err(runtime_error)?;
-            let record = runtime.get(&id).map_err(runtime_error)?;
-            Ok(render_get(record.as_ref(), format))
+        [command, source, service, id] if command == "get" => Ok(compatibility_command(
+            source,
+            service,
+            record_action(command, id),
+        )),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn production_command(
+    documents: &str,
+    code: &str,
+    service: &str,
+    e5: Option<&String>,
+    action: CommandAction,
+) -> Command {
+    Command::Production {
+        config: ProductionCommandConfig {
+            documents: documents.to_owned(),
+            code: code.to_owned(),
+            service: service.to_owned(),
+            e5: e5.cloned(),
+        },
+        action,
+    }
+}
+
+fn compatibility_command(source: &str, service: &str, action: CommandAction) -> Command {
+    Command::Compatibility {
+        source: source.to_owned(),
+        service: service.to_owned(),
+        action,
+    }
+}
+
+fn command_action(command: &str) -> Result<CommandAction, CliError> {
+    match command {
+        "init" => Ok(CommandAction::Init),
+        "status" => Ok(CommandAction::Status),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn index_action(action: &str) -> CommandAction {
+    CommandAction::Index {
+        rebuild: action == "rebuild",
+    }
+}
+
+fn record_action(command: &str, id: &str) -> CommandAction {
+    if command == "related" {
+        CommandAction::Related { id: id.to_owned() }
+    } else {
+        CommandAction::Get { id: id.to_owned() }
+    }
+}
+
+/// Executes one private CLI command. It deliberately stays below the public application surface.
+fn execute_command(command: Command, format: OutputFormat) -> Result<String, CliError> {
+    match command {
+        Command::Production { config, action } => {
+            execute_production_command(config, action, format)
         }
-        [command, source, service] if command == "status" => {
-            let runtime = open(source, service)?;
+        Command::Compatibility {
+            source,
+            service,
+            action,
+        } => execute_compatibility_command(&source, &service, action, format),
+    }
+}
+
+fn execute_production_command(
+    config: ProductionCommandConfig,
+    action: CommandAction,
+    format: OutputFormat,
+) -> Result<String, CliError> {
+    let mut runtime = open_production(
+        &config.documents,
+        &config.code,
+        &config.service,
+        config.e5.as_ref(),
+    )?;
+    match action {
+        CommandAction::Init | CommandAction::Status => Ok(render_status(&runtime, format)),
+        CommandAction::Index { rebuild } => {
+            if rebuild {
+                runtime.rebuild().map_err(runtime_error)?;
+            } else {
+                runtime.index().map_err(runtime_error)?;
+            }
             Ok(render_status(&runtime, format))
         }
-        _ => Err(CliError::Usage),
+        CommandAction::Search { mode, text } => {
+            runtime.index().map_err(runtime_error)?;
+            let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
+            Ok(render_search(
+                &runtime.search(&query).map_err(runtime_error)?,
+                format,
+            ))
+        }
+        CommandAction::Get { id } => render_record(&runtime, &id, false, format),
+        CommandAction::Related { id } => render_record(&runtime, &id, true, format),
+        CommandAction::TestProjectionFailure => Err(CliError::Usage),
+    }
+}
+
+fn execute_compatibility_command(
+    source: &str,
+    service: &str,
+    action: CommandAction,
+    format: OutputFormat,
+) -> Result<String, CliError> {
+    let mut runtime = open(source, service)?;
+    match action {
+        CommandAction::Init | CommandAction::Status => Ok(render_status(&runtime, format)),
+        CommandAction::Index { rebuild } => {
+            if rebuild {
+                runtime.rebuild().map_err(runtime_error)?;
+            } else {
+                runtime.index().map_err(runtime_error)?;
+            }
+            Ok(render_status(&runtime, format))
+        }
+        CommandAction::Search { mode, text } => {
+            let query = SearchQuery::new(&text, mode).map_err(runtime_error)?;
+            Ok(render_search(
+                &runtime.search(&query).map_err(runtime_error)?,
+                format,
+            ))
+        }
+        CommandAction::Get { id } => render_record(&runtime, &id, false, format),
+        CommandAction::TestProjectionFailure => {
+            runtime
+                .index_with_test_projection_failure()
+                .map_err(runtime_error)?;
+            unreachable!("the controlled projection fault always fails")
+        }
+        CommandAction::Related { .. } => Err(CliError::Usage),
+    }
+}
+
+fn render_record(
+    runtime: &impl AgentSurface,
+    raw_id: &str,
+    related: bool,
+    format: OutputFormat,
+) -> Result<String, CliError> {
+    let id = StableId::parse(raw_id).map_err(runtime_error)?;
+    if related {
+        Ok(render_records(
+            &runtime
+                .related(&RelatedQuery::new(id))
+                .map_err(runtime_error)?,
+            format,
+        ))
+    } else {
+        Ok(render_get(
+            runtime.get(&id).map_err(runtime_error)?.as_ref(),
+            format,
+        ))
     }
 }
 
@@ -574,4 +805,22 @@ fn channel_name(value: RetrievalChannel) -> &'static str {
 
 fn pretty_json(value: Value) -> String {
     serde_json::to_string_pretty(&value).expect("CLI success JSON is serializable")
+}
+
+#[cfg(test)]
+mod command_contract_tests {
+    use super::parse_command;
+
+    #[test]
+    fn parses_a_production_status_command_once_before_dispatch() {
+        let command = parse_command(vec![
+            "status".to_owned(),
+            "documents".to_owned(),
+            "code".to_owned(),
+            "service".to_owned(),
+        ])
+        .expect("typed production command");
+
+        assert_eq!(command.name(), "status");
+    }
 }
