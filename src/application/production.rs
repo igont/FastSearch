@@ -606,58 +606,17 @@ pub struct ProductionRuntime {
     vector_configured: bool,
 }
 
-impl std::fmt::Debug for ProductionRuntime {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProductionRuntime")
-            .finish_non_exhaustive()
-    }
+struct IndexingCoordinator<'a> {
+    documents: &'a FilesystemSource,
+    maps: &'a CodeMapSource,
+    symbols: &'a SymbolSource,
+    state: &'a mut SqliteStateStore,
+    lexical: &'a TantivyLexical,
+    vector: &'a LocalE5Vector,
+    vector_configured: bool,
 }
 
-impl ProductionRuntime {
-    pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
-        let document_root = canonical_directory(&config.document_root, "document root")?;
-        let code_root = canonical_directory(&config.code_root, "code root")?;
-        let service = security::ServiceRunBoundary::admit_and_pin(
-            &document_root,
-            &code_root,
-            &config.service_root,
-        )?;
-        let vector_configured = config.e5_root.is_some();
-        let model_root = config
-            .e5_root
-            .unwrap_or_else(|| service.service_root().join("unconfigured-e5"));
-
-        Ok(Self {
-            state: SqliteStateStore::open(service.service_root().join("state.sqlite"))?,
-            lexical: TantivyLexical::open(service.service_root().join("lexical"))?,
-            service,
-            documents: FilesystemSource::new(document_root.clone()),
-            maps: CodeMapSource::new(document_root),
-            symbols: SymbolSource::new(LogicalRootId::parse("code-fastsearch")?, code_root),
-            vector: LocalE5Vector::open(model_root, E5_IDENTITY),
-            vector_configured,
-        })
-    }
-
-    pub fn index(&mut self) -> Result<LifecycleStatus, FastSearchError> {
-        self.project(false)
-    }
-
-    pub fn rebuild(&mut self) -> Result<LifecycleStatus, FastSearchError> {
-        self.project(true)
-    }
-
-    /// Creates an exact run-owned directory used by acceptance jobs and batch callers.
-    pub fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
-        self.service.record_run_marker(marker)
-    }
-
-    /// Removes only a directory whose marker content exactly matches the requested run.
-    pub fn cleanup_run(&self, marker: &str) -> Result<bool, FastSearchError> {
-        self.service.cleanup_run(marker)
-    }
-
+impl IndexingCoordinator<'_> {
     fn project(&mut self, rebuild: bool) -> Result<LifecycleStatus, FastSearchError> {
         let mut snapshots = self.documents.snapshot()?;
         snapshots.extend(self.maps.snapshot()?);
@@ -696,15 +655,9 @@ impl ProductionRuntime {
         Ok(lexical)
     }
 
-    fn combined_records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
-        let mut records = self.maps.records()?;
-        records.extend(self.symbols.records()?);
-        Ok(records)
-    }
-
-    fn lifecycle_status(&self) -> LifecycleStatus {
-        let state = self.state.lifecycle_status();
-        let lexical = self.lexical.lifecycle_status();
+    fn lifecycle_status(state: &SqliteStateStore, lexical: &TantivyLexical) -> LifecycleStatus {
+        let state = state.lifecycle_status();
+        let lexical = lexical.lifecycle_status();
         if state.freshness() == IndexFreshness::Degraded {
             return state;
         }
@@ -732,8 +685,20 @@ impl ProductionRuntime {
     }
 }
 
-impl AgentSurface for ProductionRuntime {
-    fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
+struct SearchCoordinator<'a> {
+    lexical: &'a TantivyLexical,
+    vector: &'a LocalE5Vector,
+    vector_configured: bool,
+    maps: &'a CodeMapSource,
+    symbols: &'a SymbolSource,
+}
+
+impl SearchCoordinator<'_> {
+    fn search(
+        &self,
+        query: &SearchQuery,
+        status: Vec<CapabilityStatus>,
+    ) -> Result<SearchResponse, FastSearchError> {
         let lexical = self.lexical.search(query)?;
         let mut grouped = BTreeMap::<u8, (RetrievalChannel, Vec<SearchHit>)>::new();
         for hit in lexical.hits() {
@@ -785,7 +750,103 @@ impl AgentSurface for ProductionRuntime {
             symbols,
             IndexFreshness::Current,
         )?);
-        Ok(FusionCoordinator::fuse(query, candidates, &self.status()))
+        Ok(FusionCoordinator::fuse(query, candidates, &status))
+    }
+
+    fn related(
+        &self,
+        maps: Vec<CanonicalRecord>,
+        query: &RelatedQuery,
+    ) -> Result<Vec<CanonicalRecord>, FastSearchError> {
+        CodeMapRelated::new(maps)?.related_maps(query)
+    }
+}
+
+impl std::fmt::Debug for ProductionRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProductionRuntime")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProductionRuntime {
+    pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
+        let document_root = canonical_directory(&config.document_root, "document root")?;
+        let code_root = canonical_directory(&config.code_root, "code root")?;
+        let service = security::ServiceRunBoundary::admit_and_pin(
+            &document_root,
+            &code_root,
+            &config.service_root,
+        )?;
+        let vector_configured = config.e5_root.is_some();
+        let model_root = config
+            .e5_root
+            .unwrap_or_else(|| service.service_root().join("unconfigured-e5"));
+
+        Ok(Self {
+            state: SqliteStateStore::open(service.service_root().join("state.sqlite"))?,
+            lexical: TantivyLexical::open(service.service_root().join("lexical"))?,
+            service,
+            documents: FilesystemSource::new(document_root.clone()),
+            maps: CodeMapSource::new(document_root),
+            symbols: SymbolSource::new(LogicalRootId::parse("code-fastsearch")?, code_root),
+            vector: LocalE5Vector::open(model_root, E5_IDENTITY),
+            vector_configured,
+        })
+    }
+
+    pub fn index(&mut self) -> Result<LifecycleStatus, FastSearchError> {
+        self.indexing().project(false)
+    }
+
+    pub fn rebuild(&mut self) -> Result<LifecycleStatus, FastSearchError> {
+        self.indexing().project(true)
+    }
+
+    /// Creates an exact run-owned directory used by acceptance jobs and batch callers.
+    pub fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
+        self.service.record_run_marker(marker)
+    }
+
+    /// Removes only a directory whose marker content exactly matches the requested run.
+    pub fn cleanup_run(&self, marker: &str) -> Result<bool, FastSearchError> {
+        self.service.cleanup_run(marker)
+    }
+
+    fn indexing(&mut self) -> IndexingCoordinator<'_> {
+        IndexingCoordinator {
+            documents: &self.documents,
+            maps: &self.maps,
+            symbols: &self.symbols,
+            state: &mut self.state,
+            lexical: &self.lexical,
+            vector: &self.vector,
+            vector_configured: self.vector_configured,
+        }
+    }
+
+    fn combined_records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
+        let mut records = self.maps.records()?;
+        records.extend(self.symbols.records()?);
+        Ok(records)
+    }
+
+    fn lifecycle_status(&self) -> LifecycleStatus {
+        IndexingCoordinator::lifecycle_status(&self.state, &self.lexical)
+    }
+}
+
+impl AgentSurface for ProductionRuntime {
+    fn search(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
+        SearchCoordinator {
+            lexical: &self.lexical,
+            vector: &self.vector,
+            vector_configured: self.vector_configured,
+            maps: &self.maps,
+            symbols: &self.symbols,
+        }
+        .search(query, self.status())
     }
 
     fn get(&self, id: &StableId) -> Result<Option<CanonicalRecord>, FastSearchError> {
@@ -793,7 +854,14 @@ impl AgentSurface for ProductionRuntime {
     }
 
     fn related(&self, query: &RelatedQuery) -> Result<Vec<CanonicalRecord>, FastSearchError> {
-        CodeMapRelated::new(self.combined_records()?)?.related_maps(query)
+        SearchCoordinator {
+            lexical: &self.lexical,
+            vector: &self.vector,
+            vector_configured: self.vector_configured,
+            maps: &self.maps,
+            symbols: &self.symbols,
+        }
+        .related(self.combined_records()?, query)
     }
 
     fn status(&self) -> Vec<CapabilityStatus> {
