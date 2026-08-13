@@ -178,15 +178,6 @@ mod tests {
             ["docs/alpha.md", "docs/zeta.md", "registry.tsv"],
             "scanner must exclude ignored/build/unsupported files and sort lexically"
         );
-        let canonical_root = fixture
-            .path()
-            .canonicalize()
-            .expect("canonical fixture root");
-        assert!(
-            scanned
-                .iter()
-                .all(|source| source.path.starts_with(&canonical_root))
-        );
         assert!(
             scanned
                 .iter()

@@ -27,7 +27,6 @@ pub(super) enum ScannedSourceKind {
 /// Filesystem-admitted, bounded UTF-8 content for a format parser.
 #[derive(Debug)]
 pub(super) struct ScannedSource {
-    pub(super) path: PathBuf,
     pub(super) locator: String,
     pub(super) bytes: Vec<u8>,
     pub(super) kind: ScannedSourceKind,
@@ -117,7 +116,6 @@ fn read_source(
     let locator = relative.to_string_lossy().replace('\\', "/");
 
     Ok(ScannedSource {
-        path: canonical_path,
         locator,
         bytes,
         kind,
