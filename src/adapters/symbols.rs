@@ -39,12 +39,12 @@ impl SymbolSource {
         let root = canonical_root(&self.root)?;
         let mut files = Vec::new();
         collect_files(&root, &root, 0, &mut files)?;
-        let mut files = files
+        let mut ordered_files = files
             .into_iter()
             .map(|path| Ok((normalized_relative(&root, &path)?, path)))
             .collect::<Result<Vec<_>, FastSearchError>>()?;
-        files.sort_by(|left, right| left.0.cmp(&right.0));
-        files
+        ordered_files.sort_by(|left, right| left.0.cmp(&right.0));
+        ordered_files
             .into_iter()
             .map(|(_, path)| self.parse_file(&root, &path))
             .collect()
