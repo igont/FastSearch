@@ -6,15 +6,17 @@ FastSearch создаётся как один локальный инструм�
 
 Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Подробные ветки, листья, команды и ownership определяются только перед запуском соответствующего дерева по фактическому состоянию репозитория.
 
-## Фактическое состояние на 13.08.2026
+## Фактическое состояние на 14.08.2026
 
 - Дерево 1 принято как контрактный baseline.
 - Дерево 2 принято и слито в `main` ревизией `adc9ad95842047bf5b6c47cba127d7f40eeb09c9`.
 - Переходная коррекция `77a05be945970a371537ea5c84e34bf11aaa8f52` закрывает admission реального Obsidian-хранилища: параметризованный root, полные `.gitignore`-правила, inline frontmatter collections, локальная исключённая зона `.cfknowledge` и no-op projection update.
 - `C:\Users\Igor\Downloads\Obsidian` является проверенным представительным документальным корпусом, но не частью runtime-конфигурации и не захардкожен в коде или тестах.
 - Дерево 3 принято и слито в `main` ревизией `5b25f5bf235309761f4376dc4143b246c8409c66`. Оно добавило named document/code roots, локальный E5 vector contour с честным fallback, `.cfmap.md`, Rust/Python structural symbols, deterministic fusion и единую production-композицию CLI.
-- Точный локальный baseline DT4 — `5b25f5bf235309761f4376dc4143b246c8409c66`. Обычная test suite, formatting, Clippy и release build на нём проходят; cache-gated E5 проверки требуют отдельно переданного локального model root и не считаются повторно подтверждёнными текущим запуском.
-- Дерево 4 ещё не материализовано. Его фактический вход, уточнённый контур и открытые решения зафиксированы в [evidence/dt3-dt4-handoff.md](evidence/dt3-dt4-handoff.md). До materialization запрещено считать выбранными MCP crate/version, protocol DTO, ownership indexing-команд, concurrency model и числовые resource limits.
+- После принятого DT3 baseline в `main` слит runtime/CLI refactor; точный planning baseline DT4 — `23ed8773f9830bf6762f058255b17cbb1fe7ad46` (`main == igont/main`). Обычная test suite, formatting, Clippy и release build на нём проходят; E5 остаётся cache-gated.
+- Дерево 4 материализовано как план `FASTSEARCH-DT4-AGENT-TOOL-13-08-2026`, `PV-6`, в `.agents/DT-13-08-2026_19-10-Агентский-MCP-инструмент-FastSearch`. Только Foundation `A1→A4` имеет executable contract; B–E — `DORMANT OUTLINE` до GA/GM-PRODUCTION. Последние review потребовали развести shared `.cfknowledge` и product-owned state, planning/execution revisions и revision-scoped baseline gates; PV-6 материализует эти исправления и самостоятельно проверен Root без нового reviewer по указанию владельца. Product implementation не начата.
+- Historical [DT3→DT4 handoff](evidence/dt3-dt4-handoff.md) сохраняет принятый DT3 product baseline; для strict agent admission, flat marker-owned `.cfknowledge/fastsearch-dt4-<instance_id>`, SDK lifecycle, error carriers, vector authority, accounting, limits и gates его явно supersede-ит PV-6.
+- Перед implementation обязателен `G-EXECUTION-BASE`: после отдельного разрешения владельца текущие PV-6 `ROADMAP.md` и handoff фиксируются docs-only commit, затем exact hash/ancestry записываются как `execution_revision`. Planning snapshot не считается execution baseline. После этого `G-BASE@execution`, а затем `G-BASE@A1`…`G-BASE@A4` исполняются заново на exact revision своей стадии; исторический PASS не переиспользуется. Пока gate не закрыт, worktree A не создаётся.
 
 ## Общие правила движения
 
@@ -224,12 +226,12 @@ TODO блокирует закрытие текущего дерева, если
 
 ### Вход
 
-- exact local `main` baseline `5b25f5bf235309761f4376dc4143b246c8409c66` и прочитанный DT3 archive/handoff;
+- exact local `main` planning snapshot `23ed8773f9830bf6762f058255b17cbb1fe7ad46`, historical DT3 product baseline `5b25f5bf235309761f4376dc4143b246c8409c66` и прочитанный archive/handoff/PV-6; execution revision назначается только `G-EXECUTION-BASE`;
 - принятые `AgentSurface`, `ProductionConfig` и `ProductionRuntime` без transport-specific типов внутри domain;
 - завершённые document, lexical, optional vector, map и symbol adapters;
 - regression dataset, DT3 release evidence и повторная проверка доступности локального E5 cache;
 - инвентаризация test-only mocks, protocol gaps, устаревших комментариев и реально открытых TODO;
-- принятые до implementation решения по transport, DTO, startup configuration, indexing ownership, concurrency и числовым resource limits.
+- принятые до implementation решения по dual-era envelope, DTO/redaction, strict `instance_id` + opaque admitted root, map-source related, exact outcome/legacy projection, agent-scoped vector health и single-owner concurrency; B/C/D1/D2 получают configurable bounds, а release numbers замораживаются только D3.
 
 ### Что делает дерево
 
@@ -239,7 +241,7 @@ TODO блокирует закрытие текущего дерева, если
 - определяет indexing ownership явно: `update/rebuild` остаются operator CLI либо становятся отдельными maintenance tools, но никогда не выполняются скрыто внутри каждого search request;
 - проверяет semantic parity CLI/MCP на общей contract suite: records, ordering, channels, provenance, freshness и structured errors;
 - вводит измеренные ограничения query length, result count, payload bytes, execution time и одновременно обслуживаемой работы; truncation и cancellation наблюдаемы;
-- фиксирует startup configuration для document/code/service/model roots, не возвращает machine-specific absolute paths и не требует credentials для локального `stdio` contour;
+- фиксирует agent profile для document/code roots, logical instance id и optional model root; service state живёт только в flat marker-owned `<document_root>/.cfknowledge/fastsearch-dt4-<instance_id>`, совместимом с действующим generic containment contract. `.cfknowledge` остаётся shared excluded container, foreign siblings неприкосновенны, physical paths не возвращаются в wire;
 - проверяет lifecycle долгоживущего процесса: startup, повторные requests, stale/degraded recovery, provider absence/failure и controlled shutdown;
 - готовит воспроизводимую Windows-first сборку, checksum, smoke из чистого каталога и документацию запуска MCP-клиентом;
 - сохраняет optional model cache внешним immutable artifact: «один бинарник» означает один FastSearch executable, а не встраивание весов E5;
@@ -275,14 +277,14 @@ TODO блокирует закрытие текущего дерева, если
 
 ### Gate materialization
 
-Перед созданием динамического дерева 4 требуется короткий bounded discovery, который не меняет product-код:
+Перед материализацией дерева 4 требовался bounded discovery. Его решения теперь канонизированы PV-6, а фактические evidence производятся Foundation/D3 gates:
 
 1. выбрать и зафиксировать protocol/SDK version и проверить минимальный Rust `stdio` handshake на текущем toolchain;
 2. определить wire DTO и точное отображение domain errors/status без потери provenance;
 3. согласовать startup configuration и ownership `index update/rebuild`;
 4. выбрать последовательную либо явно синхронизированную модель долгоживущего runtime;
-5. измерить baseline payload/latency и только после этого назначить числовые limits;
-6. подтвердить доступность принятого E5 cache либо заранее классифицировать vector acceptance как отдельный cache-gated contour.
+5. измерить core/actor в A4 и modern+legacy production stdio в D3; только D3 назначает release numeric limits и закрывает `G-LIMITS`, это не блокирует B/C/D1/D2;
+6. предоставить immutable E5 cache для A4 vector crash/restart/query acceptance; отсутствие cache оставляет GA `NOT_READY`, но не делает E5 обязательным runtime-профилем продукта.
 
 ## Переходы между деревьями
 

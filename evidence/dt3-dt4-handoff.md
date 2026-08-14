@@ -2,6 +2,10 @@
 
 Дата проверки: `13.08.2026 10:57`.
 
+## Статус supersession
+
+Этот файл сохраняет historical DT3 product handoff на `5b25f5bf235309761f4376dc4143b246c8409c66`. Текущий planning snapshot DT4 — `23ed8773f9830bf6762f058255b17cbb1fe7ad46`; контракты и gates канонизированы в `.agents/DT-13-08-2026_19-10-Агентский-MCP-инструмент-FastSearch`, `PV-6`. При конфликте по baseline admission, flat marker-owned `.cfknowledge/fastsearch-dt4-<instance_id>`, MCP lifecycle/carriers, related, outcome compatibility, vector authority, limits и revision-scoped gates PV-6 supersede-ит этот historical вход. Execution revision появится только после docs-only `G-EXECUTION-BASE`; planning snapshot не является execution baseline, product implementation DT4 не начата.
+
 ## Точный baseline
 
 - Финальная integration revision DT3 до архива: `7d055df6f2aa2eed81ec31dc6de647221e7b2ee2`.
@@ -78,4 +82,4 @@ DT4 можно материализовать от exact baseline не ниже 
 7. определено, является ли remote-backed baseline обязательным gate до исполнения либо только до выпуска;
 8. E5 cache повторно квалифицирован либо vector-specific acceptance явно оставлена cache-gated без ложного общего `PASS`.
 
-Материализованного плана DT4 пока нет. Этот handoff уточняет вход и намерение, но не разрешает product implementation сам по себе.
+На момент этого historical handoff материализованного плана DT4 не было. Теперь PV-6 создан и явно supersede-ит этот файл для execution decisions; ни handoff, ни план не доказывают ещё не выполненную product implementation, а planning snapshot не становится execution baseline до `G-EXECUTION-BASE`. Каждый последующий `G-BASE@<stage>` привязан к exact candidate revision своей стадии и не наследует исторический PASS.
