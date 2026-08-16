@@ -4,34 +4,197 @@
 //! writes them back, and a model/content identity mismatch makes its projection
 //! stale until the caller supplies the authoritative record set again.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::Instant,
+};
 
 #[cfg(test)]
-use std::{fs, fs::File, io::Read, path::Path};
+use std::{fs, fs::File, io::Read};
 
+mod partition;
 mod verified_provider;
 
 use verified_provider::VerifiedProvider;
 
 use crate::{
     domain::{
-        BackendKind, CanonicalRecord, Capability, CapabilityStatus, ErrorKind, FastSearchError,
-        IndexFreshness, LifecycleStatus, ModelIdentity, ProjectionProvenance, RetrievalChannel,
-        SearchHit, SearchQuery, SearchResponse,
+        BackendKind, CanonicalRecord, Capability, CapabilityStatus, EmbeddingModelId, ErrorKind,
+        ExecutionDevice, FastSearchError, IndexFreshness, LifecycleStatus, ModelIdentity,
+        ProjectionProvenance, RetrievalChannel, SearchHit, SearchQuery, SearchResponse,
     },
     ports::VectorRetrieval,
 };
 
+/// Ensures the selected runtime can download, open and produce a finite vector.
+/// This readiness probe never reads or indexes workspace content.
+pub fn prepare_embedding_model(
+    model_id: EmbeddingModelId,
+    cache_root: &std::path::Path,
+    show_download_progress: bool,
+) -> Result<(), FastSearchError> {
+    let mut provider =
+        VerifiedProvider::acquire(cache_root, model_id, show_download_progress, true)?;
+    let vector = provider.embed_query("FastSearch model readiness probe")?;
+    if vector.len() != model_id.dimension() {
+        return Err(FastSearchError::new(
+            ErrorKind::CapabilityUnavailable {
+                capability: Capability::VectorRetrieval,
+            },
+            format!(
+                "embedding model {} returned {} dimensions instead of {}",
+                model_id.slug(),
+                vector.len(),
+                model_id.dimension()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Probes one concrete execution device without reading workspace content.
+pub fn probe_embedding_model_device(
+    model_id: EmbeddingModelId,
+    cache_root: &Path,
+    device: ExecutionDevice,
+) -> Result<(), FastSearchError> {
+    let mut provider =
+        VerifiedProvider::acquire_on_device(cache_root, model_id, false, true, device)?;
+    let vector = provider.embed_query("FastSearch execution device probe")?;
+    if vector.len() != model_id.dimension() {
+        return Err(FastSearchError::new(
+            ErrorKind::CapabilityUnavailable {
+                capability: Capability::VectorRetrieval,
+            },
+            format!(
+                "{} probe returned {} dimensions instead of {}",
+                device.label(),
+                vector.len(),
+                model_id.dimension()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct EmbeddingBatchMeasurement {
+    batch_size: usize,
+    duration_ms: u128,
+    documents_per_second: f64,
+    working_set_bytes: Option<u64>,
+}
+
+impl EmbeddingBatchMeasurement {
+    #[must_use]
+    pub const fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    #[must_use]
+    pub const fn duration_ms(&self) -> u128 {
+        self.duration_ms
+    }
+
+    #[must_use]
+    pub const fn documents_per_second(&self) -> f64 {
+        self.documents_per_second
+    }
+
+    #[must_use]
+    pub const fn working_set_bytes(&self) -> Option<u64> {
+        self.working_set_bytes
+    }
+}
+
+/// Benchmarks CPU inference with one loaded runtime. Every candidate is
+/// measured three times and reported by median wall-clock duration.
+pub fn benchmark_embedding_batches(
+    model_id: EmbeddingModelId,
+    cache_root: &Path,
+    texts: &[String],
+    batch_sizes: &[usize],
+) -> Result<Vec<EmbeddingBatchMeasurement>, FastSearchError> {
+    benchmark_embedding_batches_on_device(
+        model_id,
+        cache_root,
+        texts,
+        batch_sizes,
+        ExecutionDevice::Cpu,
+    )
+}
+
+pub fn benchmark_embedding_batches_on_device(
+    model_id: EmbeddingModelId,
+    cache_root: &Path,
+    texts: &[String],
+    batch_sizes: &[usize],
+    device: ExecutionDevice,
+) -> Result<Vec<EmbeddingBatchMeasurement>, FastSearchError> {
+    if texts.is_empty() || batch_sizes.is_empty() || batch_sizes.contains(&0) {
+        return Err(FastSearchError::new(
+            ErrorKind::InvalidContent,
+            "batch benchmark requires texts and positive batch sizes",
+        ));
+    }
+    let mut provider =
+        VerifiedProvider::acquire_on_device(cache_root, model_id, false, true, device)?;
+    let warmup_count = texts.len().min(8);
+    provider.embed_benchmark_texts(&texts[..warmup_count], 1)?;
+
+    let mut measurements = Vec::with_capacity(batch_sizes.len());
+    for &batch_size in batch_sizes {
+        let mut rounds = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let started = Instant::now();
+            provider.embed_benchmark_texts(texts, batch_size)?;
+            rounds.push(started.elapsed());
+        }
+        rounds.sort_unstable();
+        let median = rounds[1];
+        measurements.push(EmbeddingBatchMeasurement {
+            batch_size,
+            duration_ms: median.as_millis(),
+            documents_per_second: texts.len() as f64 / median.as_secs_f64(),
+            working_set_bytes: super::process_metrics::working_set_bytes(),
+        });
+    }
+    Ok(measurements)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VectorPartitionMetrics {
+    size_bytes: u64,
+    build_duration_ms: u64,
+}
+
+impl VectorPartitionMetrics {
+    #[must_use]
+    pub const fn size_bytes(self) -> u64 {
+        self.size_bytes
+    }
+
+    #[must_use]
+    pub const fn build_duration_ms(self) -> u64 {
+        self.build_duration_ms
+    }
+}
+
 #[derive(Clone)]
-struct ProjectedRecord {
-    record: CanonicalRecord,
-    content_hash: String,
-    vector: Vec<f32>,
+pub(super) struct ProjectedRecord {
+    pub(super) record: CanonicalRecord,
+    pub(super) content_hash: String,
+    pub(super) vector: Vec<f32>,
 }
 struct ProjectionState {
     model_root: PathBuf,
+    model_id: EmbeddingModelId,
+    allow_catalog_download: bool,
     model_identity: String,
     model_manifest: Option<String>,
+    partition_root: Option<PathBuf>,
     records: BTreeMap<String, ProjectedRecord>,
     state_generation: u64,
     projection_generation: Option<u64>,
@@ -72,12 +235,38 @@ impl VectorProjectionProvenance {
 impl LocalE5Vector {
     #[must_use]
     pub fn open(model_root: impl Into<PathBuf>, model_identity: impl Into<String>) -> Self {
+        Self::open_internal(
+            model_root,
+            model_identity,
+            EmbeddingModelId::MultilingualE5Small,
+            false,
+        )
+    }
+
+    #[must_use]
+    pub fn open_with_model(
+        model_root: impl Into<PathBuf>,
+        model_identity: impl Into<String>,
+        model_id: EmbeddingModelId,
+    ) -> Self {
+        Self::open_internal(model_root, model_identity, model_id, true)
+    }
+
+    fn open_internal(
+        model_root: impl Into<PathBuf>,
+        model_identity: impl Into<String>,
+        model_id: EmbeddingModelId,
+        allow_catalog_download: bool,
+    ) -> Self {
         Self {
             operation: Mutex::new(()),
             state: Mutex::new(ProjectionState {
                 model_root: model_root.into(),
+                model_id,
+                allow_catalog_download,
                 model_identity: model_identity.into(),
                 model_manifest: None,
+                partition_root: None,
                 records: BTreeMap::new(),
                 state_generation: 0,
                 projection_generation: None,
@@ -85,6 +274,123 @@ impl LocalE5Vector {
                 detail: "vector projection is absent".to_owned(),
             }),
         }
+    }
+
+    #[must_use]
+    pub fn open_persistent_with_model(
+        model_root: impl Into<PathBuf>,
+        model_identity: impl Into<String>,
+        model_id: EmbeddingModelId,
+        partition_root: impl Into<PathBuf>,
+    ) -> Self {
+        let vector = Self::open_internal(model_root, model_identity, model_id, true);
+        if let Ok(mut state) = vector.state.lock() {
+            state.partition_root = Some(partition_root.into());
+        }
+        vector
+    }
+
+    /// Re-admits an already materialized partition against the current
+    /// canonical record set without opening the embedding model.
+    pub fn restore(
+        &self,
+        records: &[CanonicalRecord],
+        state_generation: u64,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        let _operation = self.lock_operation()?;
+        let (partition_root, model_id, model_identity) = {
+            let state = self.lock()?;
+            (
+                state.partition_root.clone(),
+                state.model_id,
+                state.model_identity.clone(),
+            )
+        };
+        let Some(partition_root) = partition_root else {
+            let mut state = self.lock()?;
+            state.state_generation = state_generation;
+            state.freshness = IndexFreshness::Stale;
+            state.detail = "persistent vector partition is not configured".to_owned();
+            return Ok(status(&state));
+        };
+        match partition::load(
+            &partition_root,
+            partition::ExpectedPartition {
+                model_id,
+                model_identity: &model_identity,
+                state_generation,
+                records,
+            },
+        ) {
+            Ok(Some(loaded)) => {
+                let mut state = self.lock()?;
+                state.records = loaded.records;
+                state.model_manifest = Some(loaded.manifest.artifact_manifest);
+                state.state_generation = state_generation;
+                state.projection_generation = Some(state_generation);
+                state.freshness = IndexFreshness::Current;
+                state.detail =
+                    format!("persistent vector partition is current for {model_identity}");
+                Ok(status(&state))
+            }
+            Ok(None) => {
+                let mut state = self.lock()?;
+                state.records.clear();
+                state.model_manifest = None;
+                state.state_generation = state_generation;
+                state.projection_generation = None;
+                state.freshness = IndexFreshness::Stale;
+                state.detail = format!("vector partition is absent or stale for {model_identity}");
+                Ok(status(&state))
+            }
+            Err(error) => {
+                let mut state = self.lock()?;
+                state.records.clear();
+                state.model_manifest = None;
+                state.state_generation = state_generation;
+                state.projection_generation = None;
+                state.freshness = IndexFreshness::Degraded;
+                state.detail = error.message().to_owned();
+                Ok(status(&state))
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn persistent_status(
+        partition_root: &Path,
+        model_id: EmbeddingModelId,
+        model_identity: &str,
+        records: &[CanonicalRecord],
+        state_generation: u64,
+    ) -> LifecycleStatus {
+        let vector = Self::open_persistent_with_model(
+            PathBuf::new(),
+            model_identity,
+            model_id,
+            partition_root,
+        );
+        vector
+            .restore(records, state_generation)
+            .unwrap_or_else(|error| {
+                LifecycleStatus::new(
+                    IndexFreshness::Degraded,
+                    state_generation,
+                    None,
+                    error.message(),
+                )
+            })
+    }
+
+    pub fn persistent_metrics(
+        partition_root: &Path,
+    ) -> Result<Option<VectorPartitionMetrics>, FastSearchError> {
+        Ok(
+            partition::stored_metrics(partition_root)?.map(|metrics| VectorPartitionMetrics {
+                size_bytes: metrics.size_bytes,
+                build_duration_ms: metrics.build_duration_ms,
+            }),
+        )
     }
 
     /// Applies the complete authoritative record set. Removed IDs disappear from
@@ -103,12 +409,19 @@ impl LocalE5Vector {
         records: &[CanonicalRecord],
         state_generation: u64,
     ) -> Result<LifecycleStatus, FastSearchError> {
-        let (root, identity) = {
+        let build_started = Instant::now();
+        let (root, identity, model_id, allow_catalog_download) = {
             let state = self.lock()?;
-            (state.model_root.clone(), state.model_identity.clone())
+            (
+                state.model_root.clone(),
+                state.model_identity.clone(),
+                state.model_id,
+                state.allow_catalog_download,
+            )
         };
-        let verified = VerifiedProvider::acquire(&root)
-            .map_err(|error| self.provider_failed(state_generation, error))?;
+        let mut verified =
+            VerifiedProvider::acquire(&root, model_id, false, allow_catalog_download)
+                .map_err(|error| self.provider_failed(state_generation, error))?;
         let manifest = verified.manifest.clone();
         let unchanged = {
             let state = self.lock()?;
@@ -150,17 +463,49 @@ impl LocalE5Vector {
                 },
             );
         }
+        let partition_root = {
+            let mut state = self.lock()?;
+            // Reconfiguration during embedding is a causal stale result, never Current.
+            if state.model_identity != identity
+                || state.model_root != root
+                || state.model_id != model_id
+                || state
+                    .model_manifest
+                    .as_deref()
+                    .is_some_and(|current| current != manifest)
+            {
+                state.freshness = IndexFreshness::Stale;
+                state.detail = "model identity changed while projection was building".to_owned();
+                return Ok(status(&state));
+            }
+            state.partition_root.clone()
+        };
+        if let Some(partition_root) = partition_root {
+            partition::save(
+                &partition_root,
+                &partition::PartitionManifest {
+                    schema_version: 2,
+                    model_slug: model_id.slug().to_owned(),
+                    model_identity: identity.clone(),
+                    artifact_manifest: manifest.clone(),
+                    runtime_contract: partition::VECTOR_RUNTIME_CONTRACT.to_owned(),
+                    dimension: model_id.dimension(),
+                    state_generation,
+                    corpus_fingerprint: partition::corpus_fingerprint(records),
+                    record_count: records.len(),
+                    build_duration_ms: None,
+                },
+                &next,
+                build_started,
+            )?;
+        }
         let mut state = self.lock()?;
-        // Reconfiguration during embedding is a causal stale result, never Current.
         if state.model_identity != identity
             || state.model_root != root
-            || state
-                .model_manifest
-                .as_deref()
-                .is_some_and(|current| current != manifest)
+            || state.model_id != model_id
         {
             state.freshness = IndexFreshness::Stale;
-            state.detail = "model identity changed while projection was building".to_owned();
+            state.detail = "model identity changed while projection was publishing".to_owned();
             return Ok(status(&state));
         }
         state.records = next;
@@ -278,6 +623,8 @@ impl VectorRetrieval for LocalE5Vector {
         let _operation = self.lock_operation()?;
         let (
             root,
+            model_id,
+            allow_catalog_download,
             entries,
             freshness,
             generation,
@@ -288,6 +635,8 @@ impl VectorRetrieval for LocalE5Vector {
             let state = self.lock()?;
             (
                 state.model_root.clone(),
+                state.model_id,
+                state.allow_catalog_download,
                 state.records.values().cloned().collect::<Vec<_>>(),
                 state.freshness,
                 state.state_generation,
@@ -299,16 +648,17 @@ impl VectorRetrieval for LocalE5Vector {
         if freshness != IndexFreshness::Current {
             return Ok(SearchResponse::with_freshness(Vec::new(), freshness));
         }
-        let verified = match VerifiedProvider::acquire(&root) {
-            Ok(value) => value,
-            Err(error) => {
-                self.provider_failed(generation, error);
-                return Ok(SearchResponse::with_freshness(
-                    Vec::new(),
-                    IndexFreshness::Degraded,
-                ));
-            }
-        };
+        let mut verified =
+            match VerifiedProvider::acquire(&root, model_id, false, allow_catalog_download) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.provider_failed(generation, error);
+                    return Ok(SearchResponse::with_freshness(
+                        Vec::new(),
+                        IndexFreshness::Degraded,
+                    ));
+                }
+            };
         if manifest.as_deref() != Some(&verified.manifest) {
             let mut state = self.lock()?;
             state.freshness = IndexFreshness::Stale;
@@ -321,13 +671,8 @@ impl VectorRetrieval for LocalE5Vector {
             ));
         }
         let query_vector = verified
-            .embed_texts(&[query.text().to_owned()])
-            .map_err(|error| self.provider_failed(generation, error))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                FastSearchError::new(ErrorKind::ProjectionFailure, "E5 returned no query vector")
-            })?;
+            .embed_query(query.text())
+            .map_err(|error| self.provider_failed(generation, error))?;
         let provenance = projection_generation
             .zip(manifest)
             .map(|(projection, fingerprint)| {

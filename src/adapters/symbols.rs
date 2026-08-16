@@ -24,6 +24,7 @@ const MAX_NODES: usize = 16_384;
 pub struct SymbolSource {
     root_id: LogicalRootId,
     root: PathBuf,
+    ignore_unsupported: bool,
 }
 
 impl SymbolSource {
@@ -32,13 +33,23 @@ impl SymbolSource {
         Self {
             root_id,
             root: root.into(),
+            ignore_unsupported: false,
+        }
+    }
+
+    #[must_use]
+    pub fn new_workspace(root_id: LogicalRootId, root: impl Into<PathBuf>) -> Self {
+        Self {
+            root_id,
+            root: root.into(),
+            ignore_unsupported: true,
         }
     }
 
     pub fn snapshots(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
         let root = canonical_root(&self.root)?;
         let mut files = Vec::new();
-        collect_files(&root, &root, 0, &mut files)?;
+        collect_files(&root, &root, 0, &mut files, self.ignore_unsupported)?;
         let mut ordered_files = files
             .into_iter()
             .map(|path| Ok((normalized_relative(&root, &path)?, path)))
@@ -189,6 +200,7 @@ fn collect_files(
     dir: &Path,
     depth: usize,
     files: &mut Vec<PathBuf>,
+    ignore_unsupported: bool,
 ) -> Result<(), FastSearchError> {
     if depth > MAX_DEPTH {
         return Err(invalid("code directory depth exceeds configured limit"));
@@ -203,9 +215,14 @@ fn collect_files(
         }
         let path = entry.path();
         if ty.is_dir() {
-            collect_files(root, &path, depth + 1, files)?;
+            if !excluded_directory(&path) {
+                collect_files(root, &path, depth + 1, files, ignore_unsupported)?;
+            }
         } else if ty.is_file() {
             if !matches!(path.extension().and_then(|e| e.to_str()), Some("rs" | "py")) {
+                if ignore_unsupported {
+                    continue;
+                }
                 return Err(invalid("unsupported code language"));
             }
             let canonical = path
@@ -221,6 +238,24 @@ fn collect_files(
         }
     }
     Ok(())
+}
+
+fn excluded_directory(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        matches!(
+            name.to_str(),
+            Some(
+                ".fastsearch"
+                    | ".git"
+                    | ".venv"
+                    | "build"
+                    | "dist"
+                    | "node_modules"
+                    | "target"
+                    | "vendor"
+            )
+        )
+    })
 }
 fn ensure_bounded_file(path: &Path) -> Result<(), FastSearchError> {
     let length = fs::metadata(path)

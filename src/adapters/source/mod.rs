@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::domain::{CanonicalRecord, ErrorKind, FastSearchError, SourceSnapshot};
+use crate::domain::{CanonicalRecord, ErrorKind, FastSearchError, LogicalRootId, SourceSnapshot};
 use crate::ports::SourcePort;
 
 mod markdown;
@@ -16,23 +16,35 @@ use scanner::{ScannedSourceKind, scan_sources};
 
 /// Reads canonical Markdown snapshots from the verified source root.
 pub fn markdown_snapshots(root: &Path) -> Result<Vec<SourceSnapshot>, FastSearchError> {
-    collect_snapshots(root, Some(ScannedSourceKind::Markdown))
+    collect_snapshots(root, Some(ScannedSourceKind::Markdown), None)
 }
 
 /// Read-only filesystem implementation of the source boundary.
 #[derive(Debug)]
 pub struct FilesystemSource {
     root: PathBuf,
+    root_id: Option<LogicalRootId>,
 }
 
 impl FilesystemSource {
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            root_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn new_named(root_id: LogicalRootId, root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            root_id: Some(root_id),
+        }
     }
 
     fn snapshots(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
-        let snapshots = collect_snapshots(&self.root, None)?;
+        let snapshots = collect_snapshots(&self.root, None, self.root_id.as_ref())?;
         ensure_unique_snapshot_ids(&snapshots)?;
         Ok(snapshots)
     }
@@ -73,12 +85,13 @@ fn ensure_unique_snapshot_ids(snapshots: &[SourceSnapshot]) -> Result<(), FastSe
 fn collect_snapshots(
     root: &Path,
     kind: Option<ScannedSourceKind>,
+    root_id: Option<&LogicalRootId>,
 ) -> Result<Vec<SourceSnapshot>, FastSearchError> {
     scan_sources(root)?
         .iter()
         .filter(|source| kind.is_none_or(|expected| source.kind == expected))
         .map(|source| {
-            let parsed = parse_source(source.kind, &source.locator, &source.bytes);
+            let parsed = parse_source(source.kind, &source.locator, &source.bytes, root_id);
             parsed.map_err(|error| {
                 FastSearchError::new(
                     error.kind().clone(),
@@ -93,10 +106,11 @@ fn parse_source(
     kind: ScannedSourceKind,
     locator: &str,
     bytes: &[u8],
+    root_id: Option<&LogicalRootId>,
 ) -> Result<SourceSnapshot, FastSearchError> {
     match kind {
-        ScannedSourceKind::Markdown => markdown::parse(locator, bytes),
-        ScannedSourceKind::Tsv => tsv::parse(locator, bytes),
+        ScannedSourceKind::Markdown => markdown::parse_with_root(locator, bytes, root_id),
+        ScannedSourceKind::Tsv => tsv::parse_with_root(locator, bytes, root_id),
     }
 }
 
@@ -189,6 +203,40 @@ mod tests {
                 ScannedSourceKind::Markdown,
                 ScannedSourceKind::Markdown,
                 ScannedSourceKind::Tsv
+            ]
+        );
+    }
+
+    #[test]
+    fn scanner_excludes_generated_coverage_registry_but_keeps_ordinary_tsv() {
+        let fixture = Fixture::new();
+        let generated_header = "id\tpath\tsummary\ttdr_coverage\ttdr_refs\twarnings\terrors";
+        fixture.write(
+            "Traceability/Paradigm Coverage Registry.tsv",
+            &format!(
+                "{generated_header}\nentry\tdocs/entry.md\tduplicated text\tdirect\tTDR-1\t\t"
+            ),
+        );
+        fixture.write(
+            "Traceability/Alignment Evidence Registry.tsv",
+            "id\tpath\tevidence\nALIGN-1\tdocs/entry.md\tunique evidence",
+        );
+        fixture.write(
+            "Reports/Manual Coverage Registry.tsv",
+            &format!("{generated_header}\nentry\tdocs/entry.md\tmanual report\tdirect\tTDR-1\t\t"),
+        );
+
+        let scanned = scan_sources(fixture.path()).expect("valid registries must scan");
+        let locators = scanned
+            .iter()
+            .map(|source| source.locator.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            locators,
+            [
+                "Reports/Manual Coverage Registry.tsv",
+                "Traceability/Alignment Evidence Registry.tsv"
             ]
         );
     }

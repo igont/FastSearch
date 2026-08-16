@@ -1,0 +1,15 @@
+tdr_id	title	status	implementation_stage	parent_tdr_id	path
+TDR-FS-1	Graph knowledge plane	принято	будущее		Docs/TDR/TDR-FS-1 Graph knowledge plane.md
+TDR-FS-1.1	Документальный граф	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.1 Документальный граф.md
+TDR-FS-1.2	Иерархический граф кода и identity	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.2 Иерархический граф кода и identity.md
+TDR-FS-1.3	Ревизии и причинная актуальность графа	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.3 Ревизии и причинная актуальность графа.md
+TDR-FS-1.4	Semantic overlay в .fastsearch	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.4 Semantic overlay и .fastsearch.md
+TDR-FS-1.5	Межграфовые связи и impact	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.5 Межграфовые связи и impact.md
+TDR-FS-1.6	Graph query surface и dtree adapter	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.6 Graph query surface и dtree adapter.md
+TDR-FS-1.7	Quality qualification	принято	будущее	TDR-FS-1	Docs/TDR/TDR-FS-1.7 Quality qualification.md
+TDR-FS-2	Workspaces и terminal UX	принято	текущее		Docs/TDR/TDR-FS-2 Workspaces и terminal UX.md
+TDR-FS-2.1	Каталог и admission рабочей области	принято	текущее	TDR-FS-2	Docs/TDR/TDR-FS-2.1 Каталог и admission рабочей области.md
+TDR-FS-2.2	Namespace .fastsearch и migration	принято	запланированное	TDR-FS-2	Docs/TDR/TDR-FS-2.2 Namespace .fastsearch и migration.md
+TDR-FS-2.3	Terminal routing и terminal-dialogue	принято	текущее	TDR-FS-2	Docs/TDR/TDR-FS-2.3 Terminal routing и terminal-dialogue.md
+TDR-FS-2.4	Automatic model provisioning	принято	текущее	TDR-FS-2	Docs/TDR/TDR-FS-2.4 Automatic model provisioning.md
+TDR-FS-2.5	Режим сравнения embedding-моделей	принято	частичное	TDR-FS-2	Docs/TDR/TDR-FS-2.5 Режим сравнения embedding-моделей.md

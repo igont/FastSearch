@@ -2,13 +2,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use crate::domain::{
-    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
-    SourceSnapshot, StableId,
+    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, LogicalRootId, RecordKind,
+    RootedSourceLocator, SourceLocator, SourceSnapshot, StableId,
 };
 
 use super::{normalize_document, source_contract_failure, versioned_hash};
 
+#[cfg(test)]
 pub(super) fn parse(locator: &str, bytes: &[u8]) -> Result<SourceSnapshot, FastSearchError> {
+    parse_with_root(locator, bytes, None)
+}
+
+pub(super) fn parse_with_root(
+    locator: &str,
+    bytes: &[u8],
+    root_id: Option<&LogicalRootId>,
+) -> Result<SourceSnapshot, FastSearchError> {
     let document = std::str::from_utf8(bytes)
         .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
     let document = normalize_document(document);
@@ -22,13 +31,18 @@ pub(super) fn parse(locator: &str, bytes: &[u8]) -> Result<SourceSnapshot, FastS
     let headers = parse_header(header)?;
     let records = lines
         .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| parse_record(locator, index + 1, &headers, line))
+        .map(|(index, line)| parse_record(locator, index + 1, &headers, line, root_id))
         .collect::<Result<Vec<_>, _>>()?;
     let snapshot_locator = SourceLocator::whole_file(locator)
         .map_err(|error| source_contract_failure(error.message()))?;
     let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
         .map_err(|error| source_contract_failure(error.message()))?;
-    Ok(SourceSnapshot::new(snapshot_locator, file_hash, records))
+    Ok(match root_id {
+        Some(root_id) => {
+            SourceSnapshot::for_root(root_id.clone(), snapshot_locator, file_hash, records)
+        }
+        None => SourceSnapshot::new(snapshot_locator, file_hash, records),
+    })
 }
 
 fn parse_header(header: &str) -> Result<Vec<String>, FastSearchError> {
@@ -59,6 +73,7 @@ fn parse_record(
     row: usize,
     headers: &[String],
     line: &str,
+    root_id: Option<&LogicalRootId>,
 ) -> Result<CanonicalRecord, FastSearchError> {
     let cells = line.split('\t').map(str::trim).collect::<Vec<_>>();
     if cells.len() != headers.len() {
@@ -87,10 +102,13 @@ fn parse_record(
                 .map(|(header, cell)| (header.clone(), (*cell).to_owned())),
         )
         .collect::<BTreeMap<_, _>>();
-    let id = StableId::parse(format!("registry:{path}#row={row}"))
-        .map_err(|error| source_contract_failure(error.message()))?;
     let locator = SourceLocator::registry_row(path, row)
         .map_err(|error| source_contract_failure(error.message()))?;
+    let id = match root_id {
+        Some(root_id) => RootedSourceLocator::new(root_id.clone(), locator.clone())?.stable_id(),
+        None => StableId::parse(format!("registry:{path}#row={row}"))
+            .map_err(|error| source_contract_failure(error.message()))?,
+    };
     let content_hash = ContentHash::parse(record_hash(path, row, title, &content, &metadata))
         .map_err(|error| source_contract_failure(error.message()))?;
     CanonicalRecord::new(

@@ -16,17 +16,15 @@ use crate::{
     },
     application::fusion::{ChannelCandidates, FusionCoordinator},
     domain::{
-        BackendKind, CanonicalRecord, Capability, CapabilityStatus, ErrorKind, FastSearchError,
-        IndexFreshness, LifecycleStatus, LogicalRootId, RelatedQuery, RetrievalChannel, SearchHit,
-        SearchQuery, SearchResponse, StableId,
+        BackendKind, CanonicalRecord, Capability, CapabilityStatus, EmbeddingModelId, ErrorKind,
+        FastSearchError, IndexFreshness, LifecycleStatus, LogicalRootId, RelatedQuery,
+        RetrievalChannel, SearchHit, SearchQuery, SearchResponse, StableId,
     },
     ports::{
         AgentSurface, CodeMapPort, LexicalRetrieval, SourcePort, StateChange, StateStore,
         SymbolPort, VectorRetrieval,
     },
 };
-
-const E5_IDENTITY: &str = "multilingual-e5-small@614241f";
 
 mod security {
     use std::{
@@ -79,6 +77,56 @@ mod security {
             let (service_root, path_guards) =
                 securely_create_and_pin_service(requested_service_root)?;
             validate_service_containment(document_root, code_root, &service_root)?;
+            Ok(Self {
+                service_root,
+                owned_runs: Mutex::new(BTreeMap::new()),
+                _path_guards: path_guards,
+            })
+        }
+
+        pub(super) fn admit_workspace_and_pin(
+            workspace_root: &Path,
+            source_roots: &[PathBuf],
+            requested_service_root: &Path,
+        ) -> Result<Self, FastSearchError> {
+            let workspace_root = workspace_root.canonicalize().map_err(|error| {
+                failure(
+                    ErrorKind::SourceFailure,
+                    "canonicalize workspace root",
+                    error,
+                )
+            })?;
+            if !workspace_root.is_dir() {
+                return Err(FastSearchError::new(
+                    ErrorKind::InvalidContent,
+                    "workspace root must be a directory",
+                ));
+            }
+            for source in source_roots {
+                if !source.starts_with(&workspace_root) {
+                    return Err(FastSearchError::new(
+                        ErrorKind::InvalidContent,
+                        "workspace source root must be contained by workspace root",
+                    ));
+                }
+            }
+            let expected = workspace_root.join(".fastsearch").join("local");
+            let requested = absolute_service_path(requested_service_root)?;
+            ensure_no_reparse_points(&requested)?;
+            let resolved_requested = canonicalize_existing_ancestor(&requested)?;
+            if resolved_requested != expected {
+                return Err(FastSearchError::new(
+                    ErrorKind::InvalidContent,
+                    "workspace service state must be exactly .fastsearch/local",
+                ));
+            }
+            let (service_root, path_guards) = securely_create_and_pin_service(&requested)?;
+            if service_root != expected {
+                return Err(FastSearchError::new(
+                    ErrorKind::InvalidContent,
+                    "workspace service state escaped .fastsearch/local",
+                ));
+            }
             Ok(Self {
                 service_root,
                 owned_runs: Mutex::new(BTreeMap::new()),
@@ -566,10 +614,19 @@ mod security {
 /// Replaceable machine paths for the one full production composition.
 #[derive(Clone, Debug)]
 pub struct ProductionConfig {
-    document_root: PathBuf,
-    code_root: PathBuf,
+    document_roots: Vec<ConfiguredRoot>,
+    code_roots: Vec<ConfiguredRoot>,
     service_root: PathBuf,
     e5_root: Option<PathBuf>,
+    embedding_model: EmbeddingModelId,
+    workspace_root: Option<PathBuf>,
+    workspace_layout: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ConfiguredRoot {
+    id: Option<String>,
+    path: PathBuf,
 }
 
 impl ProductionConfig {
@@ -580,16 +637,60 @@ impl ProductionConfig {
         service_root: impl Into<PathBuf>,
     ) -> Self {
         Self {
-            document_root: document_root.into(),
-            code_root: code_root.into(),
+            document_roots: vec![ConfiguredRoot {
+                id: None,
+                path: document_root.into(),
+            }],
+            code_roots: vec![ConfiguredRoot {
+                id: Some("code-fastsearch".to_owned()),
+                path: code_root.into(),
+            }],
             service_root: service_root.into(),
             e5_root: None,
+            embedding_model: EmbeddingModelId::MultilingualE5Small,
+            workspace_root: None,
+            workspace_layout: false,
+        }
+    }
+
+    pub fn for_workspace(
+        workspace_root: impl Into<PathBuf>,
+        document_roots: Vec<(String, PathBuf)>,
+        code_roots: Vec<(String, PathBuf)>,
+        service_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            document_roots: document_roots
+                .into_iter()
+                .map(|(id, path)| ConfiguredRoot { id: Some(id), path })
+                .collect(),
+            code_roots: code_roots
+                .into_iter()
+                .map(|(id, path)| ConfiguredRoot { id: Some(id), path })
+                .collect(),
+            service_root: service_root.into(),
+            e5_root: None,
+            embedding_model: EmbeddingModelId::MultilingualE5Small,
+            workspace_root: Some(workspace_root.into()),
+            workspace_layout: true,
         }
     }
 
     #[must_use]
     pub fn with_e5_root(mut self, e5_root: impl Into<PathBuf>) -> Self {
         self.e5_root = Some(e5_root.into());
+        self.embedding_model = EmbeddingModelId::MultilingualE5Small;
+        self
+    }
+
+    #[must_use]
+    pub fn with_embedding_model(
+        mut self,
+        model: EmbeddingModelId,
+        model_root: impl Into<PathBuf>,
+    ) -> Self {
+        self.e5_root = Some(model_root.into());
+        self.embedding_model = model;
         self
     }
 }
@@ -597,19 +698,38 @@ impl ProductionConfig {
 /// Filesystem + SQLite + Tantivy + local E5 + maps + symbols + E1 fusion.
 pub struct ProductionRuntime {
     service: security::ServiceRunBoundary,
-    documents: FilesystemSource,
-    maps: CodeMapSource,
-    symbols: SymbolSource,
+    documents: Vec<FilesystemSource>,
+    maps: Vec<CodeMapSource>,
+    symbols: Vec<SymbolSource>,
     state: SqliteStateStore,
     lexical: TantivyLexical,
     vector: LocalE5Vector,
     vector_configured: bool,
+    workspace_layout: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModelPartitionMetrics {
+    size_bytes: u64,
+    build_duration_ms: u64,
+}
+
+impl ModelPartitionMetrics {
+    #[must_use]
+    pub const fn size_bytes(self) -> u64 {
+        self.size_bytes
+    }
+
+    #[must_use]
+    pub const fn build_duration_ms(self) -> u64 {
+        self.build_duration_ms
+    }
 }
 
 struct IndexingCoordinator<'a> {
-    documents: &'a FilesystemSource,
-    maps: &'a CodeMapSource,
-    symbols: &'a SymbolSource,
+    documents: &'a [FilesystemSource],
+    maps: &'a [CodeMapSource],
+    symbols: &'a [SymbolSource],
     state: &'a mut SqliteStateStore,
     lexical: &'a TantivyLexical,
     vector: &'a LocalE5Vector,
@@ -617,10 +737,21 @@ struct IndexingCoordinator<'a> {
 }
 
 impl IndexingCoordinator<'_> {
-    fn project(&mut self, rebuild: bool) -> Result<LifecycleStatus, FastSearchError> {
-        let mut snapshots = self.documents.snapshot()?;
-        snapshots.extend(self.maps.snapshot()?);
-        snapshots.extend(self.symbols.snapshot()?);
+    fn project(
+        &mut self,
+        rebuild: bool,
+        include_active_vector: bool,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        let mut snapshots = Vec::new();
+        for source in self.documents {
+            snapshots.extend(source.snapshot()?);
+        }
+        for source in self.maps {
+            snapshots.extend(source.snapshot()?);
+        }
+        for source in self.symbols {
+            snapshots.extend(source.snapshot()?);
+        }
         let records = snapshots
             .iter()
             .flat_map(|snapshot| snapshot.records().iter().cloned())
@@ -645,12 +776,12 @@ impl IndexingCoordinator<'_> {
                     .apply_projection(&records, changes.durable_generation())?
             }
         };
-        if self.vector_configured {
-            let _vector_result = if rebuild {
+        if include_active_vector && self.vector_configured {
+            if rebuild {
                 self.vector.rebuild(&records, changes.durable_generation())
             } else {
                 self.vector.apply(&records, changes.durable_generation())
-            };
+            }?;
         }
         Ok(lexical)
     }
@@ -689,8 +820,8 @@ struct SearchCoordinator<'a> {
     lexical: &'a TantivyLexical,
     vector: &'a LocalE5Vector,
     vector_configured: bool,
-    maps: &'a CodeMapSource,
-    symbols: &'a SymbolSource,
+    maps: &'a [CodeMapSource],
+    symbols: &'a [SymbolSource],
 }
 
 impl SearchCoordinator<'_> {
@@ -714,9 +845,8 @@ impl SearchCoordinator<'_> {
             .map(|(channel, hits)| ChannelCandidates::new(channel, hits, lexical.freshness()))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if self.vector_configured
-            && let Ok(vector) = self.vector.search(query)
-        {
+        if self.vector_configured {
+            let vector = self.vector.search(query)?;
             candidates.push(ChannelCandidates::new(
                 RetrievalChannel::Vector,
                 vector.hits().to_vec(),
@@ -724,9 +854,11 @@ impl SearchCoordinator<'_> {
             )?);
         }
         let needle = query.text().to_lowercase();
-        let maps = self
-            .maps
-            .records()?
+        let mut map_records = Vec::new();
+        for source in self.maps {
+            map_records.extend(source.records()?);
+        }
+        let maps = map_records
             .into_iter()
             .filter(|record| {
                 record.title().to_lowercase().contains(&needle)
@@ -739,9 +871,11 @@ impl SearchCoordinator<'_> {
             maps,
             IndexFreshness::Current,
         )?);
-        let symbols = self
-            .symbols
-            .find_symbols(query)?
+        let mut symbol_records = Vec::new();
+        for source in self.symbols {
+            symbol_records.extend(source.find_symbols(query)?);
+        }
+        let symbols = symbol_records
             .into_iter()
             .map(|record| SearchHit::new(record, RetrievalChannel::Symbol, 0.0))
             .collect::<Vec<_>>();
@@ -772,36 +906,221 @@ impl std::fmt::Debug for ProductionRuntime {
 
 impl ProductionRuntime {
     pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
-        let document_root = canonical_directory(&config.document_root, "document root")?;
-        let code_root = canonical_directory(&config.code_root, "code root")?;
-        let service = security::ServiceRunBoundary::admit_and_pin(
-            &document_root,
-            &code_root,
-            &config.service_root,
-        )?;
+        let workspace_layout = config.workspace_layout;
+        let embedding_model = config.embedding_model;
+        let document_roots = canonical_roots(&config.document_roots, "document root")?;
+        let code_roots = canonical_roots(&config.code_roots, "code root")?;
+        let source_paths = document_roots
+            .iter()
+            .chain(code_roots.iter())
+            .map(|(_, path)| path.clone())
+            .collect::<Vec<_>>();
+        let service = match config.workspace_root.as_deref() {
+            Some(workspace_root) => security::ServiceRunBoundary::admit_workspace_and_pin(
+                workspace_root,
+                &source_paths,
+                &config.service_root,
+            )?,
+            None => {
+                let documents = document_roots.first().ok_or_else(|| {
+                    FastSearchError::new(
+                        ErrorKind::InvalidContent,
+                        "legacy production configuration requires a document root",
+                    )
+                })?;
+                let code = code_roots.first().ok_or_else(|| {
+                    FastSearchError::new(
+                        ErrorKind::InvalidContent,
+                        "legacy production configuration requires a code root",
+                    )
+                })?;
+                security::ServiceRunBoundary::admit_and_pin(
+                    &documents.1,
+                    &code.1,
+                    &config.service_root,
+                )?
+            }
+        };
         let vector_configured = config.e5_root.is_some();
         let model_root = config
             .e5_root
             .unwrap_or_else(|| service.service_root().join("unconfigured-e5"));
+        let lexical_root = if config.workspace_layout {
+            service
+                .service_root()
+                .join("index")
+                .join("cross")
+                .join("lexical")
+        } else {
+            service.service_root().join("lexical")
+        };
+
+        let documents = document_roots
+            .iter()
+            .map(|(id, path)| match id {
+                Some(id) => Ok(FilesystemSource::new_named(id.clone(), path.clone())),
+                None => Ok(FilesystemSource::new(path.clone())),
+            })
+            .collect::<Result<Vec<_>, FastSearchError>>()?;
+        let maps = document_roots
+            .iter()
+            .map(|(id, path)| match id {
+                Some(id) => CodeMapSource::new_named(id.clone(), path.clone()),
+                None => CodeMapSource::new(path.clone()),
+            })
+            .collect();
+        let symbols = code_roots
+            .into_iter()
+            .map(|(id, path)| {
+                let id = id.ok_or_else(|| {
+                    FastSearchError::new(
+                        ErrorKind::InvalidIdentifier,
+                        "code root requires a logical root ID",
+                    )
+                })?;
+                Ok(if config.workspace_layout {
+                    SymbolSource::new_workspace(id, path)
+                } else {
+                    SymbolSource::new(id, path)
+                })
+            })
+            .collect::<Result<Vec<_>, FastSearchError>>()?;
+
+        let state = SqliteStateStore::open(service.service_root().join("state.sqlite"))?;
+        let vector = if workspace_layout {
+            LocalE5Vector::open_persistent_with_model(
+                model_root,
+                super::model_cache::model_identity(embedding_model),
+                embedding_model,
+                model_partition_root(service.service_root(), embedding_model),
+            )
+        } else {
+            LocalE5Vector::open_with_model(
+                model_root,
+                super::model_cache::model_identity(embedding_model),
+                embedding_model,
+            )
+        };
+        if workspace_layout && vector_configured {
+            vector.restore(&state.all_records()?, state.durable_generation()?)?;
+        }
 
         Ok(Self {
-            state: SqliteStateStore::open(service.service_root().join("state.sqlite"))?,
-            lexical: TantivyLexical::open(service.service_root().join("lexical"))?,
+            state,
+            lexical: TantivyLexical::open(lexical_root)?,
             service,
-            documents: FilesystemSource::new(document_root.clone()),
-            maps: CodeMapSource::new(document_root),
-            symbols: SymbolSource::new(LogicalRootId::parse("code-fastsearch")?, code_root),
-            vector: LocalE5Vector::open(model_root, E5_IDENTITY),
+            documents,
+            maps,
+            symbols,
+            vector,
             vector_configured,
+            workspace_layout,
         })
     }
 
     pub fn index(&mut self) -> Result<LifecycleStatus, FastSearchError> {
-        self.indexing().project(false)
+        self.indexing().project(false, true)
     }
 
     pub fn rebuild(&mut self) -> Result<LifecycleStatus, FastSearchError> {
-        self.indexing().project(true)
+        self.indexing().project(true, true)
+    }
+
+    /// Reconciles the canonical corpus and lexical projection without giving
+    /// the active model a head start over the stable comparison catalog.
+    pub(crate) fn index_shared_for_comparison(
+        &mut self,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        self.indexing().project(false, false)
+    }
+
+    /// Read-only readiness of one model partition against the current shared
+    /// canonical state. This never opens or downloads model weights.
+    pub fn model_partition_status(&self, model: EmbeddingModelId) -> LifecycleStatus {
+        let records = match self.state.all_records() {
+            Ok(records) => records,
+            Err(error) => {
+                return LifecycleStatus::new(IndexFreshness::Degraded, 0, None, error.message());
+            }
+        };
+        let generation = match self.state.durable_generation() {
+            Ok(generation) => generation,
+            Err(error) => {
+                return LifecycleStatus::new(IndexFreshness::Degraded, 0, None, error.message());
+            }
+        };
+        LocalE5Vector::persistent_status(
+            &model_partition_root(self.service.service_root(), model),
+            model,
+            &super::model_cache::model_identity(model),
+            &records,
+            generation,
+        )
+    }
+
+    /// Stored measurements for the committed files of one model partition.
+    /// This is read-only and never opens model weights.
+    pub fn model_partition_metrics(
+        &self,
+        model: EmbeddingModelId,
+    ) -> Result<Option<ModelPartitionMetrics>, FastSearchError> {
+        Ok(LocalE5Vector::persistent_metrics(&model_partition_root(
+            self.service.service_root(),
+            model,
+        ))?
+        .map(|metrics| ModelPartitionMetrics {
+            size_bytes: metrics.size_bytes(),
+            build_duration_ms: metrics.build_duration_ms(),
+        }))
+    }
+
+    /// Builds exactly one model-specific vector partition from the current
+    /// shared canonical state without rescanning sources or rebuilding lexical.
+    pub fn build_model_partition(
+        &self,
+        model: EmbeddingModelId,
+        model_root: &Path,
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        if !self.workspace_layout {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "model partitions require a workspace layout",
+            ));
+        }
+        let records = self.state.all_records()?;
+        let generation = self.state.durable_generation()?;
+        let vector = LocalE5Vector::open_persistent_with_model(
+            model_root,
+            super::model_cache::model_identity(model),
+            model,
+            model_partition_root(self.service.service_root(), model),
+        );
+        vector.restore(&records, generation)?;
+        vector.apply(&records, generation)
+    }
+
+    /// Executes vector-only retrieval for one already admitted model
+    /// partition. Shared lexical results are requested separately once.
+    pub fn search_model_partition(
+        &self,
+        model: EmbeddingModelId,
+        model_root: &Path,
+        query: &SearchQuery,
+    ) -> Result<SearchResponse, FastSearchError> {
+        let records = self.state.all_records()?;
+        let generation = self.state.durable_generation()?;
+        let vector = LocalE5Vector::open_persistent_with_model(
+            model_root,
+            super::model_cache::model_identity(model),
+            model,
+            model_partition_root(self.service.service_root(), model),
+        );
+        vector.restore(&records, generation)?;
+        vector.search(query)
+    }
+
+    pub fn lexical_baseline(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
+        self.lexical.search(query)
     }
 
     /// Creates an exact run-owned directory used by acceptance jobs and batch callers.
@@ -837,14 +1156,27 @@ impl ProductionRuntime {
     }
 
     fn combined_records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
-        let mut records = self.maps.records()?;
-        records.extend(self.symbols.records()?);
+        let mut records = Vec::new();
+        for source in &self.maps {
+            records.extend(source.records()?);
+        }
+        for source in &self.symbols {
+            records.extend(source.records()?);
+        }
         Ok(records)
     }
 
     fn lifecycle_status(&self) -> LifecycleStatus {
         IndexingCoordinator::lifecycle_status(&self.state, &self.lexical)
     }
+}
+
+fn model_partition_root(service_root: &Path, model: EmbeddingModelId) -> PathBuf {
+    service_root
+        .join("index")
+        .join("vector")
+        .join(model.slug())
+        .join(super::model_cache::model_descriptor(model).revision)
 }
 
 impl AgentSurface for ProductionRuntime {
@@ -874,8 +1206,19 @@ impl AgentSurface for ProductionRuntime {
                     "local E5 root is not configured",
                 )
             },
-            CapabilityStatus::available(Capability::CodeMaps, BackendKind::Real),
-            CapabilityStatus::available(Capability::Symbols, BackendKind::Real),
+            if self.maps.is_empty() {
+                CapabilityStatus::unavailable(
+                    Capability::CodeMaps,
+                    "documentation contour is not configured",
+                )
+            } else {
+                CapabilityStatus::available(Capability::CodeMaps, BackendKind::Real)
+            },
+            if self.symbols.is_empty() {
+                CapabilityStatus::unavailable(Capability::Symbols, "code contour is not configured")
+            } else {
+                CapabilityStatus::available(Capability::Symbols, BackendKind::Real)
+            },
         ]
     }
 
@@ -908,6 +1251,24 @@ fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, FastSearchEr
         ));
     }
     Ok(canonical)
+}
+
+fn canonical_roots(
+    configured: &[ConfiguredRoot],
+    label: &str,
+) -> Result<Vec<(Option<LogicalRootId>, PathBuf)>, FastSearchError> {
+    configured
+        .iter()
+        .map(|root| {
+            Ok((
+                root.id
+                    .as_ref()
+                    .map(|id| LogicalRootId::parse(id.clone()))
+                    .transpose()?,
+                canonical_directory(&root.path, label)?,
+            ))
+        })
+        .collect()
 }
 
 #[cfg(all(test, windows))]

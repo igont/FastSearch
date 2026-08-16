@@ -30,22 +30,65 @@ use windows_sys::Win32::{
     },
 };
 
+use candle_core::{DType, Device};
 use fastembed::{
-    InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
+    EmbeddingModel, InitOptionsUserDefined, NomicV2MoeTextEmbedding, Pooling, Qwen3TextEmbedding,
+    TextEmbedding, TextInitOptions, TokenizerFiles, UserDefinedEmbeddingModel,
 };
 use sha2::{Digest, Sha256};
 
-use crate::domain::{CanonicalRecord, Capability, ErrorKind, FastSearchError};
+use crate::domain::{
+    CanonicalRecord, Capability, EmbeddingModelId, ErrorKind, ExecutionDevice, FastSearchError,
+};
+
+enum ProviderRuntime {
+    Onnx(TextEmbedding),
+    Qwen(Qwen3TextEmbedding),
+    Nomic(NomicV2MoeTextEmbedding),
+}
+
+// Real-corpus benchmark on 2026-08-16: batch 1 reached 40.78 docs/s at
+// ~0.95 GiB; larger batches were slower and peaked at ~5.08 GiB for 64 due
+// to padding heterogeneous source documents to the longest text in a batch.
+const ONNX_INDEX_BATCH_SIZE: usize = 1;
 
 pub(super) struct VerifiedProvider {
-    model: UserDefinedEmbeddingModel,
+    model_id: EmbeddingModelId,
+    runtime: ProviderRuntime,
     pub(super) manifest: String,
     _files: Vec<File>,
     _directories: Vec<DirectoryGuard>,
 }
 
 impl VerifiedProvider {
-    pub(super) fn acquire(root: &Path) -> Result<Self, FastSearchError> {
+    pub(super) fn acquire(
+        root: &Path,
+        model_id: EmbeddingModelId,
+        show_download_progress: bool,
+        allow_catalog_download: bool,
+    ) -> Result<Self, FastSearchError> {
+        Self::acquire_on_device(
+            root,
+            model_id,
+            show_download_progress,
+            allow_catalog_download,
+            ExecutionDevice::Cpu,
+        )
+    }
+
+    pub(super) fn acquire_on_device(
+        root: &Path,
+        model_id: EmbeddingModelId,
+        show_download_progress: bool,
+        allow_catalog_download: bool,
+        device: ExecutionDevice,
+    ) -> Result<Self, FastSearchError> {
+        if allow_catalog_download
+            && (model_id != EmbeddingModelId::MultilingualE5Small
+                || !root.join("onnx").join("model.onnx").is_file())
+        {
+            return Self::from_catalog(root, model_id, show_download_progress, device);
+        }
         let snapshot = verified_snapshot(root)?;
         let required = [
             "onnx\\model.onnx",
@@ -85,31 +128,155 @@ impl VerifiedProvider {
             },
         )
         .with_pooling(Pooling::Mean);
+        let options = user_defined_options(device)?;
+        let runtime =
+            TextEmbedding::try_new_from_user_defined(model, options).map_err(provider_error)?;
         Ok(Self {
-            model,
+            model_id,
+            runtime: ProviderRuntime::Onnx(runtime),
             manifest: snapshot.manifest,
             _files: snapshot.files,
             _directories: snapshot.directories,
         })
     }
 
+    fn from_catalog(
+        root: &Path,
+        model_id: EmbeddingModelId,
+        show_download_progress: bool,
+        device: ExecutionDevice,
+    ) -> Result<Self, FastSearchError> {
+        let runtime = match model_id {
+            EmbeddingModelId::MultilingualE5Small
+            | EmbeddingModelId::MultilingualE5Base
+            | EmbeddingModelId::MultilingualE5Large => {
+                let model = match model_id {
+                    EmbeddingModelId::MultilingualE5Small => EmbeddingModel::MultilingualE5Small,
+                    EmbeddingModelId::MultilingualE5Base => EmbeddingModel::MultilingualE5Base,
+                    EmbeddingModelId::MultilingualE5Large => EmbeddingModel::MultilingualE5Large,
+                    _ => unreachable!("E5 branch is exhaustive"),
+                };
+                let mut options = TextInitOptions::new(model)
+                    .with_cache_dir(root.to_path_buf())
+                    .with_show_download_progress(show_download_progress);
+                if device == ExecutionDevice::GpuDirectMl {
+                    options = options.with_execution_providers(directml_provider()?);
+                }
+                ProviderRuntime::Onnx(TextEmbedding::try_new(options).map_err(provider_error)?)
+            }
+            EmbeddingModelId::Qwen3Embedding06B if device == ExecutionDevice::Cpu => {
+                ProviderRuntime::Qwen(
+                    Qwen3TextEmbedding::from_hf(
+                        "Qwen/Qwen3-Embedding-0.6B",
+                        &Device::Cpu,
+                        DType::F32,
+                        512,
+                    )
+                    .map_err(provider_error)?,
+                )
+            }
+            EmbeddingModelId::NomicEmbedTextV2Moe if device == ExecutionDevice::Cpu => {
+                ProviderRuntime::Nomic(
+                    NomicV2MoeTextEmbedding::from_hf(
+                        "nomic-ai/nomic-embed-text-v2-moe",
+                        &Device::Cpu,
+                        DType::F32,
+                        512,
+                    )
+                    .map_err(provider_error)?,
+                )
+            }
+            EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe => {
+                return Err(provider_error(
+                    "this Candle model has no GPU backend in the current FastSearch build",
+                ));
+            }
+        };
+        let manifest = format!(
+            "{:X}",
+            Sha256::digest(format!("fastsearch-model-runtime-v1\0{}", model_id.slug()).as_bytes())
+        );
+        Ok(Self {
+            model_id,
+            runtime,
+            manifest,
+            _files: Vec::new(),
+            _directories: Vec::new(),
+        })
+    }
+
     pub(super) fn embed_records(
-        self,
+        &mut self,
         records: &[CanonicalRecord],
     ) -> Result<Vec<Vec<f32>>, FastSearchError> {
         let texts = records
             .iter()
-            .map(|record| format!("{}\\n{}", record.title(), record.searchable_content()))
+            .map(|record| {
+                let text = format!("{}\n{}", record.title(), record.searchable_content());
+                match self.model_id {
+                    EmbeddingModelId::MultilingualE5Small
+                    | EmbeddingModelId::MultilingualE5Base
+                    | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
+                    EmbeddingModelId::Qwen3Embedding06B => text,
+                    EmbeddingModelId::NomicEmbedTextV2Moe => {
+                        format!("search_document: {text}")
+                    }
+                }
+            })
             .collect::<Vec<_>>();
-        self.embed_texts(&texts)
+        self.embed_formatted(&texts, None)
     }
 
-    pub(super) fn embed_texts(self, texts: &[String]) -> Result<Vec<Vec<f32>>, FastSearchError> {
+    pub(super) fn embed_query(&mut self, query: &str) -> Result<Vec<f32>, FastSearchError> {
+        let query = match self.model_id {
+            EmbeddingModelId::MultilingualE5Small
+            | EmbeddingModelId::MultilingualE5Base
+            | EmbeddingModelId::MultilingualE5Large => format!("query: {query}"),
+            EmbeddingModelId::Qwen3Embedding06B => format!(
+                "Instruct: Given a search query, retrieve relevant documentation and source-code passages\nQuery: {query}"
+            ),
+            EmbeddingModelId::NomicEmbedTextV2Moe => format!("search_query: {query}"),
+        };
+        self.embed_formatted(&[query], None)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| provider_error("embedding model returned no query vector"))
+    }
+
+    pub(super) fn embed_benchmark_texts(
+        &mut self,
+        texts: &[String],
+        batch_size: usize,
+    ) -> Result<Vec<Vec<f32>>, FastSearchError> {
+        let formatted = texts
+            .iter()
+            .map(|text| match self.model_id {
+                EmbeddingModelId::MultilingualE5Small
+                | EmbeddingModelId::MultilingualE5Base
+                | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
+                EmbeddingModelId::Qwen3Embedding06B => text.clone(),
+                EmbeddingModelId::NomicEmbedTextV2Moe => format!("search_document: {text}"),
+            })
+            .collect::<Vec<_>>();
+        self.embed_formatted(&formatted, Some(batch_size))
+    }
+
+    fn embed_formatted(
+        &mut self,
+        texts: &[String],
+        onnx_batch_size: Option<usize>,
+    ) -> Result<Vec<Vec<f32>>, FastSearchError> {
         run_verify_load_hook();
-        let mut runtime =
-            TextEmbedding::try_new_from_user_defined(self.model, InitOptionsUserDefined::default())
-                .map_err(provider_error)?;
-        let vectors = runtime.embed(texts, Some(1)).map_err(provider_error)?;
+        let vectors = match &mut self.runtime {
+            ProviderRuntime::Onnx(runtime) => runtime
+                .embed(
+                    texts,
+                    Some(onnx_batch_size.unwrap_or(ONNX_INDEX_BATCH_SIZE)),
+                )
+                .map_err(provider_error)?,
+            ProviderRuntime::Qwen(runtime) => runtime.embed(texts).map_err(provider_error)?,
+            ProviderRuntime::Nomic(runtime) => runtime.embed(texts).map_err(provider_error)?,
+        };
         if vectors.len() != texts.len()
             || vectors
                 .iter()
@@ -117,67 +284,50 @@ impl VerifiedProvider {
         {
             return Err(FastSearchError::new(
                 ErrorKind::ProjectionFailure,
-                "local E5 returned an invalid vector",
+                "local embedding model returned an invalid vector",
             ));
         }
         Ok(vectors.into_iter().map(normalize).collect())
     }
 }
 
-/// B1 accepted complete E5 cache set/: canonical locator/bytes/full-SHA256 root.
+fn user_defined_options(
+    device: ExecutionDevice,
+) -> Result<InitOptionsUserDefined, FastSearchError> {
+    let options = InitOptionsUserDefined::default();
+    if device == ExecutionDevice::GpuDirectMl {
+        Ok(options.with_execution_providers(directml_provider()?))
+    } else {
+        Ok(options)
+    }
+}
+
+#[cfg(windows)]
+fn directml_provider() -> Result<Vec<fastembed::ExecutionProviderDispatch>, FastSearchError> {
+    Ok(vec![
+        ort::ep::DirectML::default().build().error_on_failure(),
+    ])
+}
+
+#[cfg(not(windows))]
+fn directml_provider() -> Result<Vec<fastembed::ExecutionProviderDispatch>, FastSearchError> {
+    Err(provider_error("DirectML is available only on Windows"))
+}
+
+/// Qualified runtime subset of the pinned E5 revision. Every admitted byte is
+/// covered by the canonical locator/size/SHA-256 manifest root.
 const B1_E5_MANIFEST_ROOT: &str =
-    "63A0FA9AEC56D0A3F5080D82956111F4BBEE57BF0A3637371CF16E451B194D0E";
+    "8FCC7E28D97B8DA292E14631A6B46E03DD0890A4DA2AE244BE62813BC8CE53A6";
 
 const B1_E5_FILES: &[(&str, u64)] = &[
-    (".eval_results\\ArguAna.yaml", 595),
-    (".eval_results\\BrightAopsRetrieval.yaml", 663),
-    (".eval_results\\BrightBiologyLongRetrieval.yaml", 673),
-    (".eval_results\\BrightBiologyRetrieval.yaml", 669),
-    (".eval_results\\BrightEarthScienceLongRetrieval.yaml", 685),
-    (".eval_results\\BrightEarthScienceRetrieval.yaml", 681),
-    (".eval_results\\BrightEconomicsLongRetrieval.yaml", 677),
-    (".eval_results\\BrightEconomicsRetrieval.yaml", 673),
-    (".eval_results\\BrightLeetcodeRetrieval.yaml", 673),
-    (".eval_results\\BrightPonyLongRetrieval.yaml", 667),
-    (".eval_results\\BrightPonyRetrieval.yaml", 663),
-    (".eval_results\\BrightPsychologyLongRetrieval.yaml", 677),
-    (".eval_results\\BrightPsychologyRetrieval.yaml", 675),
-    (".eval_results\\BrightRoboticsLongRetrieval.yaml", 675),
-    (".eval_results\\BrightRoboticsRetrieval.yaml", 669),
-    (".eval_results\\BrightStackoverflowLongRetrieval.yaml", 687),
-    (".eval_results\\BrightStackoverflowRetrieval.yaml", 681),
-    (
-        ".eval_results\\BrightSustainableLivingLongRetrieval.yaml",
-        695,
-    ),
-    (".eval_results\\BrightSustainableLivingRetrieval.yaml", 689),
-    (".eval_results\\BrightTheoremQAQuestionsRetrieval.yaml", 691),
-    (".eval_results\\BrightTheoremQATheoremsRetrieval.yaml", 689),
-    (".gitattributes", 1_606),
-    ("1_Pooling\\config.json", 206),
-    ("config.json", 681),
-    ("model.safetensors", 134),
-    ("modules.json", 406),
-    ("onnx\\config.json", 678),
+    ("onnx\\config.json", 653),
     ("onnx\\model.onnx", 470_268_510),
-    ("onnx\\model_O4.onnx", 235_052_531),
-    ("onnx\\model_qint8_avx512_vnni.onnx", 118_346_824),
-    ("onnx\\sentencepiece.bpe.model", 5_069_051),
-    ("onnx\\special_tokens_map.json", 176),
+    ("onnx\\special_tokens_map.json", 167),
     ("onnx\\tokenizer.json", 17_082_730),
-    ("onnx\\tokenizer_config.json", 463),
-    ("openvino\\openvino_model.bin", 134),
-    ("openvino\\openvino_model.xml", 375_553),
-    ("pytorch_model.bin", 134),
-    ("README.md", 516_022),
-    ("sentence_bert_config.json", 60),
-    ("sentencepiece.bpe.model", 132),
-    ("special_tokens_map.json", 176),
-    ("tokenizer.json", 17_082_730),
-    ("tokenizer_config.json", 463),
+    ("onnx\\tokenizer_config.json", 443),
 ];
 
-const B1_E5_DIRECTORIES: &[&str] = &[".eval_results", "1_Pooling", "onnx", "openvino"];
+const B1_E5_DIRECTORIES: &[&str] = &["onnx"];
 
 struct VerifiedSnapshot {
     bytes: BTreeMap<String, Vec<u8>>,

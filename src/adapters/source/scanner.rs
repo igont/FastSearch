@@ -9,6 +9,7 @@ use crate::domain::{ErrorKind, FastSearchError};
 const EXCLUDED_DIRECTORIES: &[&str] = &[
     ".agents",
     ".cfknowledge",
+    ".fastsearch",
     ".git",
     ".obsidian",
     "build",
@@ -79,11 +80,48 @@ pub(super) fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearch
             continue;
         }
         if let Some(kind) = source_kind(entry.path()) {
-            sources.push(read_source(&root, entry.into_path(), kind)?);
+            let source = read_source(&root, entry.into_path(), kind)?;
+            if !is_generated_traceability_coverage_registry(&source) {
+                sources.push(source);
+            }
         }
     }
     sources.sort_by(|left, right| left.locator.cmp(&right.locator));
     Ok(sources)
+}
+
+/// Generated coverage tables flatten text already present in canonical Markdown
+/// sources. They remain on disk for traceability tooling, but admitting them to
+/// the ordinary corpus duplicates content across lexical and vector projections.
+fn is_generated_traceability_coverage_registry(source: &ScannedSource) -> bool {
+    if source.kind != ScannedSourceKind::Tsv
+        || !Path::new(&source.locator).components().any(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("traceability")
+        })
+    {
+        return false;
+    }
+
+    let Ok(document) = std::str::from_utf8(&source.bytes) else {
+        return false;
+    };
+    let Some(header) = document.lines().next() else {
+        return false;
+    };
+    let columns = header
+        .split('\t')
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let has = |required: &str| columns.iter().any(|column| column == required);
+
+    ["path", "summary", "tdr_refs", "warnings", "errors"]
+        .into_iter()
+        .all(has)
+        && columns.iter().any(|column| column.ends_with("_coverage"))
 }
 
 fn read_source(

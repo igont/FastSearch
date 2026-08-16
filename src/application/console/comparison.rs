@@ -1,0 +1,501 @@
+use super::*;
+
+#[derive(Clone, Debug)]
+struct ComparisonResultRef {
+    code: String,
+    source: String,
+    hit: SearchHit,
+}
+
+#[derive(Clone, Debug)]
+struct ComparisonSearchSession {
+    query: String,
+    results: Vec<ComparisonResultRef>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ComparisonTransition {
+    Back,
+    Exit,
+}
+
+pub(super) fn run_comparison<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    runtime: &mut ProductionRuntime,
+) -> io::Result<ComparisonTransition> {
+    let commands = comparison_catalog();
+    let mut last_search: Option<ComparisonSearchSession> = None;
+    show_comparison_readiness(chat, &ComparisonCoordinator::new(runtime).readiness())?;
+    loop {
+        let Some(line) = chat.read_command("compare")? else {
+            return Ok(ComparisonTransition::Exit);
+        };
+        let (name, arguments) = match commands.resolve(&line) {
+            CommandResolution::Empty => continue,
+            CommandResolution::Unknown {
+                suggestion: None, ..
+            } if !line.trim_start().starts_with('/') => {
+                ("search".to_owned(), line.trim().to_owned())
+            }
+            CommandResolution::Unknown { suggestion, .. } => {
+                let mut error = UserErrorDocument::new("Неизвестная команда сравнения.")
+                    .with_code("COMPARE_UNKNOWN_COMMAND")
+                    .with_hint("Введите /help, чтобы увидеть действия режима сравнения.");
+                if let Some(suggestion) = suggestion {
+                    error = error.with_action(ActionItem::new(
+                        format!("/{suggestion}"),
+                        "возможная команда",
+                    ));
+                }
+                chat.show_typed(&error)?;
+                continue;
+            }
+            CommandResolution::Match { index, arguments } => {
+                (commands.commands()[index].name.clone(), arguments)
+            }
+        };
+
+        match name.as_str() {
+            "back" => return Ok(ComparisonTransition::Back),
+            "exit" => return Ok(ComparisonTransition::Exit),
+            "help" => chat.show_typed(&commands.welcome_document(
+                "Сравнение моделей",
+                "Обычный текст выполняет один и тот же запрос всеми готовыми моделями.",
+            ))?,
+            "status" => {
+                show_comparison_readiness(chat, &ComparisonCoordinator::new(runtime).readiness())?
+            }
+            "update" => {
+                let prepared = PreparedAction::new(
+                    (),
+                    PreviewDocument::new(
+                        "Подготовка сравнения",
+                        "FastSearch проверит общий корпус и подготовит недостающие модельные индексы.",
+                    )
+                    .with_change("Готовые и актуальные модельные индексы будут сохранены без изменений.")
+                    .with_change("Отсутствующие модели будут автоматически загружены в локальный кеш.")
+                    .with_warning("Полный набор моделей требует несколько гигабайт диска и может индексироваться долго."),
+                );
+                match chat.confirm_prepared(prepared)? {
+                    PreparedOutcome::Confirmed(_) => {
+                        chat.show_typed(&ProgressDocument::new(
+                            "Подготовка сравнения",
+                            ProgressState::Running,
+                            "FastSearch обновляет общий корпус и модельные индексы…",
+                        ))?;
+                        match ComparisonCoordinator::new(runtime).update_required(false) {
+                            Ok(outcomes) => {
+                                let failures = outcomes
+                                    .iter()
+                                    .filter(|outcome| outcome.error().is_some())
+                                    .count();
+                                chat.show_typed(
+                                    &ProgressDocument::new(
+                                        "Подготовка сравнения",
+                                        if failures == 0 {
+                                            ProgressState::Completed
+                                        } else {
+                                            ProgressState::Failed
+                                        },
+                                        if failures == 0 {
+                                            "Все модели готовы к сравнению."
+                                        } else {
+                                            "Подготовка завершена частично."
+                                        },
+                                    )
+                                    .with_detail(format!(
+                                        "Готово: {} из {}.",
+                                        outcomes.len() - failures,
+                                        outcomes.len()
+                                    )),
+                                )?;
+                                let readiness = ComparisonCoordinator::new(runtime).readiness();
+                                show_comparison_readiness(chat, &readiness)?;
+                                for outcome in outcomes.iter().filter(|item| item.error().is_some())
+                                {
+                                    show_error(
+                                        chat,
+                                        "COMPARE_MODEL_UPDATE",
+                                        outcome.error().unwrap_or("Неизвестная ошибка модели."),
+                                        &format!(
+                                            "Модель {} оставлена недоступной; остальные модели можно сравнивать.",
+                                            outcome.model().display_name()
+                                        ),
+                                    )?;
+                                }
+                            }
+                            Err(error) => show_error(
+                                chat,
+                                "COMPARE_UPDATE",
+                                error.message(),
+                                "Проверьте sources, подключение и свободное место, затем повторите /update.",
+                            )?,
+                        }
+                    }
+                    PreparedOutcome::Cancelled => {
+                        show_notice(chat, "Подготовка сравнения отменена.")?
+                    }
+                    PreparedOutcome::EndOfInput => return Ok(ComparisonTransition::Exit),
+                }
+            }
+            "open" => {
+                let Some(search) = last_search.as_ref() else {
+                    show_error(
+                        chat,
+                        "COMPARE_NO_RESULTS",
+                        "Сначала выполните сравнительный запрос.",
+                        "Введите запрос обычной строкой.",
+                    )?;
+                    continue;
+                };
+                let code = arguments.trim().to_ascii_uppercase();
+                let Some(selected) = search.results.iter().find(|item| item.code == code) else {
+                    show_error(
+                        chat,
+                        "COMPARE_RESULT_CODE",
+                        "Результата с таким кодом нет.",
+                        "Используйте код из выдачи, например /open A1 или /open L1.",
+                    )?;
+                    continue;
+                };
+                show_comparison_record(chat, runtime, search, selected)?;
+            }
+            "search" => {
+                let query_text = arguments.trim();
+                if query_text.is_empty() {
+                    show_error(
+                        chat,
+                        "COMPARE_EMPTY_QUERY",
+                        "Поисковый запрос не должен быть пустым.",
+                        "Введите один запрос обычной строкой.",
+                    )?;
+                    continue;
+                }
+                let readiness = match ComparisonCoordinator::new(runtime).readiness() {
+                    Ok(readiness) => readiness,
+                    Err(error) => {
+                        show_error(
+                            chat,
+                            "COMPARE_READINESS",
+                            error.message(),
+                            "Повторите /status или проверьте локальный кеш моделей.",
+                        )?;
+                        continue;
+                    }
+                };
+                if !readiness.iter().any(ComparisonReadiness::ready) {
+                    show_error(
+                        chat,
+                        "COMPARE_NOT_READY",
+                        "Нет ни одной готовой модели для сравнения.",
+                        "Используйте /update и подтвердите подготовку индексов.",
+                    )?;
+                    continue;
+                }
+                let query = match SearchQuery::new(query_text, SearchMode::Balanced) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        show_error(
+                            chat,
+                            "COMPARE_QUERY",
+                            error.message(),
+                            "Уточните текст запроса.",
+                        )?;
+                        continue;
+                    }
+                };
+                chat.show_typed(&ProgressDocument::new(
+                    "Сравнение моделей",
+                    ProgressState::Running,
+                    "FastSearch выполняет один запрос по общей лексической базе и всем готовым модельным индексам…",
+                ))?;
+                match ComparisonCoordinator::new(runtime).run(&query, 5) {
+                    Ok(run) => {
+                        last_search = Some(show_comparison_run(chat, query_text, &run)?);
+                    }
+                    Err(error) => show_error(
+                        chat,
+                        "COMPARE_SEARCH",
+                        error.message(),
+                        "Используйте /update, чтобы актуализировать общий и модельные индексы.",
+                    )?,
+                }
+            }
+            _ => unreachable!("static comparison command catalog"),
+        }
+    }
+}
+
+fn show_comparison_readiness<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    readiness: &Result<Vec<ComparisonReadiness>, crate::domain::FastSearchError>,
+) -> io::Result<()> {
+    let readiness = match readiness {
+        Ok(readiness) => readiness,
+        Err(error) => {
+            return show_error(
+                chat,
+                "COMPARE_READINESS",
+                error.message(),
+                "Проверьте локальный кеш FastSearch и повторите /status.",
+            );
+        }
+    };
+    let ready = readiness.iter().filter(|item| item.ready()).count();
+    let document = readiness.iter().fold(
+        TableDocument::new(
+            "Готовность сравнения",
+            vec![
+                TableColumn::new("МОДЕЛЬ"),
+                TableColumn::new("ВЕСА"),
+                TableColumn::new("ИНДЕКС"),
+                TableColumn::new("РАЗМЕР").right_aligned(),
+                TableColumn::new("ПОСТРОЕНИЕ").right_aligned(),
+            ],
+        )
+        .with_summary(format!(
+                "Готово моделей: {ready} из {} · проверка не загружает модели и не запускает индексацию.",
+                readiness.len()
+            )),
+        |document, item| {
+            let index_ready = item.index_status().freshness() == IndexFreshness::Current;
+            let (size, duration) = item.index_metrics().map_or_else(
+                || ("—".to_owned(), "—".to_owned()),
+                |metrics| {
+                    (
+                        human_bytes(metrics.size_bytes()),
+                        human_duration(metrics.build_duration_ms()),
+                    )
+                },
+            );
+            document.with_row(TableRow::new(vec![
+                item.model().display_name().to_owned(),
+                if item.weights_ready() { "ГОТОВЫ" } else { "НЕТ" }.to_owned(),
+                if index_ready {
+                    "ГОТОВ".to_owned()
+                } else {
+                    format!(
+                        "НЕ ГОТОВ · {}",
+                        human_freshness(item.index_status().freshness())
+                    )
+                },
+                size,
+                duration,
+            ]))
+        },
+    );
+    let next_step = if ready == readiness.len() {
+        NextStep::instruction("Введите единый поисковый запрос или выберите действие:")
+            .with_action(ActionItem::new("/status", "проверить готовность"))
+            .with_action(ActionItem::new("/back", "вернуться в рабочую область"))
+    } else if ready == 0 {
+        NextStep::instruction("Сначала подготовьте модельные индексы:")
+            .with_action(ActionItem::new("/update", "подготовить модельные индексы"))
+            .with_action(ActionItem::new("/back", "вернуться в рабочую область"))
+    } else {
+        NextStep::instruction("Введите единый запрос для готовых моделей или выберите действие:")
+            .with_action(ActionItem::new(
+                "/update",
+                "подготовить недостающие индексы",
+            ))
+            .with_action(ActionItem::new("/back", "вернуться в рабочую область"))
+    };
+    chat.show_typed(&document.with_next_step(next_step))
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.2} GiB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes / KIB)
+    } else {
+        format!("{bytes:.0} B")
+    }
+}
+
+fn human_duration(milliseconds: u64) -> String {
+    if milliseconds < 1_000 {
+        return format!("{milliseconds} мс");
+    }
+    let seconds = milliseconds / 1_000;
+    if seconds < 60 {
+        return format!("{seconds} с");
+    }
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    if minutes < 60 {
+        return format!("{minutes} мин {remainder} с");
+    }
+    format!("{} ч {} мин", minutes / 60, minutes % 60)
+}
+
+fn comparison_catalog() -> CommandCatalog {
+    CommandCatalog::new(vec![
+        CommandSpec::new(
+            "search",
+            "выполнить единый сравнительный запрос",
+            "/search <запрос>",
+        ),
+        CommandSpec::new(
+            "update",
+            "загрузить и проиндексировать только недостающее",
+            "/update",
+        ),
+        CommandSpec::new("status", "проверить готовность всех моделей", "/status"),
+        CommandSpec::new("open", "открыть результат по коду", "/open <A1|B1|L1>"),
+        CommandSpec::new("back", "вернуться в рабочую область", "/back"),
+        CommandSpec::new("help", "показать команды сравнения", "/help")
+            .with_alias("--help")
+            .with_alias("-h"),
+        CommandSpec::new("exit", "закрыть FastSearch", "/exit")
+            .with_alias("quit")
+            .with_alias("выход"),
+    ])
+    .expect("comparison command catalog is static and valid")
+}
+
+fn show_comparison_run<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    query: &str,
+    run: &ComparisonRun,
+) -> io::Result<ComparisonSearchSession> {
+    let mut results = Vec::new();
+    let lexical = run.lexical_hits().iter().enumerate().fold(
+        ResultDocument::new(
+            "Лексическая база",
+            format!("Запрос: {query} · общий контрольный результат."),
+        ),
+        |document, (index, hit)| {
+            let code = format!("L{}", index + 1);
+            results.push(ComparisonResultRef {
+                code: code.clone(),
+                source: "Лексическая база".to_owned(),
+                hit: hit.clone(),
+            });
+            document.with_item(comparison_result_item(&code, hit))
+        },
+    );
+    chat.show_typed(&lexical)?;
+
+    for (model_index, model) in run.models().iter().enumerate() {
+        let prefix = char::from(b'A' + u8::try_from(model_index).unwrap_or(0));
+        if let Some(error) = model.error() {
+            chat.show_typed(
+                &ReportDocument::new().with_section(
+                    ReportSection::new(model.model().display_name())
+                        .with_line("Статус: НЕДОСТУПНА ДЛЯ ЭТОГО ЗАПРОСА")
+                        .with_line(format!("Причина: {error}")),
+                ),
+            )?;
+            continue;
+        }
+        let document = model.hits().iter().enumerate().fold(
+            ResultDocument::new(
+                model.model().display_name(),
+                format!(
+                    "Векторный поиск · {} мс · оценки сопоставимы только внутри этого блока.",
+                    model.latency_ms()
+                ),
+            ),
+            |document, (index, hit)| {
+                let code = format!("{prefix}{}", index + 1);
+                results.push(ComparisonResultRef {
+                    code: code.clone(),
+                    source: model.model().display_name().to_owned(),
+                    hit: hit.clone(),
+                });
+                document.with_item(comparison_result_item(&code, hit))
+            },
+        );
+        chat.show_typed(&document)?;
+    }
+    chat.show_typed(
+        &NoticeDocument::new("Сравнение завершено.").with_next_step(
+            NextStep::instruction("Введите следующий единый запрос или выберите действие:")
+                .with_action(ActionItem::new("/open A1", "открыть результат"))
+                .with_action(ActionItem::new("/back", "вернуться в рабочую область")),
+        ),
+    )?;
+    Ok(ComparisonSearchSession {
+        query: query.to_owned(),
+        results,
+    })
+}
+
+fn comparison_result_item(code: &str, hit: &SearchHit) -> ResultItem {
+    ResultItem::new(
+        format!(
+            "[{code}] [{}] {}",
+            record_label(hit.record().kind()),
+            hit.record().title()
+        ),
+        hit.record().locator().path(),
+    )
+    .with_excerpt(result_excerpt(hit.record().searchable_content()))
+}
+
+fn show_comparison_record<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    runtime: &ProductionRuntime,
+    search: &ComparisonSearchSession,
+    selected: &ComparisonResultRef,
+) -> io::Result<()> {
+    match runtime.get(selected.hit.record().id()) {
+        Ok(Some(record)) => chat.show_typed(
+            &ReportDocument::new()
+                .with_section(
+                    ReportSection::new(format!("Результат {}", selected.code))
+                        .with_line(format!("Источник сравнения: {}", selected.source))
+                        .with_line(format!("Заголовок: {}", record.title()))
+                        .with_line(format!("Тип: {}", record_label(record.kind())))
+                        .with_line(format!("Файл: {}", record.locator().path())),
+                )
+                .with_section(
+                    ReportSection::new("Контекст сравнения")
+                        .with_line(format!("Запрос: {}", search.query))
+                        .with_line(format!("Канал: {:?}", selected.hit.channel()))
+                        .with_line(format!("Оценка внутри блока: {:.4}", selected.hit.score())),
+                )
+                .with_section(
+                    ReportSection::new("Содержимое").with_line(record.searchable_content()),
+                )
+                .with_next_step(
+                    NextStep::instruction("Введите новый запрос или выберите действие:")
+                        .with_action(ActionItem::new("/status", "проверить готовность"))
+                        .with_action(ActionItem::new("/back", "вернуться в рабочую область")),
+                ),
+        ),
+        Ok(None) => show_error(
+            chat,
+            "COMPARE_RESULT_MISSING",
+            "Запись больше не находится в общем индексе.",
+            "Используйте /update и повторите сравнительный запрос.",
+        ),
+        Err(error) => show_error(
+            chat,
+            "COMPARE_RESULT_OPEN",
+            error.message(),
+            "Используйте /update и повторите сравнительный запрос.",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{human_bytes, human_duration};
+
+    #[test]
+    fn partition_measurements_are_compact_and_unambiguous() {
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(10 * 1024 * 1024), "10.0 MiB");
+        assert_eq!(human_duration(850), "850 мс");
+        assert_eq!(human_duration(78_000), "1 мин 18 с");
+        assert_eq!(human_duration(7_260_000), "2 ч 1 мин");
+    }
+}

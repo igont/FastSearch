@@ -2,26 +2,30 @@
 
 ## Назначение
 
-FastSearch создаётся как один локальный инструмент с общим ядром, CLI и агентским интерфейсом. Разработка проходит через четыре последовательных динамических дерева. Каждое дерево принимает самостоятельный наблюдаемый результат, уменьшает число заглушек и оставляет следующему дереву проверенный baseline.
+FastSearch создаётся как один локальный инструмент с общим ядром, CLI и агентским интерфейсом. Первый product contour проходит через DT1–DT4; последующий graph knowledge contour разложен на DT5–DT11. Каждый этап принимает самостоятельный наблюдаемый результат и оставляет следующему проверенный baseline.
 
-Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Подробные ветки, листья, команды и ownership определяются только перед запуском соответствующего дерева по фактическому состоянию репозитория.
+Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Подробные паспорта DT5–DT11 находятся в [Obsidian/Docs/Roadmap](Obsidian/Docs/Roadmap/00%20Roadmap.md); executable branches, leaves, commands и ownership определяются только перед запуском соответствующего дерева по фактическому состоянию репозитория.
 
-## Фактическое состояние на 14.08.2026
+## Фактическое состояние на 16.08.2026
 
 - Дерево 1 принято как контрактный baseline.
 - Дерево 2 принято и слито в `main` ревизией `adc9ad95842047bf5b6c47cba127d7f40eeb09c9`.
 - Переходная коррекция `77a05be945970a371537ea5c84e34bf11aaa8f52` закрывает admission реального Obsidian-хранилища: параметризованный root, полные `.gitignore`-правила, inline frontmatter collections, локальная исключённая зона `.cfknowledge` и no-op projection update.
 - `C:\Users\Igor\Downloads\Obsidian` является проверенным представительным документальным корпусом, но не частью runtime-конфигурации и не захардкожен в коде или тестах.
 - Дерево 3 принято и слито в `main` ревизией `5b25f5bf235309761f4376dc4143b246c8409c66`. Оно добавило named document/code roots, локальный E5 vector contour с честным fallback, `.cfmap.md`, Rust/Python structural symbols, deterministic fusion и единую production-композицию CLI.
-- После принятого DT3 baseline в `main` слит runtime/CLI refactor; точный planning baseline DT4 — `23ed8773f9830bf6762f058255b17cbb1fe7ad46` (`main == igont/main`). Обычная test suite, formatting, Clippy и release build на нём проходят; E5 остаётся cache-gated.
+- После принятого DT3 baseline в `main` слит runtime/CLI refactor; точный planning baseline DT4 — `23ed8773f9830bf6762f058255b17cbb1fe7ad46` (`main == igont/main`). Исторически E5 был cache-gated; текущий product runtime автоматически восстанавливает pinned cache и проверяет immutable runtime manifest без ручного model path. Provisioning не запускает indexing/search.
 - Дерево 4 материализовано как план `FASTSEARCH-DT4-AGENT-TOOL-13-08-2026`, `PV-6`, в `.agents/DT-13-08-2026_19-10-Агентский-MCP-инструмент-FastSearch`. Только Foundation `A1→A4` имеет executable contract; B–E — `DORMANT OUTLINE` до GA/GM-PRODUCTION. Последние review потребовали развести shared `.cfknowledge` и product-owned state, planning/execution revisions и revision-scoped baseline gates; PV-6 материализует эти исправления и самостоятельно проверен Root без нового reviewer по указанию владельца. Product implementation не начата.
 - Historical [DT3→DT4 handoff](evidence/dt3-dt4-handoff.md) сохраняет принятый DT3 product baseline; для strict agent admission, flat marker-owned `.cfknowledge/fastsearch-dt4-<instance_id>`, SDK lifecycle, error carriers, vector authority, accounting, limits и gates его явно supersede-ит PV-6.
+- Owner decision 16.08.2026 по [workspace и terminal UX](Obsidian/Paradigms/Архитектура/Рабочие%20области%20и%20интерфейс/00%20Рабочие%20области%20и%20интерфейс.md) реализован в основном human runtime: один системный executable, persistent catalog областей, ровно два optional source contours с multiple roots, `.fastsearch` namespace и terminal-first routing. Это не переписывает DT3 acceptance; direct three-path CLI сохранён как compatibility surface.
+- Retrieval model provisioning расширен до одного selectable workspace slot: E5 Small/Base/Large, Qwen3 Embedding 0.6B и Nomic Embed Text v2 MoE. Загружается и запускается только выбранная модель; readiness не инициирует index/update/search. E5 Small остаётся default и immutable-qualified baseline, остальные варианты — candidates до общего corpus benchmark. `/experiment record` материализует query/hits/latency/judgment в portable `.fastsearch/knowledge`.
+- TDR-FS-2.5 реализован базовым model-evaluation slice: persistent revision-scoped vector partitions, read-only `/compare` readiness, подтверждённый `/update`, shared lexical baseline и отдельная выдача всех ready models. Обычный режим остаётся single-model. До qualification нового default остаются real-model cross-restart acceptance, disk preflight и versioned full-run evidence.
+- Materialized DT4 PV-6 предшествует этому owner decision. До `G-EXECUTION-BASE` его agent-facing workspace profile и storage leaves должны быть пересмотрены против текущего [TDR-FS-2](Obsidian/Docs/TDR/TDR-FS-2%20Workspaces%20и%20terminal%20UX.md); прежний `.cfknowledge` target нельзя исполнять как актуальный owner contract.
 - Перед implementation обязателен `G-EXECUTION-BASE`: после отдельного разрешения владельца текущие PV-6 `ROADMAP.md` и handoff фиксируются docs-only commit, затем exact hash/ancestry записываются как `execution_revision`. Planning snapshot не считается execution baseline. После этого `G-BASE@execution`, а затем `G-BASE@A1`…`G-BASE@A4` исполняются заново на exact revision своей стадии; исторический PASS не переиспользуется. Пока gate не закрыт, worktree A не создаётся.
 
 ## Общие правила движения
 
 1. Одновременно материализуется и исполняется только одно дерево.
-2. Будущее дерево до своего старта остаётся кратким контуром: цель, обязательный вход, исключения и gate повторного исследования.
+2. Будущее дерево может иметь принятый подробный функциональный паспорт, но до старта не получает executable branches/leaves и не выдаётся за implementation contract exact baseline.
 3. Разработка идёт через TDD: причинный `RED` → минимальный `GREEN` → `REFACTOR` без изменения поведения → итоговый `PASS`.
 4. В первом дереве внешние механизмы разрешено заменять явными mock/in-memory adapters. Оркестрация, модели, ошибки и переходы данных остаются настоящими.
 5. Последующие деревья прогоняют ту же contract suite против реальных adapters и удаляют соответствующие runtime-заглушки.
@@ -218,6 +222,8 @@ TODO блокирует закрытие текущего дерева, если
 - test-only `BackendKind::Mock` и `ReferenceFixture` сохранены как oracle, но production mock route отсутствует;
 - compiler-resolved references, дополнительные языки, Linux qualification и MCP transport не заявлены результатом DT3.
 
+Целевой graph contour не переписывает acceptance DT3 задним числом. `.cfmap.md` и basic symbols остаются честно принятым результатом DT3, но в DT8 рассматриваются как migration/compatibility predecessor для hierarchy, semantic overlay и `.fastsearch/knowledge/curated`, а не как обязательный конечный authoring format.
+
 ## Дерево 4 — Агентский доступ и готовый инструмент
 
 ### Образ результата
@@ -241,7 +247,7 @@ TODO блокирует закрытие текущего дерева, если
 - определяет indexing ownership явно: `update/rebuild` остаются operator CLI либо становятся отдельными maintenance tools, но никогда не выполняются скрыто внутри каждого search request;
 - проверяет semantic parity CLI/MCP на общей contract suite: records, ordering, channels, provenance, freshness и structured errors;
 - вводит измеренные ограничения query length, result count, payload bytes, execution time и одновременно обслуживаемой работы; truncation и cancellation наблюдаемы;
-- фиксирует agent profile для document/code roots, logical instance id и optional model root; service state живёт только в flat marker-owned `<document_root>/.cfknowledge/fastsearch-dt4-<instance_id>`, совместимом с действующим generic containment contract. `.cfknowledge` остаётся shared excluded container, foreign siblings неприкосновенны, physical paths не возвращаются в wire;
+- historical PV-6 фиксирует agent profile для document/code roots, logical instance id и optional model root и помещает state в `.cfknowledge`; перед execution этот leaf должен быть заменён workspace profile и `.fastsearch/local` storage по TDR-FS-2 без раскрытия physical paths в wire;
 - проверяет lifecycle долгоживущего процесса: startup, повторные requests, stale/degraded recovery, provider absence/failure и controlled shutdown;
 - готовит воспроизводимую Windows-first сборку, checksum, smoke из чистого каталога и документацию запуска MCP-клиентом;
 - сохраняет optional model cache внешним immutable artifact: «один бинарник» означает один FastSearch executable, а не встраивание весов E5;
@@ -284,7 +290,33 @@ TODO блокирует закрытие текущего дерева, если
 3. согласовать startup configuration и ownership `index update/rebuild`;
 4. выбрать последовательную либо явно синхронизированную модель долгоживущего runtime;
 5. измерить core/actor в A4 и modern+legacy production stdio в D3; только D3 назначает release numeric limits и закрывает `G-LIMITS`, это не блокирует B/C/D1/D2;
-6. предоставить immutable E5 cache для A4 vector crash/restart/query acceptance; отсутствие cache оставляет GA `NOT_READY`, но не делает E5 обязательным runtime-профилем продукта.
+6. A4 вызывает текущий automatic provisioning contract TDR-FS-2.4 и фиксирует полученную immutable E5 revision в evidence; ручная доставка cache больше не является prerequisite. Недоступность сети/cache оставляет vector acceptance `NOT_READY`, но не делает E5 обязательным условием lexical/code navigation.
+
+## Будущий graph knowledge contour
+
+DT5–DT11 не входят в materialized DT4 и не изменяют его scope. Их подробные паспорта фиксируют принятый target, producer dependencies, exclusions и exit evidence, но каждый stage перед реализацией получает новый dynamic-tree plan на exact accepted baseline.
+
+| Этап | Producer | Наблюдаемый результат | Подробный паспорт |
+|---|---|---|---|
+| DT5. Документальный граф и quality foundation | Принятый DT4 либо bounded offline spike | Typed document hierarchy/authority и воспроизводимый Russian+English retrieval benchmark | [DT5](Obsidian/Docs/Roadmap/01%20DT5%20Документальный%20граф%20и%20quality%20foundation.md) |
+| DT6. Иерархический граф кода | Graph foundation DT5 и symbols DT3 | Repository/module/class/function hierarchy, language relations и stable identity без byte offsets | [DT6](Obsidian/Docs/Roadmap/02%20DT6%20Иерархический%20граф%20кода.md) |
+| DT7. Ревизии и причинная актуальность | Document/code graphs DT5–DT6 | Observed/accepted revisions, edge deltas, root causes и controlled propagation без ложных cascades | [DT7](Obsidian/Docs/Roadmap/03%20DT7%20Ревизии%20и%20причинная%20актуальность.md) |
+| DT8. Semantic overlay в `.fastsearch` | Stable nodes/review commit DT6–DT7 и TDR-FS-2.2 storage | Multi-level descriptions, local/Codex candidate boundary и portable accepted semantics | [DT8](Obsidian/Docs/Roadmap/04%20DT8%20Semantic%20overlay%20в%20.fastsearch.md) |
+| DT9. Межграфовая трассируемость | Document graph DT5 и semantic code graph DT8 | Verified/candidate documentation↔code links и explained impact paths | [DT9](Obsidian/Docs/Roadmap/05%20DT9%20Межграфовая%20трассируемость.md) |
+| DT10. Graph query surface и dtree integration | Complete graph contracts DT5–DT9 и DT4 surface | Full graph revision через bounded neighbors/calls/path/impact/docs/source queries | [DT10](Obsidian/Docs/Roadmap/06%20DT10%20Graph%20query%20surface%20и%20dtree%20integration.md) |
+| DT11. Continuous curator и quality operation | FastSearch DT7–DT10 и dtree managed agent lifecycle | Root-cause curator queue, validated review commits и continuous model/graph quality | [DT11](Obsidian/Docs/Roadmap/07%20DT11%20Continuous%20curator%20и%20quality%20operation.md) |
+
+### Сквозные правила graph contour
+
+- Structural graph, embeddings, model candidates и current `.cfmap` AUTO content являются возобновляемыми.
+- Accepted node descriptions и verified document↔code links переносятся с repository в `.fastsearch/knowledge/curated`; `.fastsearch/local` остаётся вне Git.
+- Function identity не зависит от whitespace, formatting, byte position и declaration order внутри неизменившегося scope.
+- Automatic cross-module function move tracking не требуется: old node удаляется, new node рассчитывается заново.
+- Directed edge хранится один раз; incoming/outgoing indexes обеспечивают навигацию в обе стороны.
+- `updated` не равно `stale`: implementation-only change не создаёт downstream cascade при сохранённом contract.
+- Agent получает bounded initial subgraph, но может расширять depth/direction по всему exact graph revision.
+- FastSearch не запускает Codex: dtree создаёт GraphCurator assignment и передаёт validated result обратно.
+- Каждая стадия добавляет regression/quality evidence на заранее исследованных repositories и controlled changes.
 
 ## Переходы между деревьями
 

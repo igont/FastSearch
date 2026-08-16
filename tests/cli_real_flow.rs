@@ -31,6 +31,7 @@ impl Drop for TemporaryDirectory {
 
 fn run(arguments: &[String]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_fastsearch"))
+        .env("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD", "1")
         .args(arguments)
         .output()
         .expect("real CLI starts")

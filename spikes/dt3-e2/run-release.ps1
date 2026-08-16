@@ -37,6 +37,18 @@ function Test-ContainsPath {
         $candidate.StartsWith($ancestor + $separator, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
+}
+
 Assert-NoReparseAncestors -Path $DocumentRoot -Label 'document root'
 Assert-NoReparseAncestors -Path $CodeRoot -Label 'code root'
 Assert-NoReparseAncestors -Path $WorkRoot -Label 'work root'
@@ -56,7 +68,7 @@ function Get-RootInventory {
         [pscustomobject][ordered]@{
             locator = $relative
             bytes = $_.Length
-            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            sha256 = Get-Sha256Hex -Path $_.FullName
         }
     })
     $manifest = ($files | ForEach-Object { "$($_.locator)`t$($_.bytes)`t$($_.sha256)" }) -join "`n"
@@ -203,7 +215,7 @@ function Invoke-Measured {
         label = $Label
         milliseconds = [math]::Round($watch.Elapsed.TotalMilliseconds, 3)
         peak_working_set_bytes = $peak
-        output_sha256 = (Get-FileHash -LiteralPath $stdout -Algorithm SHA256).Hash.ToLowerInvariant()
+        output_sha256 = Get-Sha256Hex -Path $stdout
         exit_code = $process.ExitCode
     }
 }
@@ -269,7 +281,7 @@ $result = [ordered]@{
     run_id = $runId
     measured_product_revision = (git -C (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) rev-parse HEAD).Trim()
     evidence_candidate_relation = 'final evidence-only commit must descend from measured_product_revision'
-    binary_sha256 = (Get-FileHash -LiteralPath $resolvedBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    binary_sha256 = Get-Sha256Hex -Path $resolvedBinary
     rustc = (rustc --version).Trim()
     cargo = (cargo --version).Trim()
     command = 'spikes/dt3-e2/run-release.ps1 release 5 cold + 5 warm + optional E5 5 cold + 5 warm'

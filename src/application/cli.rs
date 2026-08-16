@@ -1,5 +1,5 @@
 use crate::{
-    application::{ProductionConfig, ProductionRuntime, RealRuntime},
+    application::{ProductionConfig, ProductionRuntime, RealRuntime, ensure_e5_model},
     domain::{
         BackendKind, CanonicalRecord, Capability, CapabilityState, CapabilityStatus, ErrorKind,
         FastSearchError, IndexFreshness, LifecycleStatus, RecordKind, RelatedQuery,
@@ -8,6 +8,10 @@ use crate::{
     ports::AgentSurface,
 };
 use serde_json::{Value, json};
+use terminal_dialogue::{
+    EmptyStateDocument, LanguagePack, NextStep, ReportDocument, ReportSection, ResultDocument,
+    ResultItem, TerminalDocument,
+};
 
 const USAGE: &str = "usage:\n  fastsearch init <documents> <code> <service> [e5-root]\n  fastsearch index update <documents> <code> <service> [e5-root]\n  fastsearch index rebuild <documents> <code> <service> [e5-root]\n  fastsearch search <documents> <code> <service> <balanced|current|design> <query> [e5-root]\n  fastsearch get <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch related <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch status <documents> <code> <service> [e5-root]";
 
@@ -431,7 +435,17 @@ fn open_production(
     let config = ProductionConfig::new(documents, code, service);
     let config = match e5 {
         Some(root) => config.with_e5_root(root),
-        None => config,
+        None if cfg!(debug_assertions)
+            && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some() =>
+        {
+            config
+        }
+        None => config.with_e5_root(
+            ensure_e5_model(false)
+                .map_err(runtime_error)?
+                .root()
+                .to_path_buf(),
+        ),
     };
     ProductionRuntime::open(config).map_err(runtime_error)
 }
@@ -471,8 +485,144 @@ fn parse_mode(value: &str) -> Result<SearchMode, CliError> {
 
 pub(in crate::application) use presenters::render_outcome;
 
+pub(super) enum HumanOutcomeDocument {
+    Empty(EmptyStateDocument),
+    Report(ReportDocument),
+    Result(ResultDocument),
+}
+
+impl TerminalDocument for HumanOutcomeDocument {
+    fn to_dialogue_document(&self, language: &LanguagePack) -> terminal_dialogue::DialogueDocument {
+        match self {
+            Self::Empty(document) => document.to_dialogue_document(language),
+            Self::Report(document) => document.to_dialogue_document(language),
+            Self::Result(document) => document.to_dialogue_document(language),
+        }
+    }
+}
+
+pub(super) fn human_outcome_document(outcome: &CommandOutcome) -> HumanOutcomeDocument {
+    match outcome {
+        CommandOutcome::Status {
+            status,
+            capabilities,
+        } => {
+            let status_section = ReportSection::new("Состояние индекса")
+                .with_line(format!(
+                    "Актуальность: {}",
+                    presenters::human_freshness(status.freshness())
+                ))
+                .with_line(format!("Поколение данных: {}", status.state_generation()))
+                .with_line(format!(
+                    "Поколение проекции: {}",
+                    status
+                        .projection_generation()
+                        .map_or_else(|| "нет".to_owned(), |value| value.to_string())
+                ))
+                .with_line(format!("Подробности: {}", status.detail()));
+            let capabilities_section = capabilities.iter().fold(
+                ReportSection::new("Возможности"),
+                |section, capability| {
+                    section.with_line(format!(
+                        "{} — {}",
+                        presenters::capability_name(capability.capability()),
+                        presenters::human_capability_state(capability.state())
+                    ))
+                },
+            );
+            HumanOutcomeDocument::Report(
+                ReportDocument::new()
+                    .with_section(status_section)
+                    .with_section(capabilities_section),
+            )
+        }
+        CommandOutcome::Search(response) if response.hits().is_empty() => {
+            HumanOutcomeDocument::Empty(EmptyStateDocument {
+                heading: "Результаты поиска".to_owned(),
+                explanation: format!(
+                    "Совпадений нет. Актуальность индекса: {}.",
+                    presenters::human_freshness(response.freshness())
+                ),
+                next_step: NextStep::instruction(
+                    "Уточните формулировку, смените режим или обновите индекс.",
+                ),
+            })
+        }
+        CommandOutcome::Search(response) => {
+            let document = response.hits().iter().fold(
+                ResultDocument::new(
+                    "Результаты поиска",
+                    format!(
+                        "Актуальность: {}. Найдено: {}.",
+                        presenters::human_freshness(response.freshness()),
+                        response.hits().len()
+                    ),
+                ),
+                |document, hit| {
+                    document.with_item(
+                        ResultItem::new(hit.record().title(), hit.record().locator().path())
+                            .with_detail(format!("ID: {}", hit.record().id().as_str()))
+                            .with_detail(format!(
+                                "Канал: {}",
+                                presenters::channel_name(hit.channel())
+                            ))
+                            .with_detail(format!("Оценка: {:.4}", hit.score())),
+                    )
+                },
+            );
+            HumanOutcomeDocument::Result(document.with_next_step(NextStep::instruction(
+                "Используйте /get <stable-id> или уточните поисковый запрос.",
+            )))
+        }
+        CommandOutcome::Record(None) => HumanOutcomeDocument::Empty(EmptyStateDocument {
+            heading: "Запись".to_owned(),
+            explanation: "Запись с таким стабильным ID не найдена.".to_owned(),
+            next_step: NextStep::instruction("Проверьте ID или выполните новый поиск."),
+        }),
+        CommandOutcome::Record(Some(record)) => HumanOutcomeDocument::Report(
+            ReportDocument::new()
+                .with_section(
+                    ReportSection::new("Запись")
+                        .with_line(format!("Заголовок: {}", record.title()))
+                        .with_line(format!("ID: {}", record.id().as_str()))
+                        .with_line(format!(
+                            "Тип: {}",
+                            presenters::record_kind_name(record.kind())
+                        ))
+                        .with_line(format!("Файл: {}", record.locator().path())),
+                )
+                .with_section(
+                    ReportSection::new("Содержимое").with_line(record.searchable_content()),
+                ),
+        ),
+        CommandOutcome::Related(records) if records.is_empty() => {
+            HumanOutcomeDocument::Empty(EmptyStateDocument {
+                heading: "Связанные записи".to_owned(),
+                explanation: "Связанные записи не найдены.".to_owned(),
+                next_step: NextStep::instruction("Проверьте ID или выполните новый поиск."),
+            })
+        }
+        CommandOutcome::Related(records) => HumanOutcomeDocument::Result(
+            records
+                .iter()
+                .fold(
+                    ResultDocument::new("Связанные записи", format!("Найдено: {}.", records.len())),
+                    |document, record| {
+                        document.with_item(
+                            ResultItem::new(record.title(), record.locator().path())
+                                .with_detail(format!("ID: {}", record.id().as_str())),
+                        )
+                    },
+                )
+                .with_next_step(NextStep::instruction(
+                    "Используйте /get <stable-id>, чтобы открыть запись.",
+                )),
+        ),
+    }
+}
+
 /// Pure CLI presentation: typed outcomes in, text out. It owns no runtime or filesystem work.
-mod presenters {
+pub(super) mod presenters {
     use super::*;
 
     pub(in crate::application) fn render_outcome(
@@ -723,7 +873,7 @@ mod presenters {
         }
     }
 
-    fn human_capability_state(state: &CapabilityState) -> String {
+    pub(super) fn human_capability_state(state: &CapabilityState) -> String {
         match state {
             CapabilityState::Available { backend } => {
                 format!("доступно ({})", backend_name(*backend))
@@ -734,7 +884,7 @@ mod presenters {
         }
     }
 
-    fn human_freshness(value: IndexFreshness) -> &'static str {
+    pub(crate) fn human_freshness(value: IndexFreshness) -> &'static str {
         match value {
             IndexFreshness::NotConfigured => "не настроен",
             IndexFreshness::Current => "актуален",
@@ -752,7 +902,7 @@ mod presenters {
         }
     }
 
-    fn capability_name(value: Capability) -> &'static str {
+    pub(super) fn capability_name(value: Capability) -> &'static str {
         match value {
             Capability::Source => "source",
             Capability::State => "state",
@@ -771,7 +921,7 @@ mod presenters {
         }
     }
 
-    fn record_kind_name(value: RecordKind) -> &'static str {
+    pub(super) fn record_kind_name(value: RecordKind) -> &'static str {
         match value {
             RecordKind::MarkdownSection => "markdown_section",
             RecordKind::RegistryRow => "registry_row",
@@ -780,7 +930,7 @@ mod presenters {
         }
     }
 
-    fn channel_name(value: RetrievalChannel) -> &'static str {
+    pub(super) fn channel_name(value: RetrievalChannel) -> &'static str {
         match value {
             RetrievalChannel::Exact => "exact",
             RetrievalChannel::Lexical => "lexical",

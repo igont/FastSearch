@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::RelatedQuery;
 use crate::domain::{
-    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
-    SourceSnapshot, StableId,
+    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, LogicalRootId, RecordKind,
+    RootedSourceLocator, SourceLocator, SourceSnapshot, StableId,
 };
 use crate::ports::{CodeMapPort, SourcePort};
 
@@ -23,6 +23,7 @@ const MAX_MAP_DEPTH: usize = 16;
 #[derive(Debug)]
 pub struct CodeMapSource {
     root: PathBuf,
+    root_id: Option<LogicalRootId>,
 }
 
 /// In-memory projection of explicit map facts. It never follows a relation recursively.
@@ -86,7 +87,18 @@ impl CodeMapPort for CodeMapRelated {
 impl CodeMapSource {
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            root_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn new_named(root_id: LogicalRootId, root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            root_id: Some(root_id),
+        }
     }
 
     /// Validates every map before returning a complete, deterministic snapshot set.
@@ -97,7 +109,7 @@ impl CodeMapSource {
         paths.sort();
         paths
             .into_iter()
-            .map(|path| parse_map_file(&root, &path))
+            .map(|path| parse_map_file(&root, &path, self.root_id.as_ref()))
             .collect()
     }
 }
@@ -161,7 +173,9 @@ fn collect_map_paths(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_map_paths(root, &path, depth + 1, paths)?;
+            if !excluded_directory(&path) {
+                collect_map_paths(root, &path, depth + 1, paths)?;
+            }
         } else if file_type.is_file()
             && path
                 .file_name()
@@ -184,7 +198,29 @@ fn collect_map_paths(
     Ok(())
 }
 
-fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearchError> {
+fn excluded_directory(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        matches!(
+            name.to_str(),
+            Some(
+                ".fastsearch"
+                    | ".git"
+                    | ".venv"
+                    | "build"
+                    | "dist"
+                    | "node_modules"
+                    | "target"
+                    | "vendor"
+            )
+        )
+    })
+}
+
+fn parse_map_file(
+    root: &Path,
+    path: &Path,
+    root_id: Option<&LogicalRootId>,
+) -> Result<SourceSnapshot, FastSearchError> {
     let locator = path
         .strip_prefix(root)
         .map_err(|_| invalid("map escapes configured root"))?
@@ -218,8 +254,14 @@ fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearch
     }
     let locator_value = SourceLocator::whole_file(locator.clone())?;
     let digest = hex_digest(&bytes);
+    let id = match root_id {
+        Some(root_id) => {
+            RootedSourceLocator::new(root_id.clone(), locator_value.clone())?.stable_id()
+        }
+        None => StableId::parse(format!("cfmap-v1:{locator}"))?,
+    };
     let record = CanonicalRecord::new(
-        StableId::parse(format!("cfmap-v1:{locator}"))?,
+        id,
         RecordKind::CodeMap,
         locator_value.clone(),
         map_title(&parsed.body)?,
@@ -228,11 +270,13 @@ fn parse_map_file(root: &Path, path: &Path) -> Result<SourceSnapshot, FastSearch
         parsed.relations,
         ContentHash::parse(digest.clone())?,
     )?;
-    Ok(SourceSnapshot::new(
-        locator_value,
-        FileHash::parse(digest)?,
-        vec![record],
-    ))
+    let file_hash = FileHash::parse(digest)?;
+    Ok(match root_id {
+        Some(root_id) => {
+            SourceSnapshot::for_root(root_id.clone(), locator_value, file_hash, vec![record])
+        }
+        None => SourceSnapshot::new(locator_value, file_hash, vec![record]),
+    })
 }
 
 fn parse_map_text(locator: &str, text: &str) -> Result<ParsedMap, FastSearchError> {

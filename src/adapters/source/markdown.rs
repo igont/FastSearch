@@ -1,13 +1,22 @@
 use std::collections::BTreeMap;
 
 use crate::domain::{
-    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, RecordKind, SourceLocator,
-    SourceSnapshot, StableId,
+    CanonicalRecord, ContentHash, ErrorKind, FastSearchError, FileHash, LogicalRootId, RecordKind,
+    RootedSourceLocator, SourceLocator, SourceSnapshot, StableId,
 };
 
 use super::{normalize_document, source_contract_failure, versioned_hash};
 
+#[cfg(test)]
 pub(super) fn parse(locator: &str, bytes: &[u8]) -> Result<SourceSnapshot, FastSearchError> {
+    parse_with_root(locator, bytes, None)
+}
+
+pub(super) fn parse_with_root(
+    locator: &str,
+    bytes: &[u8],
+    root_id: Option<&LogicalRootId>,
+) -> Result<SourceSnapshot, FastSearchError> {
     let document = std::str::from_utf8(bytes)
         .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
     let document = normalize_document(document);
@@ -44,6 +53,7 @@ pub(super) fn parse(locator: &str, bytes: &[u8]) -> Result<SourceSnapshot, FastS
                 &frontmatter.metadata,
                 &frontmatter.relations,
                 section,
+                root_id,
             )
         })
         .collect::<Result<Vec<_>, _>>()?
@@ -54,7 +64,12 @@ pub(super) fn parse(locator: &str, bytes: &[u8]) -> Result<SourceSnapshot, FastS
         .map_err(|error| source_contract_failure(error.message()))?;
     let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
         .map_err(|error| source_contract_failure(error.message()))?;
-    Ok(SourceSnapshot::new(snapshot_locator, file_hash, records))
+    Ok(match root_id {
+        Some(root_id) => {
+            SourceSnapshot::for_root(root_id.clone(), snapshot_locator, file_hash, records)
+        }
+        None => SourceSnapshot::new(snapshot_locator, file_hash, records),
+    })
 }
 
 #[derive(Debug)]
@@ -76,16 +91,20 @@ fn canonical_record(
     metadata: &BTreeMap<String, String>,
     relations: &[StableId],
     section: MarkdownSection,
+    root_id: Option<&LogicalRootId>,
 ) -> Result<Option<CanonicalRecord>, FastSearchError> {
     let content = section.body.join("\n").trim().to_owned();
     if content.is_empty() {
         return Ok(None);
     }
     let heading_path = section.headings.join("/");
-    let id = StableId::parse(format!("markdown:{path}#{heading_path}"))
-        .map_err(|error| source_contract_failure(error.message()))?;
     let locator = SourceLocator::markdown(path, section.headings.iter().cloned())
         .map_err(|error| source_contract_failure(error.message()))?;
+    let id = match root_id {
+        Some(root_id) => RootedSourceLocator::new(root_id.clone(), locator.clone())?.stable_id(),
+        None => StableId::parse(format!("markdown:{path}#{heading_path}"))
+            .map_err(|error| source_contract_failure(error.message()))?,
+    };
     let content_hash = ContentHash::parse(record_hash(
         path,
         &section.headings,

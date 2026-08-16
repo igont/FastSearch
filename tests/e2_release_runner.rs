@@ -93,7 +93,12 @@ fn release_runner_rejects_two_way_overlap_and_junction_before_write() {
         &temp.child("overlap.json"),
     );
     assert!(!overlap.status.success());
-    assert!(String::from_utf8_lossy(&overlap.stderr).contains("pairwise disjoint"));
+    assert!(
+        String::from_utf8_lossy(&overlap.stderr).contains("pairwise disjoint"),
+        "stderr bytes={:?}; stdout={}",
+        overlap.stderr,
+        String::from_utf8_lossy(&overlap.stdout)
+    );
 
     let junction = temp.child("work-junction");
     let linked = Command::new("cmd")

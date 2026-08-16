@@ -37,10 +37,11 @@ impl Drop for Temp {
 }
 
 struct Fixture {
-    _temp: Temp,
+    temp: Temp,
     documents: PathBuf,
     code: PathBuf,
     service: PathBuf,
+    catalog_home: PathBuf,
 }
 
 impl Fixture {
@@ -49,6 +50,7 @@ impl Fixture {
         let documents = temp.child("document sources");
         let code = temp.child("code sources");
         let service = temp.child("service state");
+        let catalog_home = temp.child("catalog home");
         fs::create_dir_all(&documents).expect("documents directory");
         fs::create_dir_all(&code).expect("code directory");
         fs::write(
@@ -58,10 +60,11 @@ impl Fixture {
         .expect("document fixture");
         fs::write(code.join("lib.rs"), "pub fn cli_fixture() {}\n").expect("code fixture");
         Self {
-            _temp: temp,
+            temp,
             documents,
             code,
             service,
+            catalog_home,
         }
     }
 
@@ -74,6 +77,10 @@ impl Fixture {
         ]);
         result
     }
+
+    fn root(&self) -> &Path {
+        &self.temp.0
+    }
 }
 
 fn path_text(path: &Path) -> String {
@@ -81,7 +88,9 @@ fn path_text(path: &Path) -> String {
 }
 
 fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_fastsearch"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fastsearch"));
+    command.env("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD", "1");
+    command
 }
 
 fn run(arguments: &[String]) -> Output {
@@ -109,6 +118,44 @@ fn run_with_input(arguments: &[String], input: &str, no_color: bool) -> Output {
         .write_all(input.as_bytes())
         .expect("interactive input");
     child.wait_with_output().expect("FastSearch CLI finishes")
+}
+
+fn run_workspace_input(fixture: &Fixture, input: &str, no_color: bool) -> Output {
+    run_workspace_input_from(fixture, fixture.root(), input, no_color)
+}
+
+fn run_workspace_input_from(
+    fixture: &Fixture,
+    current_dir: &Path,
+    input: &str,
+    no_color: bool,
+) -> Output {
+    let mut command = binary();
+    command
+        .current_dir(current_dir)
+        .env("FASTSEARCH_HOME", &fixture.catalog_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if no_color {
+        command.env("NO_COLOR", "1");
+    }
+    let mut child = command
+        .spawn()
+        .expect("FastSearch workspace console starts");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("interactive input");
+    child
+        .wait_with_output()
+        .expect("FastSearch workspace console finishes")
+}
+
+fn create_workspace_then(commands: &str) -> String {
+    format!("n\n\n\n\n{commands}")
 }
 
 fn stdout(output: &Output) -> String {
@@ -269,24 +316,61 @@ fn option_terminator_preserves_a_literal_json_argument() {
 
 #[test]
 fn no_arguments_show_onboarding_and_eof_is_a_clean_exit() {
-    let output = run(&[]);
+    let fixture = Fixture::new();
+    let output = run_workspace_input(&fixture, "", true);
     assert_eq!(output.status.code(), Some(0));
     assert!(stderr(&output).is_empty());
     let text = stdout(&output);
     assert!(text.contains("FastSearch"), "{text}");
-    assert!(
-        text.contains("документ") || text.contains("Документ"),
-        "{text}"
-    );
-    assert!(text.contains("Пример") || text.contains("пример"), "{text}");
-    assert!(text.contains("Enter"), "{text}");
+    assert!(text.contains("РАБОЧИЕ ОБЛАСТИ"), "{text}");
+    assert!(text.contains("Введите N"), "{text}");
+    assert!(!text.contains("Папка документов"), "{text}");
+    assert!(!text.contains("service:"), "{text}");
     assert_no_ansi(&text);
 }
 
 #[test]
+fn interactive_visual_contract_matches_dtree_typography_and_separator() {
+    let fixture = Fixture::new();
+    let output = run_workspace_input(&fixture, "/exit\n", true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let mut lines = text.lines();
+
+    assert_eq!(lines.next(), Some("FASTSEARCH"));
+    assert_eq!(
+        lines.next(),
+        Some("  Локальный поиск по документации и исходному коду.")
+    );
+    assert!(text.contains("РАБОЧИЕ ОБЛАСТИ"), "{text}");
+    assert!(!text.contains("FastSearch — поиск"), "{text}");
+    assert!(!text.contains('─'), "{text}");
+
+    let separator = text
+        .lines()
+        .find(|line| line.starts_with("====") && line.contains('.'))
+        .expect("timestamp separator");
+    assert_eq!(separator.chars().count(), 110, "{separator}");
+    let timestamp = separator
+        .rsplit_once(' ')
+        .and_then(|(date_and_fill, time)| {
+            date_and_fill
+                .rsplit_once(' ')
+                .map(|(_, date)| format!("{date} {time}"))
+        })
+        .expect("date and time suffix");
+    assert_eq!(timestamp.len(), 16, "{timestamp}");
+    assert_eq!(timestamp.as_bytes()[2], b'.');
+    assert_eq!(timestamp.as_bytes()[5], b'.');
+    assert_eq!(timestamp.as_bytes()[10], b' ');
+    assert_eq!(timestamp.as_bytes()[13], b':');
+}
+
+#[test]
 fn exit_alias_closes_the_onboarding_without_creating_a_context() {
-    for alias in ["exit", "quit", "выход"] {
-        let output = run_with_input(&[], &format!("{alias}\n"), true);
+    for alias in ["exit", "quit", "выход", "/exit"] {
+        let fixture = Fixture::new();
+        let output = run_workspace_input(&fixture, &format!("{alias}\n"), true);
         assert!(
             output.status.success(),
             "alias={alias}: {}",
@@ -294,38 +378,327 @@ fn exit_alias_closes_the_onboarding_without_creating_a_context() {
         );
         let text = stdout(&output);
         assert!(text.contains("закрыт"), "alias={alias}: {text}");
-        assert!(!text.contains("Контекст готов"), "alias={alias}: {text}");
+        assert!(!fixture.root().join(".fastsearch").exists());
     }
 }
 
 #[test]
-fn chat_keeps_context_runs_multiple_commands_recovers_and_toggles_json() {
+fn workspace_console_keeps_context_and_recovers_after_an_unknown_command() {
     let fixture = Fixture::new();
-    let input = format!(
-        "{}\n{}\n{}\n\ncontext\nstatus\nunknown-command\nstatus\njson\nstatus\njson\nhelp\nexit\n",
-        path_text(&fixture.documents),
-        path_text(&fixture.code),
-        path_text(&fixture.service),
-    );
-    let output = run_with_input(&[], &input, true);
+    let input = create_workspace_then("/status\n/unknown-command\n/status\n/help\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(stderr(&output).is_empty());
     let text = stdout(&output);
     assert_no_ansi(&text);
-    assert!(text.contains(&path_text(&fixture.documents)), "{text}");
-    assert!(text.contains(&path_text(&fixture.code)), "{text}");
-    assert!(text.contains(&path_text(&fixture.service)), "{text}");
-    assert!(text.contains("Состояние индекса"), "{text}");
-    assert!(text.contains("Ошибка") || text.contains("ошибка"), "{text}");
+    assert!(text.contains("Рабочая область создана"), "{text}");
+    assert!(text.to_lowercase().contains("документац"), "{text}");
+    assert!(text.to_lowercase().contains("код"), "{text}");
+    assert!(text.matches("FASTSEARCH").count() >= 3, "{text}");
+    assert!(text.to_lowercase().contains("ошибка"), "{text}");
     assert!(
-        text.matches("Состояние индекса").count() >= 2,
+        text.matches("FASTSEARCH").count() >= 3,
         "chat did not continue after an error: {text}"
     );
-    assert!(text.contains("\"schema_version\""), "{text}");
-    assert!(text.contains("\"status\": \"ok\""), "{text}");
     assert!(
         text.contains("Команды") || text.contains("команды"),
         "{text}"
+    );
+}
+
+#[test]
+fn workspace_creation_and_model_command_use_the_selectable_catalog() {
+    let fixture = Fixture::new();
+    let input = "n\n\n\n4\n/model\n/model info 1\n/status\n/exit\n";
+    let output = run_workspace_input(&fixture, input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("МОДЕЛЬ ПОИСКА"), "{text}");
+    assert!(text.contains("Qwen3 Embedding 0.6B"), "{text}");
+    assert!(text.contains("✓  4  Qwen3 Embedding 0.6B"), "{text}");
+    assert!(text.contains("МОДЕЛЬ"), "{text}");
+    assert!(text.contains("СОСТОЯНИЕ"), "{text}");
+    assert!(text.contains("CPU"), "{text}");
+    assert!(text.contains("GPU"), "{text}");
+    assert!(text.contains("ЗАГРУЗКА"), "{text}");
+    assert!(text.contains("intfloat/multilingual-e5-small"), "{text}");
+    let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
+    assert!(profile.contains("qwen3-embedding-0.6b"), "{profile}");
+    assert!(
+        !fixture
+            .root()
+            .join(".fastsearch/local/index/cross/vector")
+            .exists()
+    );
+}
+
+#[test]
+fn model_catalog_accepts_plain_number_as_the_next_selection() {
+    let fixture = Fixture::new();
+    let input = "n\n\n\n1\n/model\n2\n/status\n/exit\n";
+    let output = run_workspace_input(&fixture, input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
+    assert!(text.contains("✓  2  E5 Base"), "{text}");
+    assert!(text.contains("Модель: E5 Base"), "{text}");
+    let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
+    assert!(profile.contains("multilingual-e5-base"), "{profile}");
+}
+
+#[test]
+fn index_rebuild_requires_preview_and_can_be_declined() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/index rebuild\nнет\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА"), "{text}");
+    assert!(text.contains("Подтверждение"), "{text}");
+    assert!(text.contains("Перестроение отменено"), "{text}");
+    assert!(fixture.root().join(".fastsearch/workspace.toml").is_file());
+}
+
+#[test]
+fn result_navigation_before_search_has_actionable_error_and_chat_recovers() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/next\n/status\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Сначала выполните поиск"), "{text}");
+    assert!(text.matches("FASTSEARCH").count() >= 2, "{text}");
+}
+
+#[test]
+fn search_results_can_be_repeated_and_opened_by_stable_number() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/index update\nFastSearch\n/repeat\n/open 1\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.matches("РЕЗУЛЬТАТЫ").count() >= 2,
+        "repeat did not render the stored search page: {text}"
+    );
+    assert!(text.contains("Страница 1 из 1"), "{text}");
+    assert!(
+        text.contains("ЗАПИСЬ"),
+        "open did not render a record: {text}"
+    );
+    assert!(text.contains("КОНТЕКСТ ПОИСКА"), "{text}");
+    assert!(text.contains("№  СОВПАДЕНИЕ"), "{text}");
+    assert!(text.contains("1  100%"), "{text}");
+    assert!(text.contains("Файл: guide.md"), "{text}");
+    assert!(!text.contains("Путь: guide.md"), "{text}");
+    assert!(
+        text.contains("Триггер: “Удобный интерактивный поиск.”"),
+        "{text}"
+    );
+}
+
+#[test]
+fn bare_console_text_is_a_balanced_search_query() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/index update\nFastSearch\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, false);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("РЕЗУЛЬТАТЫ"));
+    assert!(text.contains("FastSearch"));
+}
+
+#[test]
+fn interactive_search_treats_ranking_mode_words_as_query_text() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.documents.join("ranking.md"),
+        "# current\n\nRanking behavior",
+    )
+    .expect("ranking fixture");
+    let input = create_workspace_then("/index update\n/search current\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Запрос: «current»"), "{text}");
+}
+
+#[test]
+fn catalog_reoffers_a_known_workspace_outside_its_directory() {
+    let fixture = Fixture::new();
+    let first = run_workspace_input(&fixture, &create_workspace_then("/exit\n"), true);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let second =
+        run_workspace_input_from(&fixture, std::env::temp_dir().as_path(), "1\n/exit\n", true);
+    assert!(second.status.success(), "{}", stderr(&second));
+    let text = stdout(&second);
+    assert!(text.contains("НЕДАВНИЕ ОБЛАСТИ"), "{text}");
+    assert!(text.contains(&path_text(fixture.root())), "{text}");
+    assert!(text.contains("Источники: документация · код"), "{text}");
+}
+
+#[test]
+fn zero_source_workspace_is_valid_and_explains_how_to_continue() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.documents.join("guide.md")).expect("remove document fixture");
+    fs::remove_file(fixture.code.join("lib.rs")).expect("remove code fixture");
+
+    let output = run_workspace_input(&fixture, &create_workspace_then("/sources\n/exit\n"), true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Источники: не настроены"), "{text}");
+    assert!(text.contains("/sources set"), "{text}");
+    assert!(fixture.root().join(".fastsearch/workspace.toml").is_file());
+}
+
+#[test]
+fn sources_screen_explains_navigation_and_hides_internal_windows_paths() {
+    let fixture = Fixture::new();
+    let output = run_workspace_input(&fixture, &create_workspace_then("/sources\n/exit\n"), true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+
+    assert!(text.contains("ИСТОЧНИКИ"), "{text}");
+    assert!(
+        text.contains("Здесь показаны папки, включённые в поиск."),
+        "{text}"
+    );
+    assert!(
+        text.contains("символ `-` означает: не использовать этот тип источников"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Это справочный экран; отдельный режим не открыт."),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "/status           — вернуться к сводке рабочей области\n  /help             — показать все команды\n  /exit             — закрыть FastSearch"
+        ),
+        "{text}"
+    );
+    assert!(text.contains(&path_text(&fixture.documents)), "{text}");
+    assert!(!text.contains(r"\\?\"), "{text}");
+}
+
+#[test]
+fn sources_discover_restores_a_contour_without_technical_paths() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.code.join("lib.rs")).expect("remove code fixture");
+    let created = run_workspace_input(&fixture, &create_workspace_then("/exit\n"), true);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    fs::write(fixture.code.join("lib.rs"), "pub fn restored() {}\n").expect("restore code fixture");
+    let output = run_workspace_input(&fixture, "/sources discover\n\n/exit\n", true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("ОБНАРУЖЕННЫЙ КОД"), "{text}");
+    assert!(text.contains("КОД\n\n  code sources"), "{text}");
+    assert!(!text.contains("service:"), "{text}");
+}
+
+#[test]
+fn one_contour_workspace_does_not_require_the_other_contour() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.code.join("lib.rs")).expect("remove code fixture");
+
+    let output = run_workspace_input(
+        &fixture,
+        &create_workspace_then("/index update\nFastSearch\n/exit\n"),
+        true,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("Источники: документация · 1 корней"),
+        "{text}"
+    );
+    assert!(text.contains("РЕЗУЛЬТАТЫ"), "{text}");
+    assert!(!text.contains("Папка исходного кода"), "{text}");
+}
+
+#[test]
+fn opening_a_workspace_never_updates_the_index_implicitly() {
+    let fixture = Fixture::new();
+    let output = run_workspace_input(&fixture, &create_workspace_then("/exit\n"), true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Индекс: устарел"), "{text}");
+    assert!(text.contains("Поиск пока недоступен"), "{text}");
+    assert!(text.contains("/index update"), "{text}");
+    assert!(
+        text.contains(
+            "Поиск пока недоступен.\n  /index update — актуализировать индекс\n  /sources      — проверить источники\n  /model        — посмотреть или сменить модель\n  /help         — показать все команды\n  /exit         — закрыть FastSearch"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("ОБНОВЛЕНИЕ ИНДЕКСА"), "{text}");
+}
+
+#[test]
+fn current_workspace_shows_the_primary_step_and_vertical_navigation() {
+    let fixture = Fixture::new();
+    let indexed = run_workspace_input(
+        &fixture,
+        &create_workspace_then("/index update\n/exit\n"),
+        true,
+    );
+    assert!(indexed.status.success(), "{}", stderr(&indexed));
+
+    let output = run_workspace_input(&fixture, "/exit\n", true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Индекс: актуален"), "{text}");
+    assert!(
+        text.contains(
+            "Индекс готов. Основной следующий шаг — ввести поисковый запрос:\n  <текст запроса> — выполнить поиск\n  /model          — посмотреть или сменить модель\n  /compare        — сравнить результаты разных моделей\n  /index          — проверить состояние индекса\n  /sources        — проверить источники\n  /help           — показать все команды\n  /exit           — закрыть FastSearch"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn stale_workspace_rejects_bare_search_before_starting_search_progress() {
+    let fixture = Fixture::new();
+    let output = run_workspace_input(
+        &fixture,
+        &create_workspace_then("FastSearch\n/exit\n"),
+        true,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("SEARCH_NOT_READY"), "{text}");
+    assert!(text.contains("индекс требует обновления"), "{text}");
+    assert!(!text.contains("ПОИСК — ВЫПОЛНЯЕТСЯ"), "{text}");
+}
+
+#[test]
+fn compare_entry_is_read_only_and_returns_to_the_workspace() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then(
+        "/compare\n/status\nпроверка единого запроса\n/back\n/status\n/exit\n",
+    );
+    let output = run_workspace_input(&fixture, &input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("ГОТОВНОСТЬ СРАВНЕНИЯ"), "{text}");
+    assert!(text.contains("Готово моделей:"), "{text}");
+    assert!(text.contains("проверка не загружает модели"), "{text}");
+    assert!(text.contains("НЕ ГОТОВ · устарел"), "{text}");
+    assert!(text.contains("РАЗМЕР"), "{text}");
+    assert!(text.contains("ПОСТРОЕНИЕ"), "{text}");
+    assert!(text.contains("Нет ни одной готовой модели"), "{text}");
+    assert!(!text.contains("ПОДГОТОВКА СРАВНЕНИЯ"), "{text}");
+    assert!(text.matches("FASTSEARCH").count() >= 2, "{text}");
+    assert!(
+        !fixture
+            .root()
+            .join(".fastsearch/local/index/vector")
+            .read_dir()
+            .is_ok_and(|mut entries| entries.next().is_some())
     );
 }
 
@@ -336,7 +709,8 @@ fn redirected_output_and_no_color_never_emit_ansi() {
     assert_no_ansi(&stdout(&help));
     assert_no_ansi(&stderr(&help));
 
-    let onboarding = run_with_input(&[], "", true);
+    let fixture = Fixture::new();
+    let onboarding = run_workspace_input(&fixture, "", true);
     assert!(onboarding.status.success());
     assert_no_ansi(&stdout(&onboarding));
     assert_no_ansi(&stderr(&onboarding));

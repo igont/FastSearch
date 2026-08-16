@@ -129,6 +129,34 @@ impl SqliteStateStore {
         transaction.commit().map_err(state_failure)
     }
 
+    /// Returns the complete canonical snapshot in stable-ID order for
+    /// rebuilding or admitting derived projections.
+    pub fn all_records(&self) -> Result<Vec<CanonicalRecord>, FastSearchError> {
+        if self.mandatory_rebuild {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM state_records ORDER BY id")
+            .map_err(state_failure)?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(state_failure)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(state_failure)?;
+        ids.into_iter()
+            .map(|id| {
+                let id = StableId::parse(id).map_err(|error| state_failure(error.message()))?;
+                self.get(&id)?
+                    .ok_or_else(|| state_failure("canonical record disappeared during read"))
+            })
+            .collect()
+    }
+
+    pub fn durable_generation(&self) -> Result<u64, FastSearchError> {
+        self.generation()
+    }
+
     fn generation(&self) -> Result<u64, FastSearchError> {
         let value: i64 = self
             .connection
