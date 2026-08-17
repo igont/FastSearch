@@ -473,6 +473,10 @@ fn index_rebuild_accepts_lowercase_russian_confirmation() {
     assert!(!text.contains("НЕКОРРЕКТНЫЙ ВВОД"), "{text}");
     assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
     assert!(text.contains("Готово: 1/1"), "{text}");
+    assert!(
+        text.contains("Индекс рабочей области · E5 Small · CPU"),
+        "{text}"
+    );
     assert!(!text.contains("этапов"), "{text}");
 }
 
@@ -492,13 +496,17 @@ fn model_device_assignment_is_applied_and_survives_a_restart() {
 
     let first = run_workspace_input(
         &fixture,
-        "n\n\n\n1\n/model device 1 gpu\n/model\n/exit\n",
+        "n\n\n\n1\n/model device 1 gpu\n/index rebuild\nда\n/model\n/exit\n",
         true,
     );
     assert!(first.status.success(), "{}", stderr(&first));
     let first_text = stdout(&first);
     assert!(
         first_text.contains("назначено GPU · DirectML"),
+        "{first_text}"
+    );
+    assert!(
+        first_text.contains("Индекс рабочей области · E5 Small · GPU · DirectML"),
         "{first_text}"
     );
     let preferences =

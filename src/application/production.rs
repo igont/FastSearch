@@ -720,6 +720,8 @@ pub struct ProductionRuntime {
     vector: LocalE5Vector,
     vector_configured: bool,
     workspace_layout: bool,
+    embedding_model: EmbeddingModelId,
+    execution_device: ExecutionDevice,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1119,7 +1121,19 @@ impl ProductionRuntime {
             vector,
             vector_configured,
             workspace_layout,
+            embedding_model,
+            execution_device,
         })
+    }
+
+    #[must_use]
+    pub(super) const fn embedding_model(&self) -> EmbeddingModelId {
+        self.embedding_model
+    }
+
+    #[must_use]
+    pub(super) const fn execution_device(&self) -> ExecutionDevice {
+        self.execution_device
     }
 
     pub fn index(&mut self) -> Result<LifecycleStatus, FastSearchError> {

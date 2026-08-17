@@ -22,6 +22,8 @@ pub(super) fn run_index<R: BufRead>(
     let Some(runtime) = runtime else {
         return show_no_sources(chat);
     };
+    let model = runtime.embedding_model();
+    let device = runtime.execution_device();
     let operation = if rebuild {
         "Перестроение индекса"
     } else {
@@ -30,12 +32,23 @@ pub(super) fn run_index<R: BufRead>(
     let dashboard = ProgressDashboard::new(
         operation,
         vec![ProgressTaskSpec::new(
-            "Индекс рабочей области",
+            format!(
+                "Индекс рабочей области · {} · {}",
+                model.display_name(),
+                device.label()
+            ),
             vec![
                 ProgressPhase::new("источники", ProgressUnit::count("этап", "этап/с")),
                 ProgressPhase::new("корпус", ProgressUnit::count("этап", "этап/с")),
                 ProgressPhase::new("лексика", ProgressUnit::count("этап", "этап/с")),
-                ProgressPhase::new("векторизация", ProgressUnit::count("записей", "зап./с")),
+                ProgressPhase::new(
+                    format!(
+                        "{} · {} · векторизация",
+                        model.display_name(),
+                        device.label()
+                    ),
+                    ProgressUnit::count("записей", "зап./с"),
+                ),
                 ProgressPhase::new("сохранение", ProgressUnit::count("этап", "этап/с")),
             ],
         )],

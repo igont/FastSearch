@@ -6,6 +6,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -21,6 +22,7 @@ const CATALOG_SCHEMA: u32 = 1;
 const MAX_DISCOVERY_DIRECTORIES: usize = 4_096;
 const MAX_DISCOVERY_DEPTH: usize = 6;
 const LOCAL_IGNORE: &str = "/local/\n";
+static NEXT_ATOMIC_WRITE: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_EXCLUSIONS: &[&str] = &[
     ".agents",
     ".fastsearch",
@@ -887,28 +889,11 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FastSearchEr
     })?;
     fs::create_dir_all(parent)
         .map_err(|error| failure(ErrorKind::StateFailure, "create storage parent", error))?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("fastsearch"),
-        std::process::id()
-    ));
+    let temporary = atomic_temporary_path(parent, path);
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .or_else(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                fs::remove_file(&temporary)?;
-                fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&temporary)
-            } else {
-                Err(error)
-            }
-        })
         .map_err(|error| failure(ErrorKind::StateFailure, "create atomic storage file", error))?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
@@ -917,6 +902,19 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FastSearchEr
     replace_file(&temporary, path).inspect_err(|_| {
         let _ = fs::remove_file(&temporary);
     })
+}
+
+fn atomic_temporary_path(parent: &Path, target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("fastsearch");
+    let sequence = NEXT_ATOMIC_WRITE.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ))
 }
 
 #[cfg(windows)]
@@ -1123,5 +1121,30 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.kind(), &ErrorKind::InvalidContent);
+    }
+
+    #[test]
+    fn atomic_write_uses_a_distinct_temporary_path_for_each_call() {
+        let temp = Temp::new();
+        let target = temp.0.join("workspace.toml");
+
+        let first = atomic_temporary_path(&temp.0, &target);
+        let second = atomic_temporary_path(&temp.0, &target);
+
+        assert_ne!(first, second);
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        );
+        assert!(
+            second
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        );
     }
 }

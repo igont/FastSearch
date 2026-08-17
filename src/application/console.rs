@@ -51,6 +51,12 @@ struct SearchSession {
     latency_ms: u128,
 }
 
+#[derive(Clone, Copy)]
+struct SourceUpdateFailure {
+    code: &'static str,
+    hint: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorkspaceTransition {
     Switch,
@@ -705,101 +711,11 @@ fn run_workspace<R: BufRead>(
             "version" => show_notice(chat, &version_text())?,
             "status" => show_workspace(chat, &store, runtime.as_ref())?,
             "sources" => show_sources(chat, &store)?,
-            "sources discover" => match DiscoveryReport::scan(store.root()) {
-                Ok(discovery) => {
-                    show_discovery(
-                        chat,
-                        store.root(),
-                        &discovery,
-                        ui_guidance::discovery_apply(),
-                    )?;
-                    let apply =
-                        match chat.prompt_field_with_cancellation("apply", is_exit, |value| {
-                            match value.trim().to_lowercase().as_str() {
-                                "" | "yes" | "y" | "да" => Ok(true),
-                                "no" | "n" | "нет" => Ok(false),
-                                _ => Err(PromptFeedback::invalid_input(
-                                    "Enter применяет roots; нет или /exit отменяет.",
-                                )),
-                            }
-                        })? {
-                            PromptOutcome::Value(value) => value,
-                            PromptOutcome::Cancelled | PromptOutcome::EndOfInput => false,
-                        };
-                    if apply {
-                        match WorkspaceProfile::from_roots(
-                            store.root(),
-                            store.profile().name(),
-                            discovery.documentation_roots().to_vec(),
-                            discovery.code_roots().to_vec(),
-                        )
-                        .map(|profile| {
-                            profile.with_embedding_model(store.profile().embedding_model())
-                        })
-                        .and_then(|profile| WorkspaceStore::create(store.root(), profile))
-                        {
-                            Ok(updated) => {
-                                store = updated;
-                                register_workspace(catalog, &store, chat)?;
-                                runtime = open_workspace_runtime(chat, &store)?;
-                                last_search = None;
-                                show_sources(chat, &store)?;
-                            }
-                            Err(error) => show_error(
-                                chat,
-                                "SOURCE_DISCOVERY_APPLY",
-                                error.message(),
-                                "Измените roots вручную через /sources set.",
-                            )?,
-                        }
-                    } else {
-                        show_notice(chat, "Обнаруженные roots не применены.")?;
-                    }
-                }
-                Err(error) => show_error(
-                    chat,
-                    "SOURCE_DISCOVERY",
-                    error.message(),
-                    "Проверьте доступ к рабочей области.",
-                )?,
-            },
+            "sources discover" => {
+                handle_source_discovery(chat, catalog, &mut store, &mut runtime, &mut last_search)?;
+            }
             "sources set" => {
-                let documents = store
-                    .profile()
-                    .documentation_roots()
-                    .iter()
-                    .map(|source| source.resolve(store.root()))
-                    .collect::<Vec<_>>();
-                let code = store
-                    .profile()
-                    .code_roots()
-                    .iter()
-                    .map(|source| source.resolve(store.root()))
-                    .collect::<Vec<_>>();
-                let (documents, code) = edit_source_roots(chat, store.root(), &documents, &code)?;
-                match WorkspaceProfile::from_roots(
-                    store.root(),
-                    store.profile().name(),
-                    documents,
-                    code,
-                )
-                .map(|profile| profile.with_embedding_model(store.profile().embedding_model()))
-                .and_then(|profile| WorkspaceStore::create(store.root(), profile))
-                {
-                    Ok(updated) => {
-                        store = updated;
-                        register_workspace(catalog, &store, chat)?;
-                        runtime = open_workspace_runtime(chat, &store)?;
-                        last_search = None;
-                        show_sources(chat, &store)?;
-                    }
-                    Err(error) => show_error(
-                        chat,
-                        "SOURCE_UPDATE",
-                        error.message(),
-                        "Проверьте roots и повторите настройку.",
-                    )?,
-                }
+                handle_source_edit(chat, catalog, &mut store, &mut runtime, &mut last_search)?;
             }
             "index" => show_index_status(chat, runtime.as_ref())?,
             "model" => {
@@ -819,58 +735,7 @@ fn run_workspace<R: BufRead>(
                 show_embedding_model(chat, model)?;
             }
             "model device" => {
-                let mut parts = arguments.split_whitespace().collect::<Vec<_>>();
-                let explicit_device = parts.last().and_then(|value| ExecutionDevice::parse(value));
-                if explicit_device.is_some() {
-                    parts.pop();
-                }
-                let selector = parts.join(" ");
-                let Some(model) = resolve_embedding_model(&selector) else {
-                    show_error(
-                        chat,
-                        "MODEL_DEVICE",
-                        "Модель не распознана.",
-                        "Используйте /model device <N|slug> [cpu|gpu].",
-                    )?;
-                    continue;
-                };
-                let current = match configured_model_device(model) {
-                    Ok(device) => device,
-                    Err(error) => {
-                        show_error(
-                            chat,
-                            "MODEL_DEVICE_READ",
-                            error.message(),
-                            "Проверьте локальный device-preferences.toml.",
-                        )?;
-                        continue;
-                    }
-                };
-                let requested = explicit_device.unwrap_or_else(|| current.toggled());
-                match set_configured_model_device(model, requested) {
-                    Ok(()) => {
-                        show_notice(
-                            chat,
-                            &format!(
-                                "Для {} назначено {}. Настройка сохранена на этом устройстве.",
-                                model.display_name(),
-                                requested.label()
-                            ),
-                        )?;
-                        if model == store.profile().embedding_model() {
-                            runtime = open_workspace_runtime(chat, &store)?;
-                            last_search = None;
-                        } else {
-                            show_embedding_models(chat, store.profile().embedding_model())?;
-                        }
-                    }
-                    Err(error) => show_error(
-                        chat,
-                        "MODEL_DEVICE_UNAVAILABLE",
-                        error.message(),
-                        "Выберите CPU либо модель E5 с успешно проверенным DirectML.",
-                    )?,
-                }
+                handle_model_device(chat, &store, &mut runtime, &mut last_search, &arguments)?
             }
             "compare" => {
                 let Some(runtime) = runtime.as_mut() else {
@@ -882,52 +747,14 @@ fn run_workspace<R: BufRead>(
                     return Ok(WorkspaceTransition::Exit);
                 }
             }
-            "model set" => {
-                let selected = if arguments.trim().is_empty() {
-                    prompt_embedding_model(chat, store.profile().embedding_model())?
-                } else {
-                    resolve_embedding_model(&arguments)
-                };
-                let Some(selected) = selected else {
-                    show_error(
-                        chat,
-                        "MODEL_SELECTION",
-                        "Модель не распознана.",
-                        "Введите /model и используйте номер, slug или краткое имя.",
-                    )?;
-                    continue;
-                };
-                if !(cfg!(debug_assertions)
-                    && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some())
-                    && provision_model_with_ui(chat, selected)?.is_none()
-                {
-                    show_notice(
-                        chat,
-                        "Прежняя активная модель сохранена: новая модель не прошла подготовку.",
-                    )?;
-                    continue;
-                }
-                match store.set_embedding_model(selected) {
-                    Ok(changed) => {
-                        if changed {
-                            show_notice(
-                                chat,
-                                "Модель изменена. Существующие векторы больше не используются; индексирование не запущено.",
-                            )?;
-                        }
-                        runtime = open_workspace_runtime(chat, &store)?;
-                        last_search = None;
-                        show_embedding_models(chat, selected)?;
-                        model_number_expected = true;
-                    }
-                    Err(error) => show_error(
-                        chat,
-                        "MODEL_WRITE",
-                        error.message(),
-                        "Проверьте .fastsearch/workspace.toml и повторите выбор.",
-                    )?,
-                }
-            }
+            "model set" => handle_model_selection(
+                chat,
+                &mut store,
+                &mut runtime,
+                &mut last_search,
+                &mut model_number_expected,
+                &arguments,
+            )?,
             "experiment record" => {
                 let Some(search) = last_search.as_ref() else {
                     show_error(
@@ -1082,6 +909,245 @@ fn run_workspace<R: BufRead>(
             }
             _ => unreachable!("static FastSearch command catalog"),
         }
+    }
+}
+
+fn handle_source_discovery<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    catalog: &mut WorkspaceCatalog,
+    store: &mut WorkspaceStore,
+    runtime: &mut Option<ProductionRuntime>,
+    last_search: &mut Option<SearchSession>,
+) -> io::Result<()> {
+    let discovery = match DiscoveryReport::scan(store.root()) {
+        Ok(discovery) => discovery,
+        Err(error) => {
+            return show_error(
+                chat,
+                "SOURCE_DISCOVERY",
+                error.message(),
+                "Проверьте доступ к рабочей области.",
+            );
+        }
+    };
+    show_discovery(
+        chat,
+        store.root(),
+        &discovery,
+        ui_guidance::discovery_apply(),
+    )?;
+    let apply =
+        match chat.prompt_field_with_cancellation("apply", is_exit, |value| {
+            match value.trim().to_lowercase().as_str() {
+                "" | "yes" | "y" | "да" => Ok(true),
+                "no" | "n" | "нет" => Ok(false),
+                _ => Err(PromptFeedback::invalid_input(
+                    "Enter применяет roots; нет или /exit отменяет.",
+                )),
+            }
+        })? {
+            PromptOutcome::Value(value) => value,
+            PromptOutcome::Cancelled | PromptOutcome::EndOfInput => false,
+        };
+    if !apply {
+        return show_notice(chat, "Обнаруженные roots не применены.");
+    }
+    let updated = WorkspaceProfile::from_roots(
+        store.root(),
+        store.profile().name(),
+        discovery.documentation_roots().to_vec(),
+        discovery.code_roots().to_vec(),
+    )
+    .map(|profile| profile.with_embedding_model(store.profile().embedding_model()))
+    .and_then(|profile| WorkspaceStore::create(store.root(), profile));
+    apply_source_update(
+        chat,
+        catalog,
+        store,
+        runtime,
+        last_search,
+        updated,
+        SourceUpdateFailure {
+            code: "SOURCE_DISCOVERY_APPLY",
+            hint: "Измените roots вручную через /sources set.",
+        },
+    )
+}
+
+fn handle_source_edit<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    catalog: &mut WorkspaceCatalog,
+    store: &mut WorkspaceStore,
+    runtime: &mut Option<ProductionRuntime>,
+    last_search: &mut Option<SearchSession>,
+) -> io::Result<()> {
+    let documents = store
+        .profile()
+        .documentation_roots()
+        .iter()
+        .map(|source| source.resolve(store.root()))
+        .collect::<Vec<_>>();
+    let code = store
+        .profile()
+        .code_roots()
+        .iter()
+        .map(|source| source.resolve(store.root()))
+        .collect::<Vec<_>>();
+    let (documents, code) = edit_source_roots(chat, store.root(), &documents, &code)?;
+    let updated =
+        WorkspaceProfile::from_roots(store.root(), store.profile().name(), documents, code)
+            .map(|profile| profile.with_embedding_model(store.profile().embedding_model()))
+            .and_then(|profile| WorkspaceStore::create(store.root(), profile));
+    apply_source_update(
+        chat,
+        catalog,
+        store,
+        runtime,
+        last_search,
+        updated,
+        SourceUpdateFailure {
+            code: "SOURCE_UPDATE",
+            hint: "Проверьте roots и повторите настройку.",
+        },
+    )
+}
+
+fn apply_source_update<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    catalog: &mut WorkspaceCatalog,
+    store: &mut WorkspaceStore,
+    runtime: &mut Option<ProductionRuntime>,
+    last_search: &mut Option<SearchSession>,
+    updated: Result<WorkspaceStore, crate::domain::FastSearchError>,
+    failure_context: SourceUpdateFailure,
+) -> io::Result<()> {
+    match updated {
+        Ok(updated) => {
+            *store = updated;
+            register_workspace(catalog, store, chat)?;
+            *runtime = open_workspace_runtime(chat, store)?;
+            *last_search = None;
+            show_sources(chat, store)
+        }
+        Err(error) => show_error(
+            chat,
+            failure_context.code,
+            error.message(),
+            failure_context.hint,
+        ),
+    }
+}
+
+fn handle_model_device<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    store: &WorkspaceStore,
+    runtime: &mut Option<ProductionRuntime>,
+    last_search: &mut Option<SearchSession>,
+    arguments: &str,
+) -> io::Result<()> {
+    let mut parts = arguments.split_whitespace().collect::<Vec<_>>();
+    let explicit_device = parts.last().and_then(|value| ExecutionDevice::parse(value));
+    if explicit_device.is_some() {
+        parts.pop();
+    }
+    let selector = parts.join(" ");
+    let Some(model) = resolve_embedding_model(&selector) else {
+        return show_error(
+            chat,
+            "MODEL_DEVICE",
+            "Модель не распознана.",
+            "Используйте /model device <N|slug> [cpu|gpu].",
+        );
+    };
+    let current = match configured_model_device(model) {
+        Ok(device) => device,
+        Err(error) => {
+            return show_error(
+                chat,
+                "MODEL_DEVICE_READ",
+                error.message(),
+                "Проверьте локальный device-preferences.toml.",
+            );
+        }
+    };
+    let requested = explicit_device.unwrap_or_else(|| current.toggled());
+    match set_configured_model_device(model, requested) {
+        Ok(()) => {
+            show_notice(
+                chat,
+                &format!(
+                    "Для {} назначено {}. Настройка сохранена на этом устройстве.",
+                    model.display_name(),
+                    requested.label()
+                ),
+            )?;
+            if model == store.profile().embedding_model() {
+                *runtime = open_workspace_runtime(chat, store)?;
+                *last_search = None;
+            } else {
+                show_embedding_models(chat, store.profile().embedding_model())?;
+            }
+            Ok(())
+        }
+        Err(error) => show_error(
+            chat,
+            "MODEL_DEVICE_UNAVAILABLE",
+            error.message(),
+            "Выберите CPU либо модель E5 с успешно проверенным DirectML.",
+        ),
+    }
+}
+
+fn handle_model_selection<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    store: &mut WorkspaceStore,
+    runtime: &mut Option<ProductionRuntime>,
+    last_search: &mut Option<SearchSession>,
+    model_number_expected: &mut bool,
+    arguments: &str,
+) -> io::Result<()> {
+    let selected = if arguments.trim().is_empty() {
+        prompt_embedding_model(chat, store.profile().embedding_model())?
+    } else {
+        resolve_embedding_model(arguments)
+    };
+    let Some(selected) = selected else {
+        return show_error(
+            chat,
+            "MODEL_SELECTION",
+            "Модель не распознана.",
+            "Введите /model и используйте номер, slug или краткое имя.",
+        );
+    };
+    if !(cfg!(debug_assertions)
+        && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some())
+        && provision_model_with_ui(chat, selected)?.is_none()
+    {
+        return show_notice(
+            chat,
+            "Прежняя активная модель сохранена: новая модель не прошла подготовку.",
+        );
+    }
+    match store.set_embedding_model(selected) {
+        Ok(changed) => {
+            if changed {
+                show_notice(
+                    chat,
+                    "Модель изменена. Существующие векторы больше не используются; индексирование не запущено.",
+                )?;
+            }
+            *runtime = open_workspace_runtime(chat, store)?;
+            *last_search = None;
+            show_embedding_models(chat, selected)?;
+            *model_number_expected = true;
+            Ok(())
+        }
+        Err(error) => show_error(
+            chat,
+            "MODEL_WRITE",
+            error.message(),
+            "Проверьте .fastsearch/workspace.toml и повторите выбор.",
+        ),
     }
 }
 

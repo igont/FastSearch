@@ -47,15 +47,18 @@ enum ProviderRuntime {
     Nomic(NomicV2MoeTextEmbedding),
 }
 
-// Real-corpus benchmark on 2026-08-16: batch 1 reached 40.78 docs/s at
-// ~0.95 GiB; larger batches were slower and peaked at ~5.08 GiB for 64 due
-// to padding heterogeneous source documents to the longest text in a batch.
-const ONNX_INDEX_BATCH_SIZE: usize = 1;
-const PROGRESS_CHUNK_SIZE: usize = 8;
+// CPU real-corpus benchmark on 16.08.2026: batch 1 reached 40.78 docs/s.
+// DirectML on GTX 1050 Ti peaked at batch 32; batch 1 left preprocessing and
+// dispatch overhead CPU-bound. Durable checkpoints remain independently
+// bounded to eight records.
+const CPU_ONNX_BATCH_SIZE: usize = 1;
+const GPU_ONNX_BATCH_SIZE: usize = 32;
+const DURABLE_CHECKPOINT_CHUNK_SIZE: usize = 8;
 type CheckpointCallback<'a> = dyn FnMut(usize, &[Vec<f32>]) -> Result<(), FastSearchError> + 'a;
 
 pub(super) struct VerifiedProvider {
     model_id: EmbeddingModelId,
+    device: ExecutionDevice,
     runtime: ProviderRuntime,
     pub(super) manifest: String,
     _files: Vec<File>,
@@ -135,6 +138,7 @@ impl VerifiedProvider {
             TextEmbedding::try_new_from_user_defined(model, options).map_err(provider_error)?;
         Ok(Self {
             model_id,
+            device,
             runtime: ProviderRuntime::Onnx(runtime),
             manifest: snapshot.manifest,
             _files: snapshot.files,
@@ -200,6 +204,7 @@ impl VerifiedProvider {
         );
         Ok(Self {
             model_id,
+            device,
             runtime,
             manifest,
             _files: Vec::new(),
@@ -222,7 +227,8 @@ impl VerifiedProvider {
         let total = records.len();
         progress(completed_records, total);
         let mut vectors = Vec::with_capacity(total - completed_records);
-        for chunk in records[completed_records..].chunks(PROGRESS_CHUNK_SIZE) {
+        let inference_chunk_size = inference_chunk_size(self.device);
+        for chunk in records[completed_records..].chunks(inference_chunk_size) {
             let texts = chunk
                 .iter()
                 .map(|record| {
@@ -239,10 +245,12 @@ impl VerifiedProvider {
                 })
                 .collect::<Vec<_>>();
             let embedded = self.embed_formatted(&texts, None)?;
-            let completed_before = completed_records + vectors.len();
-            checkpoint(completed_before, &embedded)?;
-            vectors.extend(embedded);
-            progress(completed_records + vectors.len(), total);
+            for durable_chunk in embedded.chunks(DURABLE_CHECKPOINT_CHUNK_SIZE) {
+                let completed_before = completed_records + vectors.len();
+                checkpoint(completed_before, durable_chunk)?;
+                vectors.extend(durable_chunk.iter().cloned());
+                progress(completed_records + vectors.len(), total);
+            }
         }
         Ok(vectors)
     }
@@ -291,7 +299,7 @@ impl VerifiedProvider {
             ProviderRuntime::Onnx(runtime) => runtime
                 .embed(
                     texts,
-                    Some(onnx_batch_size.unwrap_or(ONNX_INDEX_BATCH_SIZE)),
+                    Some(onnx_batch_size.unwrap_or_else(|| onnx_index_batch_size(self.device))),
                 )
                 .map_err(provider_error)?,
             ProviderRuntime::Qwen(runtime) => runtime.embed(texts).map_err(provider_error)?,
@@ -308,6 +316,20 @@ impl VerifiedProvider {
             ));
         }
         Ok(vectors.into_iter().map(normalize).collect())
+    }
+}
+
+const fn onnx_index_batch_size(device: ExecutionDevice) -> usize {
+    match device {
+        ExecutionDevice::Cpu => CPU_ONNX_BATCH_SIZE,
+        ExecutionDevice::GpuDirectMl => GPU_ONNX_BATCH_SIZE,
+    }
+}
+
+const fn inference_chunk_size(device: ExecutionDevice) -> usize {
+    match device {
+        ExecutionDevice::Cpu => DURABLE_CHECKPOINT_CHUNK_SIZE,
+        ExecutionDevice::GpuDirectMl => GPU_ONNX_BATCH_SIZE,
     }
 }
 
@@ -601,4 +623,18 @@ fn normalize(mut vector: Vec<f32>) -> Vec<f32> {
         }
     }
     vector
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directml_uses_the_qualified_batch_while_cpu_keeps_its_low_memory_batch() {
+        assert_eq!(onnx_index_batch_size(ExecutionDevice::Cpu), 1);
+        assert_eq!(inference_chunk_size(ExecutionDevice::Cpu), 8);
+        assert_eq!(onnx_index_batch_size(ExecutionDevice::GpuDirectMl), 32);
+        assert_eq!(inference_chunk_size(ExecutionDevice::GpuDirectMl), 32);
+        assert_eq!(DURABLE_CHECKPOINT_CHUNK_SIZE, 8);
+    }
 }
