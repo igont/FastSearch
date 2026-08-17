@@ -15,9 +15,10 @@ use std::{
 use terminal_dialogue::{
     ActionItem, ChatSession, ColorPolicy, CommandCatalog, CommandResolution, CommandSpec,
     NavigationAction, NextStep, NoticeDocument, PreparedAction, PreparedOutcome, PreviewDocument,
-    ProgressDocument, ProgressState, PromptFeedback, PromptOutcome, ReportDocument, ReportSection,
-    ResultDocument, ResultItem, ResultPager, SectionDocument, SessionConfig, TableColumn,
-    TableDocument, TableRow, TerminalDocument, UserErrorDocument,
+    ProgressDocument, ProgressState, ProgressValue, PromptFeedback, PromptOutcome, ReportDocument,
+    ReportSection, ResultDocument, ResultItem, ResultPager, SectionDocument, SessionConfig,
+    TableColumn, TableDocument, TableRow, TaskItem, TaskListDocument, TaskState, TerminalDocument,
+    UserErrorDocument,
 };
 
 use crate::{
@@ -28,6 +29,8 @@ use crate::{
     ports::AgentSurface,
 };
 
+use super::comparison::{ComparisonModelStage, ComparisonSharedStage, ComparisonUpdateProgress};
+use super::production::{IndexingProgress, IndexingStage};
 use super::{
     ComparisonCoordinator, ComparisonReadiness, ComparisonRun, MODEL_CATALOG, ProductionRuntime,
     cli::{CommandOutcome, human_outcome_document, presenters::human_freshness},
@@ -1034,36 +1037,49 @@ fn run_index<R: BufRead>(
     let Some(runtime) = runtime else {
         return show_no_sources(chat);
     };
-    chat.show_typed(&ProgressDocument::new(
-        if rebuild {
-            "Перестроение индекса"
-        } else {
-            "Обновление индекса"
-        },
-        ProgressState::Running,
-        if rebuild {
-            "FastSearch пересоздаёт локальный индекс…"
-        } else {
-            "FastSearch применяет изменения источников…"
-        },
-    ))?;
-    let result = if rebuild {
-        runtime.rebuild()
+    let operation = if rebuild {
+        "Перестроение индекса"
     } else {
-        runtime.index()
+        "Обновление индекса"
     };
+    let mut output_error = None;
+    let mut progress_total = 1;
+    let result = {
+        let mut show_progress = |progress: IndexingProgress| {
+            progress_total = progress.total;
+            if output_error.is_some() {
+                return;
+            }
+            let stage = match progress.stage {
+                IndexingStage::Sources => "FastSearch читает исходные документы и код…",
+                IndexingStage::State => "FastSearch применяет изменения корпуса…",
+                IndexingStage::Lexical => "FastSearch строит полнотекстовый индекс…",
+                IndexingStage::Vector => "FastSearch строит векторный индекс…",
+            };
+            output_error = chat
+                .show_typed(
+                    &ProgressDocument::new(operation, ProgressState::Running, stage).with_progress(
+                        ProgressValue::new(progress.completed, progress.total).with_unit("этапов"),
+                    ),
+                )
+                .err();
+        };
+        if rebuild {
+            runtime.rebuild_with_progress(&mut show_progress)
+        } else {
+            runtime.index_with_progress(&mut show_progress)
+        }
+    };
+    if let Some(error) = output_error {
+        return Err(error);
+    }
     match result {
         Ok(status) => chat.show_typed(
-            &ProgressDocument::new(
-                if rebuild {
-                    "Перестроение индекса"
-                } else {
-                    "Обновление индекса"
-                },
-                ProgressState::Completed,
-                "Операция завершена.",
-            )
-            .with_detail(format!("Индекс: {}.", human_freshness(status.freshness()))),
+            &ProgressDocument::new(operation, ProgressState::Completed, "Операция завершена.")
+                .with_progress(
+                    ProgressValue::new(progress_total, progress_total).with_unit("этапов"),
+                )
+                .with_detail(format!("Индекс: {}.", human_freshness(status.freshness()))),
         ),
         Err(error) => show_error(
             chat,

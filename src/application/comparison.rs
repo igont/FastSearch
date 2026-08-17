@@ -14,8 +14,51 @@ use crate::{
 };
 
 use super::{
-    ModelPartitionMetrics, ProductionRuntime, embedding_model_cache_status, ensure_embedding_model,
+    ModelPartitionMetrics, ProductionRuntime, embedding_model_cache_status,
+    ensure_embedding_model_with_progress,
+    production::{IndexingProgress, IndexingStage},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ComparisonSharedStage {
+    Sources,
+    State,
+    Lexical,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ComparisonModelStage {
+    Checking,
+    Downloading {
+        asset: Option<String>,
+        completed_bytes: Option<u64>,
+        total_bytes: Option<u64>,
+    },
+    Indexing,
+    Completed {
+        reused: bool,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ComparisonUpdateProgress {
+    Shared {
+        completed: u64,
+        total: u64,
+        stage: ComparisonSharedStage,
+    },
+    SharedCompleted,
+    SharedFailed {
+        message: String,
+    },
+    Model {
+        model: EmbeddingModelId,
+        stage: ComparisonModelStage,
+    },
+}
 
 #[derive(Clone, Debug)]
 pub struct ComparisonReadiness {
@@ -145,12 +188,50 @@ impl<'a> ComparisonCoordinator<'a> {
         &mut self,
         show_download_progress: bool,
     ) -> Result<Vec<ComparisonUpdateOutcome>, FastSearchError> {
-        self.runtime.index_shared_for_comparison()?;
+        self.update_required_with_progress(show_download_progress, |_| {})
+    }
+
+    pub(super) fn update_required_with_progress(
+        &mut self,
+        show_download_progress: bool,
+        mut progress: impl FnMut(ComparisonUpdateProgress),
+    ) -> Result<Vec<ComparisonUpdateOutcome>, FastSearchError> {
+        let shared = self
+            .runtime
+            .index_shared_for_comparison_with_progress(|event| {
+                progress(shared_progress(event));
+            });
+        if let Err(error) = shared {
+            progress(ComparisonUpdateProgress::SharedFailed {
+                message: error.message().to_owned(),
+            });
+            return Err(error);
+        }
+        progress(ComparisonUpdateProgress::SharedCompleted);
         let mut outcomes = Vec::with_capacity(EmbeddingModelId::ALL.len());
         for model in EmbeddingModelId::ALL {
-            let initial = embedding_model_cache_status(model)?;
+            progress(ComparisonUpdateProgress::Model {
+                model,
+                stage: ComparisonModelStage::Checking,
+            });
+            let initial = match embedding_model_cache_status(model) {
+                Ok(initial) => initial,
+                Err(error) => {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Failed {
+                            message: error.message().to_owned(),
+                        },
+                    });
+                    return Err(error);
+                }
+            };
             let partition = self.runtime.model_partition_status(model);
             if initial.ready() && partition.freshness() == IndexFreshness::Current {
+                progress(ComparisonUpdateProgress::Model {
+                    model,
+                    stage: ComparisonModelStage::Completed { reused: true },
+                });
                 outcomes.push(ComparisonUpdateOutcome {
                     model,
                     status: partition,
@@ -158,20 +239,58 @@ impl<'a> ComparisonCoordinator<'a> {
                 });
                 continue;
             }
-            match ensure_embedding_model(model, show_download_progress).and_then(|availability| {
+            progress(ComparisonUpdateProgress::Model {
+                model,
+                stage: ComparisonModelStage::Downloading {
+                    asset: None,
+                    completed_bytes: None,
+                    total_bytes: None,
+                },
+            });
+            let availability =
+                ensure_embedding_model_with_progress(model, show_download_progress, |event| {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Downloading {
+                            asset: Some(event.asset().to_owned()),
+                            completed_bytes: Some(event.completed_bytes()),
+                            total_bytes: Some(event.total_bytes()),
+                        },
+                    });
+                });
+            let result = availability.and_then(|availability| {
+                progress(ComparisonUpdateProgress::Model {
+                    model,
+                    stage: ComparisonModelStage::Indexing,
+                });
                 self.runtime
                     .build_model_partition(model, availability.root())
-            }) {
-                Ok(status) => outcomes.push(ComparisonUpdateOutcome {
-                    model,
-                    status,
-                    error: None,
-                }),
-                Err(error) => outcomes.push(ComparisonUpdateOutcome {
-                    model,
-                    status: self.runtime.model_partition_status(model),
-                    error: Some(error.message().to_owned()),
-                }),
+            });
+            match result {
+                Ok(status) => {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Completed { reused: false },
+                    });
+                    outcomes.push(ComparisonUpdateOutcome {
+                        model,
+                        status,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Failed {
+                            message: error.message().to_owned(),
+                        },
+                    });
+                    outcomes.push(ComparisonUpdateOutcome {
+                        model,
+                        status: self.runtime.model_partition_status(model),
+                        error: Some(error.message().to_owned()),
+                    });
+                }
             }
         }
         Ok(outcomes)
@@ -234,5 +353,18 @@ impl<'a> ComparisonCoordinator<'a> {
             lexical_hits,
             models,
         })
+    }
+}
+
+fn shared_progress(progress: IndexingProgress) -> ComparisonUpdateProgress {
+    ComparisonUpdateProgress::Shared {
+        completed: progress.completed,
+        total: progress.total,
+        stage: match progress.stage {
+            IndexingStage::Sources => ComparisonSharedStage::Sources,
+            IndexingStage::State => ComparisonSharedStage::State,
+            IndexingStage::Lexical => ComparisonSharedStage::Lexical,
+            IndexingStage::Vector => unreachable!("shared comparison indexing excludes vectors"),
+        },
     }
 }

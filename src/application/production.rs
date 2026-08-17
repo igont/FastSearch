@@ -714,6 +714,21 @@ pub struct ModelPartitionMetrics {
     build_duration_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum IndexingStage {
+    Sources,
+    State,
+    Lexical,
+    Vector,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct IndexingProgress {
+    pub(super) completed: u64,
+    pub(super) total: u64,
+    pub(super) stage: IndexingStage,
+}
+
 impl ModelPartitionMetrics {
     #[must_use]
     pub const fn size_bytes(self) -> u64 {
@@ -742,6 +757,22 @@ impl IndexingCoordinator<'_> {
         rebuild: bool,
         include_active_vector: bool,
     ) -> Result<LifecycleStatus, FastSearchError> {
+        self.project_with_progress(rebuild, include_active_vector, &mut |_| {})
+    }
+
+    fn project_with_progress(
+        &mut self,
+        rebuild: bool,
+        include_active_vector: bool,
+        progress: &mut dyn FnMut(IndexingProgress),
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        let vector_enabled = include_active_vector && self.vector_configured;
+        let total = if vector_enabled { 4 } else { 3 };
+        progress(IndexingProgress {
+            completed: 0,
+            total,
+            stage: IndexingStage::Sources,
+        });
         let mut snapshots = Vec::new();
         for source in self.documents {
             snapshots.extend(source.snapshot()?);
@@ -756,7 +787,17 @@ impl IndexingCoordinator<'_> {
             .iter()
             .flat_map(|snapshot| snapshot.records().iter().cloned())
             .collect::<Vec<_>>();
+        progress(IndexingProgress {
+            completed: 1,
+            total,
+            stage: IndexingStage::State,
+        });
         let changes = self.state.reconcile_snapshots(&snapshots)?;
+        progress(IndexingProgress {
+            completed: 2,
+            total,
+            stage: IndexingStage::Lexical,
+        });
         let lexical = if rebuild {
             self.lexical
                 .rebuild(&records, changes.durable_generation())?
@@ -776,7 +817,12 @@ impl IndexingCoordinator<'_> {
                     .apply_projection(&records, changes.durable_generation())?
             }
         };
-        if include_active_vector && self.vector_configured {
+        if vector_enabled {
+            progress(IndexingProgress {
+                completed: 3,
+                total,
+                stage: IndexingStage::Vector,
+            });
             if rebuild {
                 self.vector.rebuild(&records, changes.durable_generation())
             } else {
@@ -1026,12 +1072,28 @@ impl ProductionRuntime {
         self.indexing().project(true, true)
     }
 
-    /// Reconciles the canonical corpus and lexical projection without giving
-    /// the active model a head start over the stable comparison catalog.
-    pub(crate) fn index_shared_for_comparison(
+    pub(super) fn index_with_progress(
         &mut self,
+        mut progress: impl FnMut(IndexingProgress),
     ) -> Result<LifecycleStatus, FastSearchError> {
-        self.indexing().project(false, false)
+        self.indexing()
+            .project_with_progress(false, true, &mut progress)
+    }
+
+    pub(super) fn rebuild_with_progress(
+        &mut self,
+        mut progress: impl FnMut(IndexingProgress),
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        self.indexing()
+            .project_with_progress(true, true, &mut progress)
+    }
+
+    pub(super) fn index_shared_for_comparison_with_progress(
+        &mut self,
+        mut progress: impl FnMut(IndexingProgress),
+    ) -> Result<LifecycleStatus, FastSearchError> {
+        self.indexing()
+            .project_with_progress(false, false, &mut progress)
     }
 
     /// Read-only readiness of one model partition against the current shared

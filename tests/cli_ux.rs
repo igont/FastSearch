@@ -454,9 +454,25 @@ fn index_rebuild_requires_preview_and_can_be_declined() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА"), "{text}");
+    assert!(
+        text.contains("Введите ДА — выполнить действие или НЕТ — отменить."),
+        "{text}"
+    );
     assert!(text.contains("Подтверждение"), "{text}");
     assert!(text.contains("Перестроение отменено"), "{text}");
     assert!(fixture.root().join(".fastsearch/workspace.toml").is_file());
+}
+
+#[test]
+fn index_rebuild_accepts_uppercase_russian_confirmation() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/index rebuild\nДА\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("НЕКОРРЕКТНЫЙ ВВОД"), "{text}");
+    assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
+    assert!(text.contains("100% · 3 / 3 этапов"), "{text}");
 }
 
 #[test]

@@ -76,6 +76,7 @@ Manifest содержит model repository/revision, runtime/pooling/prefix cont
 - Cross-model summary может показывать stable-ID overlap, rank agreement и expected-set metrics, но не объявляет автоматического победителя без judgments.
 - Failure одной модели создаёт явно помеченный partial comparison; её блок не исчезает.
 - Узкий terminal использует последовательные вертикальные блоки, а не многоколоночную таблицу.
+- Подтверждённый update показывает один динамически обновляемый task list: shared corpus и каждая catalog model сохраняют стабильную строку, lifecycle state, текущий этап и фактическую progress bar без процента. При redirected output snapshots дописываются plain text без ANSI cursor control.
 
 ## Experiment evidence
 
@@ -110,7 +111,7 @@ Acceptance experiment строит минимум две partitions, перез�
 
 ## Состояние реализации
 
-Реализованы revision-scoped persistent partitions (`manifest.toml`, `records.sqlite`, `vectors.bin`), admission по model/runtime/corpus contract, повторное открытие без re-embedding, read-only readiness всего catalog, подтверждённый `/update`, partial model failures, единый lexical baseline, стабильные вертикальные model blocks и `/open A1|L1`. Обычный active model хранится отдельно и comparison router её не меняет. Весь human output проходит через typed documents `terminal-dialogue`.
+Реализованы revision-scoped persistent partitions (`manifest.toml`, `records.sqlite`, `vectors.bin`), admission по model/runtime/corpus contract, повторное открытие без re-embedding, read-only readiness всего catalog, подтверждённый `/update`, динамический task list с progress events для shared indexing, model weights и model partitions, partial model failures, единый lexical baseline, стабильные вертикальные model blocks и `/open A1|L1`. Обычный active model хранится отдельно и comparison router её не меняет. Весь human output проходит через typed documents `terminal-dialogue`; live repaint автоматически деградирует в plain-text snapshots вне terminal.
 
 Стадия остаётся `частичное`: storage round-trip и terminal routing автоматизированы, но обязательный real-model acceptance минимум двух partitions через restart ещё не материализован; update preview пока не выполняет точный disk-space preflight; versioned full comparison run и judgment UI ещё не сохраняются. Эти пункты являются qualification gate перед выбором нового default, а не скрытой частью готовой команды.
 
