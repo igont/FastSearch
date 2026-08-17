@@ -451,6 +451,25 @@ impl WorkspaceStore {
         )
     }
 
+    /// Removes only disposable vector projections for one model or the whole
+    /// model catalog. Canonical state and the shared lexical projection stay
+    /// intact.
+    pub fn clear_model_indexes(
+        &self,
+        model: Option<EmbeddingModelId>,
+    ) -> Result<(), FastSearchError> {
+        let vector_root = self.local_root().join("index").join("vector");
+        let target = match model {
+            Some(model) => vector_root.join(model.slug()),
+            None => vector_root,
+        };
+        if target.exists() {
+            fs::remove_dir_all(&target)
+                .map_err(|error| failure(ErrorKind::StateFailure, "clear model index", error))?;
+        }
+        Ok(())
+    }
+
     pub fn set_embedding_model(
         &mut self,
         model: EmbeddingModelId,

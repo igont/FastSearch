@@ -120,9 +120,7 @@ pub(super) fn run_comparison<R: BufRead>(
         };
         let (name, arguments) = match commands.resolve(&line) {
             CommandResolution::Empty => continue,
-            CommandResolution::Unknown {
-                suggestion: None, ..
-            } if !line.trim_start().starts_with('/') => {
+            CommandResolution::Unknown { .. } if !line.trim_start().starts_with('/') => {
                 ("search".to_owned(), line.trim().to_owned())
             }
             CommandResolution::Unknown { suggestion, .. } => {
@@ -154,58 +152,36 @@ pub(super) fn run_comparison<R: BufRead>(
                 show_comparison_readiness(chat, &ComparisonCoordinator::new(runtime).readiness())?
             }
             "update" => {
-                let prepared = PreparedAction::new(
-                    (),
-                    PreviewDocument::new(
-                        "Подготовка сравнения",
-                        "FastSearch проверит общий корпус и подготовит недостающие модельные индексы.",
-                    )
-                    .with_change("Готовые и актуальные модельные индексы будут сохранены без изменений.")
-                    .with_change("Отсутствующие модели будут автоматически загружены в локальный кеш.")
-                    .with_warning("Полный набор моделей требует несколько гигабайт диска и может индексироваться долго."),
-                );
-                match chat.confirm_prepared(prepared)? {
-                    PreparedOutcome::Confirmed(_) => {
-                        let runtime_for_update = &mut *runtime;
-                        let result = run_progress_dashboard(
-                            chat,
-                            comparison_progress_dashboard(),
-                            move |port| {
-                                ComparisonCoordinator::new(runtime_for_update)
-                                    .update_required_with_progress(false, |event| {
-                                        report_comparison_progress(&port, event);
-                                    })
-                            },
-                        )?;
-                        match result {
-                            Ok(outcomes) => {
-                                let readiness = ComparisonCoordinator::new(runtime).readiness();
-                                show_comparison_readiness(chat, &readiness)?;
-                                for outcome in outcomes.iter().filter(|item| item.error().is_some())
-                                {
-                                    show_error(
-                                        chat,
-                                        "COMPARE_MODEL_UPDATE",
-                                        outcome.error().unwrap_or("Неизвестная ошибка модели."),
-                                        &format!(
-                                            "Модель {} оставлена недоступной; остальные модели можно сравнивать.",
-                                            outcome.model().display_name()
-                                        ),
-                                    )?;
-                                }
-                            }
-                            Err(error) => show_error(
+                let runtime_for_update = &mut *runtime;
+                let result =
+                    run_progress_dashboard(chat, comparison_progress_dashboard(), move |port| {
+                        ComparisonCoordinator::new(runtime_for_update)
+                            .update_required_with_progress(false, |event| {
+                                report_comparison_progress(&port, event);
+                            })
+                    })?;
+                match result {
+                    Ok(outcomes) => {
+                        let readiness = ComparisonCoordinator::new(runtime).readiness();
+                        show_comparison_readiness(chat, &readiness)?;
+                        for outcome in outcomes.iter().filter(|item| item.error().is_some()) {
+                            show_error(
                                 chat,
-                                "COMPARE_UPDATE",
-                                error.message(),
-                                "Проверьте sources, подключение и свободное место, затем повторите /update.",
-                            )?,
+                                "COMPARE_MODEL_UPDATE",
+                                outcome.error().unwrap_or("Неизвестная ошибка модели."),
+                                &format!(
+                                    "Модель {} оставлена недоступной; остальные модели можно сравнивать.",
+                                    outcome.model().display_name()
+                                ),
+                            )?;
                         }
                     }
-                    PreparedOutcome::Cancelled => {
-                        show_notice(chat, "Подготовка сравнения отменена.")?
-                    }
-                    PreparedOutcome::EndOfInput => return Ok(ComparisonTransition::Exit),
+                    Err(error) => show_error(
+                        chat,
+                        "COMPARE_UPDATE",
+                        error.message(),
+                        "Проверьте sources, подключение и свободное место, затем повторите /update.",
+                    )?,
                 }
             }
             "open" => {
@@ -258,7 +234,7 @@ pub(super) fn run_comparison<R: BufRead>(
                         chat,
                         "COMPARE_NOT_READY",
                         "Нет ни одной готовой модели для сравнения.",
-                        "Используйте /update и подтвердите подготовку индексов.",
+                        "Используйте /update для подготовки индексов.",
                     )?;
                     continue;
                 }
@@ -436,6 +412,7 @@ fn show_comparison_run<R: BufRead>(
     run: &ComparisonRun,
 ) -> io::Result<ComparisonSearchSession> {
     let mut results = Vec::new();
+    let lexical_best_score = run.lexical_hits().first().map_or(0.0, SearchHit::score);
     let lexical = run.lexical_hits().iter().enumerate().fold(
         ResultDocument::new(
             "Лексическая база",
@@ -448,7 +425,7 @@ fn show_comparison_run<R: BufRead>(
                 source: "Лексическая база".to_owned(),
                 hit: hit.clone(),
             });
-            document.with_item(comparison_result_item(&code, hit))
+            document.with_item(comparison_result_item(&code, hit, lexical_best_score))
         },
     );
     chat.show_typed(&lexical)?;
@@ -465,6 +442,7 @@ fn show_comparison_run<R: BufRead>(
             )?;
             continue;
         }
+        let best_score = model.hits().first().map_or(0.0, SearchHit::score);
         let document = model.hits().iter().enumerate().fold(
             ResultDocument::new(
                 model.model().display_name(),
@@ -480,7 +458,7 @@ fn show_comparison_run<R: BufRead>(
                     source: model.model().display_name().to_owned(),
                     hit: hit.clone(),
                 });
-                document.with_item(comparison_result_item(&code, hit))
+                document.with_item(comparison_result_item(&code, hit, best_score))
             },
         );
         chat.show_typed(&document)?;
@@ -498,7 +476,7 @@ fn show_comparison_run<R: BufRead>(
     })
 }
 
-fn comparison_result_item(code: &str, hit: &SearchHit) -> ResultItem {
+fn comparison_result_item(code: &str, hit: &SearchHit, best_score: f64) -> ResultItem {
     ResultItem::new(
         format!(
             "[{code}] [{}] {}",
@@ -507,7 +485,9 @@ fn comparison_result_item(code: &str, hit: &SearchHit) -> ResultItem {
         ),
         hit.record().locator().path(),
     )
-    .with_excerpt(result_excerpt(hit.record().searchable_content()))
+    .with_excerpt(full_trigger(hit.record().searchable_content()))
+    .with_match_percent(relative_match_percent(hit.score(), best_score))
+    .with_result_code(code)
 }
 
 fn show_comparison_record<R: BufRead>(

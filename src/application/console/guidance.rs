@@ -16,17 +16,21 @@ pub(super) fn discovery_apply() -> NextStep {
 }
 
 pub(super) fn model_catalog() -> NextStep {
-    NextStep::instruction("Введите номер модели. Загрузка не запускает индексацию.")
+    NextStep::instruction("Введите номер модели или выберите действие:")
         .with_action(ActionItem::new(
-            "1–5",
+            "<номер 1–5>",
             "скачать при отсутствии и выбрать как основную",
         ))
         .with_action(ActionItem::new(
-            "/model info <N|slug>",
+            "/model <номер|slug>",
+            "выбрать модель сразу",
+        ))
+        .with_action(ActionItem::new(
+            "/model info <номер|slug>",
             "открыть подробности",
         ))
         .with_action(ActionItem::new(
-            "/model device <N|slug> [cpu|gpu]",
+            "/model device <номер|slug> [cpu|gpu]",
             "назначить или переключить устройство",
         ))
 }
@@ -35,18 +39,22 @@ pub(super) fn model_detail() -> NextStep {
     NextStep::instruction("Доступные действия:")
         .with_action(ActionItem::new("/model", "вернуться к каталогу"))
         .with_action(ActionItem::new(
-            "/model set <N>",
+            "/model <номер|slug>",
+            "выбрать модель сразу",
+        ))
+        .with_action(ActionItem::new(
+            "/model set <номер|slug>",
             "скачать при отсутствии и выбрать как основную",
         ))
         .with_action(ActionItem::new(
-            "/model device <N|slug> [cpu|gpu]",
+            "/model device <номер|slug> [cpu|gpu]",
             "назначить или переключить устройство",
         ))
 }
 
 pub(super) fn result_detail() -> NextStep {
     NextStep::instruction("Доступные действия:")
-        .with_action(ActionItem::new("/related N", "показать связи"))
+        .with_action(ActionItem::new("/related <номер>", "показать связи"))
         .with_action(ActionItem::new("/repeat", "вернуться к выдаче"))
 }
 
@@ -55,7 +63,11 @@ pub(super) fn workspace(freshness: Option<IndexFreshness>) -> NextStep {
         Some(IndexFreshness::Current) => {
             NextStep::instruction("Индекс готов. Основной следующий шаг — ввести поисковый запрос:")
                 .with_action(ActionItem::new("<текст запроса>", "выполнить поиск"))
-                .with_action(ActionItem::new("/model", "посмотреть или сменить модель"))
+                .with_action(ActionItem::new("/model", "открыть каталог моделей"))
+                .with_action(ActionItem::new(
+                    "/model <номер|slug>",
+                    "выбрать модель сразу",
+                ))
                 .with_action(ActionItem::new(
                     "/compare",
                     "сравнить результаты разных моделей",
@@ -68,7 +80,11 @@ pub(super) fn workspace(freshness: Option<IndexFreshness>) -> NextStep {
         Some(IndexFreshness::Stale) => NextStep::instruction("Поиск пока недоступен.")
             .with_action(ActionItem::new("/index update", "актуализировать индекс"))
             .with_action(ActionItem::new("/sources", "проверить источники"))
-            .with_action(ActionItem::new("/model", "посмотреть или сменить модель"))
+            .with_action(ActionItem::new("/model", "открыть каталог моделей"))
+            .with_action(ActionItem::new(
+                "/model <номер|slug>",
+                "выбрать модель сразу",
+            ))
             .with_action(ActionItem::new("/help", "показать все команды"))
             .with_action(ActionItem::new("/exit", "закрыть FastSearch")),
         Some(IndexFreshness::Degraded) => NextStep::instruction("Индекс повреждён или недоступен.")
@@ -136,8 +152,8 @@ pub(super) fn sources() -> NextStep {
 
 pub(super) fn search_results() -> NextStep {
     NextStep::instruction("Введите новый запрос обычным текстом или выберите действие:")
-        .with_action(ActionItem::new("/open N", "открыть результат"))
-        .with_action(ActionItem::new("/related N", "показать связи"))
+        .with_action(ActionItem::new("/open <номер>", "открыть результат"))
+        .with_action(ActionItem::new("/related <номер>", "показать связи"))
         .with_action(ActionItem::new("/next", "следующая страница"))
         .with_action(ActionItem::new("/prev", "предыдущая страница"))
 }

@@ -22,7 +22,7 @@ updated: "2026-08-16"
 ## Механизм
 
 1. Workspace profile хранит stable model slug; отсутствие поля в старом profile означает backward-compatible `multilingual-e5-small`.
-2. Interactive creation показывает framework-rendered каталог; `/model set <N>` сначала provisions и probes candidate, затем сохраняет выбор. Ошибка до admission не изменяет прежнюю active model.
+2. Interactive creation показывает framework-rendered каталог; `/model set <номер>` сначала provisions и probes candidate, затем сохраняет выбор. Ошибка до admission не изменяет прежнюю active model.
 3. Runtime определяет общий product data directory через `FASTSEARCH_HOME` или platform data directory. Пользователь не вводит model path.
 4. Provisioner получает обязательные assets строго из catalog revision в Hugging Face-compatible cache. Каждая сетевая попытка ограничена 60 секундами; до 24 попыток продолжают `.download` через HTTP Range. Только после полной публикации FastEmbed открывает соответствующий ONNX либо Candle runtime из того же cache.
 5. Readiness probe выполняет inference на синтетической строке, проверяет finite vector и точную размерность. Corpus, source state и indexes при этом не читаются и не изменяются.

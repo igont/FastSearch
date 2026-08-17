@@ -85,7 +85,7 @@ State transitions реализованы функциями router boundary, а 
 
 ## Состояние реализации
 
-Current console использует `ChatSession::standard`, recent-workspace picker/current-directory resolution, create/discovery review, source rescan/edit, visible indexing, guarded bare-text query, typed result pager, `/open N`, `/related N` и controlled switch/exit. `/model` и comparison readiness используют framework-owned responsive `TableDocument`: FastSearch передаёт cells, но не tab/padding; narrow fallback выбирает библиотека. Вложенный `/compare` router добавляет read-only readiness, подтверждённый `/update`, единый query, model blocks, `/open A1|L1`, `/back` и partial failures, не изменяя active model. Service/index/model paths отсутствуют в basic onboarding; direct CLI и JSON не зависят от renderer.
+Current console использует `ChatSession::standard`, recent-workspace picker/current-directory resolution, create/discovery review, source rescan/edit, visible indexing, guarded bare-text query, typed result pager, `/open <номер>`, `/related <номер>` и controlled switch/exit. `/model` и comparison readiness используют framework-owned responsive `TableDocument`: FastSearch передаёт cells, но не tab/padding; narrow fallback выбирает библиотека. Вложенный `/compare` router добавляет read-only readiness, подтверждённый `/update`, единый query, model blocks, `/open A1|L1`, `/back` и partial failures, не изменяя active model. Service/index/model paths отсутствуют в basic onboarding; direct CLI и JSON не зависят от renderer.
 
 Command guidance также принадлежит framework: каждое доступное действие
 передаётся отдельным `ActionItem` внутри `NextStep` и выводится отдельной

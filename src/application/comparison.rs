@@ -201,7 +201,7 @@ impl<'a> ComparisonCoordinator<'a> {
             .collect()
     }
 
-    /// One explicitly confirmed action: reconcile shared sources once, then
+    /// One explicit action: reconcile shared sources once, then
     /// materialize only the model partitions that are not current.
     pub fn update_required(
         &mut self,

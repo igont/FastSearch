@@ -7,7 +7,12 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
     time::Instant,
 };
 
@@ -17,7 +22,7 @@ use std::{fs, fs::File, io::Read};
 mod partition;
 mod verified_provider;
 
-use verified_provider::VerifiedProvider;
+use verified_provider::{DURABLE_CHECKPOINT_CHUNK_SIZE, VerifiedProvider};
 
 use crate::{
     domain::{
@@ -528,10 +533,17 @@ impl LocalE5Vector {
             Vec::new()
         };
         let completed_records = vectors.len();
-        let additional = verified
-            .embed_records_from_with_progress(
-                records,
-                completed_records,
+        let additional = if let Some(worker_count) = candle_worker_count(model_id, device) {
+            drop(verified);
+            embed_candle_records_in_parallel(
+                CandleParallelJob {
+                    root: &root,
+                    model_id,
+                    allow_catalog_download,
+                    records,
+                    completed_records,
+                    worker_count,
+                },
                 &mut |completed, total| {
                     progress(VectorBuildProgress::Embedding {
                         completed_records: completed as u64,
@@ -551,7 +563,33 @@ impl LocalE5Vector {
                     Ok(())
                 },
             )
-            .map_err(|error| self.provider_failed(state_generation, error))?;
+            .map_err(|error| self.provider_failed(state_generation, error))?
+        } else {
+            verified
+                .embed_records_from_with_progress(
+                    records,
+                    completed_records,
+                    &mut |completed, total| {
+                        progress(VectorBuildProgress::Embedding {
+                            completed_records: completed as u64,
+                            total_records: total as u64,
+                        });
+                    },
+                    &mut |completed_before, chunk| {
+                        if let Some(partition_root) = &partition_root {
+                            partition::append_checkpoint(
+                                partition_root,
+                                &partition_manifest,
+                                records,
+                                completed_before,
+                                chunk,
+                            )?;
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(|error| self.provider_failed(state_generation, error))?
+        };
         vectors.extend(additional);
         let mut next = BTreeMap::new();
         for (record, vector) in records.iter().cloned().zip(vectors) {
@@ -710,6 +748,137 @@ impl LocalE5Vector {
     }
 }
 
+const CANDLE_PARALLEL_BATCH_SIZE: usize = 8;
+
+type VectorProgressCallback<'a> = dyn FnMut(usize, usize) + 'a;
+type VectorCheckpointCallback<'a> =
+    dyn FnMut(usize, &[Vec<f32>]) -> Result<(), FastSearchError> + 'a;
+
+struct CandleParallelJob<'a> {
+    root: &'a Path,
+    model_id: EmbeddingModelId,
+    allow_catalog_download: bool,
+    records: &'a [CanonicalRecord],
+    completed_records: usize,
+    worker_count: usize,
+}
+
+fn candle_worker_count(model_id: EmbeddingModelId, device: ExecutionDevice) -> Option<usize> {
+    match (model_id, device) {
+        (EmbeddingModelId::Qwen3Embedding06B, ExecutionDevice::Cpu) => Some(8),
+        (EmbeddingModelId::NomicEmbedTextV2Moe, ExecutionDevice::Cpu) => Some(4),
+        _ => None,
+    }
+}
+
+fn embed_candle_records_in_parallel(
+    job: CandleParallelJob<'_>,
+    progress: &mut VectorProgressCallback<'_>,
+    checkpoint: &mut VectorCheckpointCallback<'_>,
+) -> Result<Vec<Vec<f32>>, FastSearchError> {
+    let ranges = (job.completed_records..job.records.len())
+        .step_by(CANDLE_PARALLEL_BATCH_SIZE)
+        .map(|start| {
+            (
+                start,
+                (start + CANDLE_PARALLEL_BATCH_SIZE).min(job.records.len()),
+            )
+        })
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (task_sender, task_receiver) = mpsc::channel::<(usize, usize)>();
+    let task_receiver = Arc::new(Mutex::new(task_receiver));
+    let (result_sender, result_receiver) =
+        mpsc::channel::<Result<(usize, Vec<Vec<f32>>), FastSearchError>>();
+    let cancelled = Arc::new(AtomicBool::new(false));
+
+    thread::scope(|scope| {
+        for _ in 0..job.worker_count {
+            let task_receiver = Arc::clone(&task_receiver);
+            let result_sender = result_sender.clone();
+            let cancelled = Arc::clone(&cancelled);
+            let root = job.root.to_path_buf();
+            scope.spawn(move || {
+                let mut provider = match VerifiedProvider::acquire_on_device(
+                    &root,
+                    job.model_id,
+                    false,
+                    job.allow_catalog_download,
+                    ExecutionDevice::Cpu,
+                ) {
+                    Ok(provider) => provider,
+                    Err(error) => {
+                        let _ = result_sender.send(Err(error));
+                        cancelled.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                };
+                loop {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let Ok((start, end)) = task_receiver
+                        .lock()
+                        .expect("parallel Candle task queue is not poisoned")
+                        .recv()
+                    else {
+                        return;
+                    };
+                    let outcome = provider
+                        .embed_records(&job.records[start..end])
+                        .map(|vectors| (start, vectors));
+                    let failed = outcome.is_err();
+                    if result_sender.send(outcome).is_err() || failed {
+                        cancelled.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            });
+        }
+        drop(result_sender);
+        for range in &ranges {
+            task_sender.send(*range).map_err(|_| {
+                FastSearchError::new(
+                    ErrorKind::ProjectionFailure,
+                    "parallel Candle task queue closed before dispatch",
+                )
+            })?;
+        }
+        drop(task_sender);
+
+        let mut pending = BTreeMap::new();
+        let mut additional = Vec::with_capacity(job.records.len() - job.completed_records);
+        let mut next_start = job.completed_records;
+        for _ in &ranges {
+            let (start, vectors) = result_receiver.recv().map_err(|_| {
+                FastSearchError::new(
+                    ErrorKind::ProjectionFailure,
+                    "parallel Candle workers ended before producing every vector batch",
+                )
+            })??;
+            pending.insert(start, vectors);
+            while let Some(vectors) = pending.remove(&next_start) {
+                next_start += vectors.len();
+                for durable_chunk in vectors.chunks(DURABLE_CHECKPOINT_CHUNK_SIZE) {
+                    checkpoint(job.completed_records + additional.len(), durable_chunk)?;
+                    additional.extend(durable_chunk.iter().cloned());
+                    progress(job.completed_records + additional.len(), job.records.len());
+                }
+            }
+        }
+        if next_start != job.records.len() {
+            return Err(FastSearchError::new(
+                ErrorKind::ProjectionFailure,
+                "parallel Candle workers returned a discontinuous vector sequence",
+            ));
+        }
+        Ok(additional)
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum VectorBuildProgress {
     Embedding {
@@ -849,6 +1018,8 @@ fn cosine(left: &[f32], right: &[f32]) -> f32 {
 
 #[cfg(test)]
 mod boundary_tests {
+    use super::*;
+
     #[test]
     fn projection_lifecycle_delegates_to_verified_provider_boundary() {
         let lifecycle = include_str!("vector.rs");
@@ -857,6 +1028,29 @@ mod boundary_tests {
         assert!(!lifecycle.contains(concat!("fn ", "verified_model(")));
         assert!(!lifecycle.contains(concat!("fn ", "verified_snapshot(")));
         assert!(!lifecycle.contains(concat!("fn ", "open_verified_file(")));
+    }
+
+    #[test]
+    fn only_cpu_candle_models_use_the_bounded_parallel_worker_pool() {
+        assert_eq!(
+            candle_worker_count(EmbeddingModelId::Qwen3Embedding06B, ExecutionDevice::Cpu),
+            Some(8)
+        );
+        assert_eq!(
+            candle_worker_count(EmbeddingModelId::NomicEmbedTextV2Moe, ExecutionDevice::Cpu),
+            Some(4)
+        );
+        assert_eq!(
+            candle_worker_count(EmbeddingModelId::MultilingualE5Small, ExecutionDevice::Cpu),
+            None
+        );
+        assert_eq!(
+            candle_worker_count(
+                EmbeddingModelId::Qwen3Embedding06B,
+                ExecutionDevice::GpuDirectMl
+            ),
+            None
+        );
     }
 }
 

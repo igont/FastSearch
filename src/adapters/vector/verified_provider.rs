@@ -53,7 +53,7 @@ enum ProviderRuntime {
 // bounded to eight records.
 const CPU_ONNX_BATCH_SIZE: usize = 1;
 const GPU_ONNX_BATCH_SIZE: usize = 32;
-const DURABLE_CHECKPOINT_CHUNK_SIZE: usize = 8;
+pub(super) const DURABLE_CHECKPOINT_CHUNK_SIZE: usize = 8;
 type CheckpointCallback<'a> = dyn FnMut(usize, &[Vec<f32>]) -> Result<(), FastSearchError> + 'a;
 
 pub(super) struct VerifiedProvider {
@@ -229,22 +229,7 @@ impl VerifiedProvider {
         let mut vectors = Vec::with_capacity(total - completed_records);
         let inference_chunk_size = inference_chunk_size(self.device);
         for chunk in records[completed_records..].chunks(inference_chunk_size) {
-            let texts = chunk
-                .iter()
-                .map(|record| {
-                    let text = format!("{}\n{}", record.title(), record.searchable_content());
-                    match self.model_id {
-                        EmbeddingModelId::MultilingualE5Small
-                        | EmbeddingModelId::MultilingualE5Base
-                        | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
-                        EmbeddingModelId::Qwen3Embedding06B => text,
-                        EmbeddingModelId::NomicEmbedTextV2Moe => {
-                            format!("search_document: {text}")
-                        }
-                    }
-                })
-                .collect::<Vec<_>>();
-            let embedded = self.embed_formatted(&texts, None)?;
+            let embedded = self.embed_records(chunk)?;
             for durable_chunk in embedded.chunks(DURABLE_CHECKPOINT_CHUNK_SIZE) {
                 let completed_before = completed_records + vectors.len();
                 checkpoint(completed_before, durable_chunk)?;
@@ -253,6 +238,28 @@ impl VerifiedProvider {
             }
         }
         Ok(vectors)
+    }
+
+    pub(super) fn embed_records(
+        &mut self,
+        records: &[CanonicalRecord],
+    ) -> Result<Vec<Vec<f32>>, FastSearchError> {
+        let texts = records
+            .iter()
+            .map(|record| {
+                let text = format!("{}\n{}", record.title(), record.searchable_content());
+                match self.model_id {
+                    EmbeddingModelId::MultilingualE5Small
+                    | EmbeddingModelId::MultilingualE5Base
+                    | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
+                    EmbeddingModelId::Qwen3Embedding06B => text,
+                    EmbeddingModelId::NomicEmbedTextV2Moe => {
+                        format!("search_document: {text}")
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        self.embed_formatted(&texts, None)
     }
 
     pub(super) fn embed_query(&mut self, query: &str) -> Result<Vec<f32>, FastSearchError> {

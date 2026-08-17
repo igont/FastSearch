@@ -46,7 +46,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     };
-    let texts = sample_texts(&root, 128)?;
+    let sample_limit = env::var("FASTSEARCH_BENCHMARK_SAMPLE_SIZE")
+        .ok()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(128);
+    let texts = sample_texts(&root, sample_limit)?;
     if texts.len() < 16 {
         return Err(format!(
             "для устойчивого измерения нужно минимум 16 текстовых файлов; найдено {}",
@@ -55,7 +60,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let model = EmbeddingModelId::MultilingualE5Small;
+    let model = env::args()
+        .nth(4)
+        .and_then(|value| EmbeddingModelId::parse(&value))
+        .unwrap_or(EmbeddingModelId::MultilingualE5Small);
     let availability = ensure_embedding_model(model, false)?;
     let requested_batch_sizes = env::args()
         .nth(3)

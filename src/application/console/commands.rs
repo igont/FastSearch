@@ -2,7 +2,7 @@ use terminal_dialogue::{CommandCatalog, CommandSpec};
 
 #[must_use]
 pub fn help_text() -> &'static str {
-    "FastSearch — локальный поиск по документации и исходному коду.\n\nЗапуск:\n  fastsearch                       рабочие области и интерактивный поиск\n  fastsearch chat                  то же самое явно\n  fastsearch [--json] <команда>    compatibility CLI для scripts/CI\n  fastsearch --help                эта справка\n  fastsearch --version             версия программы\n\nПоиск:\n  обычный текст                    выполнить поиск\n  /search <запрос>                 выполнить поиск явно\n  /related N                       связанные материалы результата\n\nИсточники и индекс:\n  /workspace                       выбрать или создать область\n  /sources [discover|set]          показать, найти или изменить roots\n  /status                          состояние области и providers\n  /index [status|update|rebuild]   обслуживание индекса\n\nМодели и сравнение:\n  /model                           каталог embedding-моделей\n  /model set <N|slug>              выбрать модель поиска\n  /model info <N|slug>             сведения о модели\n  /model device <N|slug> [cpu|gpu] назначить либо переключить устройство\n  /compare                         сравнить выдачу готовых моделей\n  /experiment record <оценка>      записать оценку поиска\n\nНавигация:\n  /open N                          открыть результат\n  /next | /prev | /page N         навигация по выдаче\n  /repeat                          повторить текущую выдачу\n\nПриложение:\n  /help                            контекстная справка\n  /version                         версия программы\n  /exit                            выход\n\nCompatibility-команды сохраняют прежние arguments documents/code/service до отдельного machine-CLI cutover."
+    "FastSearch — локальный поиск по документации и исходному коду.\n\nЗапуск:\n  fastsearch                       рабочие области и интерактивный поиск\n  fastsearch chat                  то же самое явно\n  fastsearch [--json] <команда>    compatibility CLI для scripts/CI\n  fastsearch --help                эта справка\n  fastsearch --version             версия программы\n\nПоиск:\n  обычный текст                    выполнить поиск\n  /search <запрос>                 выполнить поиск явно\n  /related <номер>                 связанные материалы результата\n\nИсточники и индекс:\n  /workspace                       выбрать или создать область\n  /sources [discover|set]          показать, найти или изменить roots\n  /status                          состояние области и providers\n  /index [status|update|rebuild]   обслуживание индекса\n\nМодели и сравнение:\n  /model [номер|slug]              показать каталог или выбрать модель сразу\n  /model set <номер|slug>          выбрать модель поиска\n  /model info <номер|slug>         сведения о модели\n  /model device <номер|slug> [cpu|gpu] назначить либо переключить устройство\n  /compare                         сравнить выдачу готовых моделей\n  /experiment record <оценка>      записать оценку поиска\n\nНавигация:\n  /open <номер>                    открыть результат\n  /next | /prev | /page <номер>   навигация по выдаче\n  /repeat                          повторить текущую выдачу\n\nПриложение:\n  /help                            контекстная справка\n  /version                         версия программы\n  /exit                            выход\n\nCompatibility-команды сохраняют прежние arguments documents/code/service до отдельного machine-CLI cutover."
 }
 
 pub(super) fn workspace_catalog() -> CommandCatalog {
@@ -16,7 +16,7 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
         grouped(
             "related",
             "показать связанные записи",
-            "/related N",
+            "/related <номер>",
             "ПОИСК",
         ),
         grouped(
@@ -40,25 +40,25 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
         grouped(
             "model device",
             "назначить CPU/GPU или переключить устройство",
-            "/model device <N|slug> [cpu|gpu]",
+            "/model device <номер|slug> [cpu|gpu]",
             "МОДЕЛИ И СРАВНЕНИЕ",
         ),
         grouped(
             "model set",
             "выбрать embedding-модель",
-            "/model set <N|slug>",
+            "/model set <номер|slug>",
             "МОДЕЛИ И СРАВНЕНИЕ",
         ),
         grouped(
             "model info",
             "показать источник и технические сведения модели",
-            "/model info <N|slug>",
+            "/model info <номер|slug>",
             "МОДЕЛИ И СРАВНЕНИЕ",
         ),
         grouped(
             "model",
-            "показать каталог embedding-моделей",
-            "/model",
+            "показать каталог или выбрать embedding-модель",
+            "/model [номер|slug]",
             "МОДЕЛИ И СРАВНЕНИЕ",
         ),
         grouped(
@@ -77,6 +77,12 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
             "index rebuild",
             "полностью перестроить local index",
             "/index rebuild",
+            "ИСТОЧНИКИ И ИНДЕКС",
+        ),
+        grouped(
+            "index clear",
+            "очистить индексы всех или одной embedding-модели",
+            "/index clear [номер|slug]",
             "ИСТОЧНИКИ И ИНДЕКС",
         ),
         grouped(
@@ -107,7 +113,7 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
         grouped(
             "open",
             "открыть результат по номеру",
-            "/open <N>",
+            "/open <номер>",
             "НАВИГАЦИЯ",
         ),
         grouped(
@@ -123,7 +129,7 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
             "НАВИГАЦИЯ",
         )
         .with_alias("previous"),
-        grouped("page", "перейти к странице", "/page <N>", "НАВИГАЦИЯ"),
+        grouped("page", "перейти к странице", "/page <номер>", "НАВИГАЦИЯ"),
         grouped("repeat", "повторить текущую выдачу", "/repeat", "НАВИГАЦИЯ"),
         grouped("version", "показать версию", "/version", "ПРИЛОЖЕНИЕ")
             .with_alias("--version")
@@ -137,6 +143,20 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
             .with_alias("выход"),
     ])
     .expect("FastSearch command catalog is static and valid")
+}
+
+/// Root help omits result-navigation actions because they become available
+/// only after a search has produced a result pager.
+pub(super) fn workspace_help_catalog() -> CommandCatalog {
+    CommandCatalog::new(
+        workspace_catalog()
+            .commands()
+            .iter()
+            .filter(|command| command.group.as_deref() != Some("НАВИГАЦИЯ"))
+            .cloned()
+            .collect(),
+    )
+    .expect("FastSearch help catalog is derived from the static command catalog")
 }
 
 fn grouped(name: &str, summary: &str, usage: &str, group: &str) -> CommandSpec {

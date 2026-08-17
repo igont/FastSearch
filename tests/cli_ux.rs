@@ -323,10 +323,32 @@ fn no_arguments_show_onboarding_and_eof_is_a_clean_exit() {
     let text = stdout(&output);
     assert!(text.contains("FastSearch"), "{text}");
     assert!(text.contains("РАБОЧИЕ ОБЛАСТИ"), "{text}");
-    assert!(text.contains("Введите N"), "{text}");
+    assert!(
+        text.contains("Выберите действие:\n  N — создать рабочую область\n  Q — выйти"),
+        "{text}"
+    );
     assert!(!text.contains("Папка документов"), "{text}");
     assert!(!text.contains("service:"), "{text}");
     assert_no_ansi(&text);
+}
+
+#[test]
+fn workspace_picker_marks_the_remove_target_as_a_number_placeholder() {
+    let fixture = Fixture::new();
+    let created = run_workspace_input(&fixture, &create_workspace_then("/exit\n"), true);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output =
+        run_workspace_input_from(&fixture, std::env::temp_dir().as_path(), "/exit\n", true);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("<номер>"), "{text}");
+    assert!(text.contains("открыть область из списка"), "{text}");
+    assert!(
+        text.contains("R <номер> — удалить область из списка"),
+        "{text}"
+    );
+    assert!(!text.contains("R N — удалить область из списка"), "{text}");
 }
 
 #[test]
@@ -421,6 +443,8 @@ fn workspace_creation_and_model_command_use_the_selectable_catalog() {
     assert!(text.contains("CPU"), "{text}");
     assert!(text.contains("GPU"), "{text}");
     assert!(text.contains("ЗАГРУЗКА"), "{text}");
+    assert!(text.contains("ИНДЕКС"), "{text}");
+    assert!(text.contains("?"), "{text}");
     assert!(text.contains("intfloat/multilingual-e5-small"), "{text}");
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
     assert!(profile.contains("qwen3-embedding-0.6b"), "{profile}");
@@ -447,30 +471,39 @@ fn model_catalog_accepts_plain_number_as_the_next_selection() {
 }
 
 #[test]
-fn index_rebuild_requires_preview_and_can_be_declined() {
+fn model_command_accepts_a_number_without_opening_the_catalog_first() {
     let fixture = Fixture::new();
-    let input = create_workspace_then("/index rebuild\nнет\n/exit\n");
+    let input = "n\n\n\n1\n/model 2\n/status\n/exit\n";
+    let output = run_workspace_input(&fixture, input, true);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
+    assert!(text.contains("✓  2  E5 Base"), "{text}");
+    let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
+    assert!(profile.contains("multilingual-e5-base"), "{profile}");
+}
+
+#[test]
+fn index_rebuild_starts_without_a_confirmation_preview() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/index rebuild\n/exit\n");
     let output = run_workspace_input(&fixture, &input, true);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА"), "{text}");
-    assert!(
-        text.contains("Введите да — выполнить действие или нет — отменить."),
-        "{text}"
-    );
-    assert!(text.contains("Подтверждение"), "{text}");
-    assert!(text.contains("Перестроение отменено"), "{text}");
+    assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
+    assert!(!text.contains("Подтверждение"), "{text}");
+    assert!(!text.contains("Введите да — выполнить действие"), "{text}");
     assert!(fixture.root().join(".fastsearch/workspace.toml").is_file());
 }
 
 #[test]
-fn index_rebuild_accepts_lowercase_russian_confirmation() {
+fn index_rebuild_shows_progress_for_the_active_model() {
     let fixture = Fixture::new();
-    let input = create_workspace_then("/index rebuild\nда\n/exit\n");
+    let input = create_workspace_then("/index rebuild\n/exit\n");
     let output = run_workspace_input(&fixture, &input, true);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(!text.contains("НЕКОРРЕКТНЫЙ ВВОД"), "{text}");
     assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
     assert!(text.contains("Готово: 1/1"), "{text}");
     assert!(
@@ -478,6 +511,32 @@ fn index_rebuild_accepts_lowercase_russian_confirmation() {
         "{text}"
     );
     assert!(!text.contains("этапов"), "{text}");
+}
+
+#[test]
+fn index_clear_removes_all_or_one_model_partition() {
+    let fixture = Fixture::new();
+    let created = run_workspace_input(&fixture, "n\n\n\n1\n/exit\n", true);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let vector_root = fixture.root().join(".fastsearch/local/index/vector");
+    let selected = vector_root.join("multilingual-e5-small/revision-a");
+    let retained = vector_root.join("multilingual-e5-base/revision-b");
+    fs::create_dir_all(&selected).unwrap();
+    fs::create_dir_all(&retained).unwrap();
+    fs::write(selected.join("vectors.bin"), "selected").unwrap();
+    fs::write(retained.join("vectors.bin"), "retained").unwrap();
+
+    let one = run_workspace_input(&fixture, "1\n/index clear 1\n/exit\n", true);
+    assert!(one.status.success(), "{}", stderr(&one));
+    assert!(!selected.exists());
+    assert!(retained.exists());
+    assert!(stdout(&one).contains("Индекс модели E5 Small очищен."));
+
+    let all = run_workspace_input(&fixture, "1\n/index clear\n/exit\n", true);
+    assert!(all.status.success(), "{}", stderr(&all));
+    assert!(!vector_root.exists());
+    assert!(stdout(&all).contains("Индексы всех моделей очищены."));
 }
 
 #[test]
@@ -496,7 +555,7 @@ fn model_device_assignment_is_applied_and_survives_a_restart() {
 
     let first = run_workspace_input(
         &fixture,
-        "n\n\n\n1\n/model device 1 gpu\n/index rebuild\nда\n/model\n/exit\n",
+        "n\n\n\n1\n/model device 1 gpu\n/index rebuild\n/model\n/exit\n",
         true,
     );
     assert!(first.status.success(), "{}", stderr(&first));
@@ -567,13 +626,15 @@ fn search_results_can_be_repeated_and_opened_by_stable_number() {
 #[test]
 fn bare_console_text_is_a_balanced_search_query() {
     let fixture = Fixture::new();
-    let input = create_workspace_then("/index update\nFastSearch\n/exit\n");
+    let input =
+        create_workspace_then("/index update\nкак быстро создать дом из ригелей и стоек\n/exit\n");
     let output = run_workspace_input(&fixture, &input, false);
 
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("РЕЗУЛЬТАТЫ"));
-    assert!(text.contains("FastSearch"));
+    assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
+    assert!(text.contains("ПОИСК — ВЫПОЛНЯЕТСЯ"), "{text}");
+    assert!(text.contains("НИЧЕГО НЕ НАЙДЕНО"), "{text}");
 }
 
 #[test]
@@ -696,12 +757,16 @@ fn opening_a_workspace_never_updates_the_index_implicitly() {
     assert!(text.contains("Индекс: устарел"), "{text}");
     assert!(text.contains("Поиск пока недоступен"), "{text}");
     assert!(text.contains("/index update"), "{text}");
-    assert!(
-        text.contains(
-            "Поиск пока недоступен.\n  /index update — актуализировать индекс\n  /sources      — проверить источники\n  /model        — посмотреть или сменить модель\n  /help         — показать все команды\n  /exit         — закрыть FastSearch"
-        ),
-        "{text}"
-    );
+    for action in [
+        "/index update",
+        "/sources",
+        "/model",
+        "/model <номер|slug>",
+        "/help",
+        "/exit",
+    ] {
+        assert!(text.contains(action), "missing {action}: {text}");
+    }
     assert!(!text.contains("ОБНОВЛЕНИЕ ИНДЕКСА"), "{text}");
 }
 
@@ -719,12 +784,18 @@ fn current_workspace_shows_the_primary_step_and_vertical_navigation() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("Индекс: актуален"), "{text}");
-    assert!(
-        text.contains(
-            "Индекс готов. Основной следующий шаг — ввести поисковый запрос:\n  <текст запроса> — выполнить поиск\n  /model          — посмотреть или сменить модель\n  /compare        — сравнить результаты разных моделей\n  /index          — проверить состояние индекса\n  /sources        — проверить источники\n  /help           — показать все команды\n  /exit           — закрыть FastSearch"
-        ),
-        "{text}"
-    );
+    for action in [
+        "<текст запроса>",
+        "/model",
+        "/model <номер|slug>",
+        "/compare",
+        "/index",
+        "/sources",
+        "/help",
+        "/exit",
+    ] {
+        assert!(text.contains(action), "missing {action}: {text}");
+    }
 }
 
 #[test]
@@ -755,6 +826,14 @@ fn compare_entry_is_read_only_and_returns_to_the_workspace() {
     assert!(text.contains("Готово моделей:"), "{text}");
     assert!(text.contains("проверка не загружает модели"), "{text}");
     assert!(text.contains("НЕ ГОТОВ · устарел"), "{text}");
+    assert!(
+        text.contains("Сначала подготовьте модельные индексы"),
+        "{text}"
+    );
+    assert!(
+        text.contains("/update — подготовить модельные индексы"),
+        "{text}"
+    );
     assert!(text.contains("РАЗМЕР"), "{text}");
     assert!(text.contains("ПОСТРОЕНИЕ"), "{text}");
     assert!(text.contains("Нет ни одной готовой модели"), "{text}");

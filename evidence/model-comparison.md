@@ -19,7 +19,7 @@
   относительные и абсолютные пути используют единый platform separator;
 - широкий терминал получает Unicode-aware колонки, узкий — автоматический
   вертикальный fallback без потери данных;
-- `/model info <N|slug>` отделяет длинные source URL и технические поля от
+- `/model info <номер|slug>` отделяет длинные source URL и технические поля от
   компактной сравнительной таблицы;
 - `/update` требует typed preview/confirmation, один раз reconciles shared corpus и строит только отсутствующие или stale partitions;
 - единый query возвращает shared lexical baseline и стабильные отдельные model blocks; ошибки моделей изолированы;

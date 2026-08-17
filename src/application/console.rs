@@ -4,7 +4,7 @@ mod guidance;
 mod index;
 mod model;
 
-use commands::workspace_catalog;
+use commands::{workspace_catalog, workspace_help_catalog};
 use comparison::{ComparisonTransition, run_comparison};
 use guidance as ui_guidance;
 use index::run_index;
@@ -18,11 +18,11 @@ use std::{
 
 use terminal_dialogue::{
     ActionItem, ChatSession, ColorPolicy, CommandResolution, NavigationAction, NextStep,
-    NoticeDocument, PreparedAction, PreparedOutcome, PreviewDocument, ProgressDashboard,
-    ProgressDocument, ProgressPhase, ProgressPort, ProgressState, ProgressTaskSpec, ProgressUnit,
-    PromptFeedback, PromptOutcome, ReportDocument, ReportSection, ResultDocument, ResultItem,
-    ResultPager, SectionDocument, SessionConfig, TableColumn, TableDocument, TableRow,
-    TerminalDocument, TextStyle, UserErrorDocument, run_progress_dashboard,
+    NoticeDocument, ProgressDashboard, ProgressDocument, ProgressPhase, ProgressPort,
+    ProgressState, ProgressTaskSpec, ProgressUnit, PromptFeedback, PromptOutcome, ReportDocument,
+    ReportSection, ResultDocument, ResultItem, ResultPager, SectionDocument, SessionConfig,
+    TableColumn, TableDocument, TableRow, TerminalDocument, TextStyle, UserErrorDocument,
+    run_progress_dashboard,
 };
 
 use crate::{
@@ -48,6 +48,7 @@ use super::{
 struct SearchSession {
     pager: ResultPager<SearchHit>,
     query: String,
+    model: String,
     latency_ms: u128,
 }
 
@@ -171,9 +172,9 @@ fn select_workspace<R: BufRead>(
             chat.show_typed(&terminal_dialogue::EmptyStateDocument {
                 heading: "Рабочие области".to_owned(),
                 explanation: "FastSearch ещё не подключил ни одной рабочей области.".to_owned(),
-                next_step: NextStep::instruction(
-                    "Введите N, чтобы создать область, либо Q для выхода.",
-                ),
+                next_step: NextStep::instruction("Выберите действие:")
+                    .with_action(ActionItem::new("N", "создать рабочую область"))
+                    .with_action(ActionItem::new("Q", "выйти")),
             })?;
         } else {
             let document = catalog.entries().iter().fold(
@@ -185,9 +186,15 @@ fn select_workspace<R: BufRead>(
                     document.with_item(ResultItem::new(entry.name(), display_path(entry.path())))
                 },
             );
-            chat.show_typed(&document.with_next_step(NextStep::instruction(
-                "N — создать область · R N — удалить только из списка · Q — выйти.",
-            )))?;
+            chat.show_typed(
+                &document.with_next_step(
+                    NextStep::instruction("Выберите действие:")
+                        .with_action(ActionItem::new("<номер>", "открыть область из списка"))
+                        .with_action(ActionItem::new("N", "создать рабочую область"))
+                        .with_action(ActionItem::new("R <номер>", "удалить область из списка"))
+                        .with_action(ActionItem::new("Q", "выйти")),
+                ),
+            )?;
         }
         let Some(input) = chat.read_command("fastsearch")? else {
             return Ok(None);
@@ -458,7 +465,7 @@ fn prompt_embedding_model<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
     current: EmbeddingModelId,
 ) -> io::Result<Option<EmbeddingModelId>> {
-    show_embedding_models(chat, current)?;
+    show_embedding_models(chat, current, None)?;
     match chat.prompt_field_with_cancellation("model", is_exit, |value| {
         let value = value.trim();
         if value.is_empty() {
@@ -489,6 +496,7 @@ fn resolve_embedding_model(value: &str) -> Option<EmbeddingModelId> {
 fn show_embedding_models<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
     current: EmbeddingModelId,
+    runtime: Option<&ProductionRuntime>,
 ) -> io::Result<()> {
     let document = MODEL_CATALOG.iter().fold(
         TableDocument::new(
@@ -503,6 +511,7 @@ fn show_embedding_models<R: BufRead>(
                 TableColumn::new("ПРОФИЛЬ"),
                 TableColumn::new("DIM").right_aligned(),
                 TableColumn::new("ЗАГРУЗКА").right_aligned(),
+                TableColumn::new("ИНДЕКС").right_aligned(),
             ],
         ),
         |document, descriptor| {
@@ -547,6 +556,17 @@ fn show_embedding_models<R: BufRead>(
                         "~{:.2} ГБ",
                         descriptor.approximate_download_bytes as f64 / 1_000_000_000.0
                     ),
+                    runtime
+                        .and_then(|runtime| {
+                            runtime
+                                .model_partition_metrics(descriptor.id)
+                                .ok()
+                                .flatten()
+                        })
+                        .map_or_else(
+                            || "НЕТ".to_owned(),
+                            |metrics| human_bytes(metrics.size_bytes()),
+                        ),
                 ])
                 .with_cell_style(4, cpu_style)
                 .with_cell_style(5, gpu_style),
@@ -661,9 +681,7 @@ fn run_workspace<R: BufRead>(
         } else {
             match commands.resolve(&line) {
                 CommandResolution::Empty => continue,
-                CommandResolution::Unknown {
-                    suggestion: None, ..
-                } if !line.trim_start().starts_with('/') => {
+                CommandResolution::Unknown { .. } if !line.trim_start().starts_with('/') => {
                     ("search".to_owned(), line.trim().to_owned())
                 }
                 CommandResolution::Unknown { suggestion, .. } => {
@@ -703,7 +721,7 @@ fn run_workspace<R: BufRead>(
             }
             "workspace" => return Ok(WorkspaceTransition::Switch),
             "help" => {
-                chat.show_typed(&commands.welcome_document(
+                chat.show_typed(&workspace_help_catalog().welcome_document(
                     "Команды FastSearch",
                     "Обычный текст выполняет поиск в открытой рабочей области.",
                 ))?;
@@ -718,10 +736,18 @@ fn run_workspace<R: BufRead>(
                 handle_source_edit(chat, catalog, &mut store, &mut runtime, &mut last_search)?;
             }
             "index" => show_index_status(chat, runtime.as_ref())?,
-            "model" => {
-                show_embedding_models(chat, store.profile().embedding_model())?;
+            "model" if arguments.trim().is_empty() => {
+                show_embedding_models(chat, store.profile().embedding_model(), runtime.as_ref())?;
                 model_number_expected = true;
             }
+            "model" => handle_model_selection(
+                chat,
+                &mut store,
+                &mut runtime,
+                &mut last_search,
+                &mut model_number_expected,
+                &arguments,
+            )?,
             "model info" => {
                 let Some(model) = resolve_embedding_model(&arguments) else {
                     show_error(
@@ -798,26 +824,52 @@ fn run_workspace<R: BufRead>(
             }
             "index rebuild" => {
                 if let Some(runtime) = runtime.as_mut() {
-                    let prepared = PreparedAction::new(
-                        (),
-                        PreviewDocument::new(
-                            "Перестроение индекса",
-                            "Локальный индекс будет полностью создан заново.",
-                        )
-                        .with_change("Исходные документы и код не изменяются.")
-                        .with_warning("Операция может занять заметное время."),
-                    );
-                    match chat.confirm_prepared(prepared)? {
-                        PreparedOutcome::Confirmed(_) => {
-                            run_index(chat, Some(runtime), true)?;
-                            last_search = None;
-                        }
-                        PreparedOutcome::Cancelled => show_notice(chat, "Перестроение отменено.")?,
-                        PreparedOutcome::EndOfInput => return Ok(WorkspaceTransition::Exit),
-                    }
+                    run_index(chat, Some(runtime), true)?;
+                    last_search = None;
                 } else {
                     show_no_sources(chat)?;
                 }
+            }
+            "index clear" => {
+                let selector = arguments.trim();
+                let selected_model = if selector.is_empty() {
+                    None
+                } else if let Some(model) = resolve_embedding_model(selector) {
+                    Some(model)
+                } else {
+                    show_error(
+                        chat,
+                        "MODEL_INDEX_CLEAR",
+                        "Модель не распознана.",
+                        "Укажите номер или slug из /model, либо не указывайте аргумент для очистки всех моделей.",
+                    )?;
+                    continue;
+                };
+
+                // Drop the active runtime before deleting its partition so
+                // Windows never retains an in-memory view of cleared files.
+                drop(runtime.take());
+                match store.clear_model_indexes(selected_model) {
+                    Ok(()) => {
+                        last_search = None;
+                        show_notice(
+                            chat,
+                            &match selected_model {
+                                Some(model) => {
+                                    format!("Индекс модели {} очищен.", model.display_name())
+                                }
+                                None => "Индексы всех моделей очищены.".to_owned(),
+                            },
+                        )?;
+                    }
+                    Err(error) => show_error(
+                        chat,
+                        "MODEL_INDEX_CLEAR",
+                        error.message(),
+                        "Проверьте доступ к .fastsearch/local/index/vector и повторите действие.",
+                    )?,
+                }
+                runtime = open_workspace_runtime(chat, &store)?;
             }
             "search" => {
                 let Some(runtime) = runtime.as_ref() else {
@@ -854,6 +906,7 @@ fn run_workspace<R: BufRead>(
                             pager: ResultPager::new(response.hits().to_vec(), 5)
                                 .expect("FastSearch page size is non-zero"),
                             query: query_text,
+                            model: store.profile().embedding_model().display_name().to_owned(),
                             latency_ms: started.elapsed().as_millis(),
                         });
                         show_search_page(
@@ -1056,7 +1109,7 @@ fn handle_model_device<R: BufRead>(
             chat,
             "MODEL_DEVICE",
             "Модель не распознана.",
-            "Используйте /model device <N|slug> [cpu|gpu].",
+            "Используйте /model device <номер|slug> [cpu|gpu].",
         );
     };
     let current = match configured_model_device(model) {
@@ -1085,7 +1138,7 @@ fn handle_model_device<R: BufRead>(
                 *runtime = open_workspace_runtime(chat, store)?;
                 *last_search = None;
             } else {
-                show_embedding_models(chat, store.profile().embedding_model())?;
+                show_embedding_models(chat, store.profile().embedding_model(), runtime.as_ref())?;
             }
             Ok(())
         }
@@ -1138,7 +1191,7 @@ fn handle_model_selection<R: BufRead>(
             }
             *runtime = open_workspace_runtime(chat, store)?;
             *last_search = None;
-            show_embedding_models(chat, selected)?;
+            show_embedding_models(chat, selected, runtime.as_ref())?;
             *model_number_expected = true;
             Ok(())
         }
@@ -1159,7 +1212,6 @@ fn open_workspace_runtime<R: BufRead>(
         return Ok(None);
     }
     let selected = store.profile().embedding_model();
-    show_embedding_models(chat, selected)?;
     let model = if cfg!(debug_assertions)
         && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some()
     {
@@ -1200,6 +1252,7 @@ fn open_workspace_runtime<R: BufRead>(
             return Ok(None);
         }
     };
+    show_embedding_models(chat, selected, Some(&runtime))?;
     Ok(Some(runtime))
 }
 
@@ -1228,7 +1281,7 @@ fn handle_navigation<R: BufRead>(
             chat,
             "RESULT_ACTION",
             "Некорректное действие над результатами.",
-            "Используйте /open N, /next, /prev, /page N или /repeat.",
+            "Используйте /open <номер>, /next, /prev, /page <номер> или /repeat.",
         );
     };
     if let NavigationAction::Open(number) = action {
@@ -1451,7 +1504,8 @@ fn show_search_page<R: BufRead>(
         ResultDocument::new(
             "Результаты",
             format!(
-                "Запрос: «{}»\nНайдено: {} · Страница {} из {}",
+                "Модель: {}\nЗапрос: «{}»\nНайдено: {} · Страница {} из {}",
+                search.model,
                 search.query,
                 search.pager.total_items(),
                 search.pager.page_number(),
@@ -1462,7 +1516,7 @@ fn show_search_page<R: BufRead>(
         |document, hit| {
             document.with_item(
                 ResultItem::new(hit.record().title(), hit.record().locator().path())
-                    .with_excerpt(result_excerpt(hit.record().searchable_content()))
+                    .with_excerpt(full_trigger(hit.record().searchable_content()))
                     .with_match_percent(relative_match_percent(hit.score(), best_score)),
             )
         },
@@ -1479,26 +1533,13 @@ fn relative_match_percent(score: f64, best_score: f64) -> u8 {
         .clamp(0.0, 100.0)) as u8
 }
 
-fn result_excerpt(content: &str) -> String {
-    const EXCERPT_CHAR_LIMIT: usize = 165;
-
-    let normalized = content
-        .replace("**", "")
-        .replace(['`', '#'], "")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut excerpt = normalized
-        .chars()
-        .take(EXCERPT_CHAR_LIMIT)
-        .collect::<String>();
-    if normalized.chars().count() > EXCERPT_CHAR_LIMIT {
-        excerpt.push('…');
-    }
-    if excerpt.is_empty() {
+/// Keeps every searchable character while making the trigger one terminal row.
+fn full_trigger(content: &str) -> String {
+    let trigger = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trigger.is_empty() {
         "нет текстового фрагмента".to_owned()
     } else {
-        excerpt
+        trigger
     }
 }
 
@@ -1562,6 +1603,22 @@ fn contour_summary(document_roots: usize, code_roots: usize) -> String {
     }
 }
 
+fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.2} GiB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes / KIB)
+    } else {
+        format!("{bytes:.0} B")
+    }
+}
+
 fn record_label(kind: RecordKind) -> &'static str {
     match kind {
         RecordKind::MarkdownSection | RecordKind::RegistryRow => "DOC",
@@ -1603,8 +1660,8 @@ fn is_exit(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        contour_summary, device_assignment_cell, display_path, display_relative_path,
-        relative_match_percent, result_excerpt, workspace_catalog,
+        contour_summary, device_assignment_cell, display_path, display_relative_path, full_trigger,
+        help_text, relative_match_percent, ui_guidance, workspace_catalog, workspace_help_catalog,
     };
     use crate::domain::{DeviceCapabilityStatus, ExecutionDevice};
     use std::path::Path;
@@ -1639,13 +1696,17 @@ mod tests {
     }
 
     #[test]
-    fn help_is_grouped_and_model_device_uses_the_longest_command_match() {
+    fn root_help_omits_navigation_and_model_device_uses_the_longest_command_match() {
         let catalog = workspace_catalog();
         assert!(matches!(
             catalog.resolve("/model device 2 gpu"),
             CommandResolution::Match { arguments, .. } if arguments == "2 gpu"
         ));
-        let help = catalog
+        assert!(matches!(
+            catalog.resolve("/index clear 2"),
+            CommandResolution::Match { arguments, .. } if arguments == "2"
+        ));
+        let help = workspace_help_catalog()
             .welcome_document("Команды", "Сводка")
             .to_dialogue_document(&LanguagePack::russian())
             .render(false);
@@ -1653,11 +1714,28 @@ mod tests {
             "ПОИСК",
             "ИСТОЧНИКИ И ИНДЕКС",
             "МОДЕЛИ И СРАВНЕНИЕ",
-            "НАВИГАЦИЯ",
             "ПРИЛОЖЕНИЕ",
         ] {
             assert!(help.contains(heading), "{help}");
         }
+        assert!(!help.contains("НАВИГАЦИЯ"), "{help}");
+        assert!(!help.contains("/open <номер>"), "{help}");
+
+        let commands = [
+            ui_guidance::model_catalog(),
+            ui_guidance::model_detail(),
+            ui_guidance::result_detail(),
+            ui_guidance::search_results(),
+        ]
+        .into_iter()
+        .flat_map(|next_step| next_step.actions)
+        .map(|action| action.command)
+        .chain(help_text().lines().map(str::to_owned))
+        .collect::<Vec<_>>();
+        assert!(
+            commands.iter().all(|command| !command.contains(" N")),
+            "ambiguous numeric placeholder: {commands:?}"
+        );
     }
 
     #[test]
@@ -1669,11 +1747,9 @@ mod tests {
     }
 
     #[test]
-    fn result_excerpt_keeps_165_characters_before_the_ellipsis() {
-        let content = "а".repeat(190);
-        let excerpt = result_excerpt(&content);
-        assert_eq!(excerpt.chars().count(), 166);
-        assert!(excerpt.ends_with('…'));
+    fn full_trigger_keeps_every_word_in_a_single_terminal_row() {
+        let trigger = full_trigger("Первый абзац.\n\nВторой абзац.");
+        assert_eq!(trigger, "Первый абзац. Второй абзац.");
     }
 
     #[test]
