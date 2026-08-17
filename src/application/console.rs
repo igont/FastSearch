@@ -1,9 +1,10 @@
+mod commands;
 mod comparison;
 mod guidance;
 mod index;
 mod model;
-mod progress;
 
+use commands::workspace_catalog;
 use comparison::{ComparisonTransition, run_comparison};
 use guidance as ui_guidance;
 use index::run_index;
@@ -16,23 +17,26 @@ use std::{
 };
 
 use terminal_dialogue::{
-    ActionItem, ChatSession, ColorPolicy, CommandCatalog, CommandResolution, CommandSpec,
-    NavigationAction, NextStep, NoticeDocument, PreparedAction, PreparedOutcome, PreviewDocument,
-    ProgressDocument, ProgressState, ProgressValue, PromptFeedback, PromptOutcome, ReportDocument,
-    ReportSection, ResultDocument, ResultItem, ResultPager, SectionDocument, SessionConfig,
-    TableColumn, TableDocument, TableRow, TaskItem, TaskListDocument, TaskState, TerminalDocument,
-    UserErrorDocument,
+    ActionItem, ChatSession, ColorPolicy, CommandResolution, NavigationAction, NextStep,
+    NoticeDocument, PreparedAction, PreparedOutcome, PreviewDocument, ProgressDashboard,
+    ProgressDocument, ProgressPhase, ProgressPort, ProgressState, ProgressTaskSpec, ProgressUnit,
+    PromptFeedback, PromptOutcome, ReportDocument, ReportSection, ResultDocument, ResultItem,
+    ResultPager, SectionDocument, SessionConfig, TableColumn, TableDocument, TableRow,
+    TerminalDocument, TextStyle, UserErrorDocument, run_progress_dashboard,
 };
 
 use crate::{
     domain::{
-        EmbeddingModelId, IndexFreshness, RecordKind, RelatedQuery, SearchHit, SearchMode,
-        SearchQuery, StableId,
+        DeviceCapabilityStatus, EmbeddingModelId, ExecutionDevice, IndexFreshness, RecordKind,
+        RelatedQuery, SearchHit, SearchMode, SearchQuery, StableId,
     },
     ports::AgentSurface,
 };
 
 use super::comparison::{ComparisonModelStage, ComparisonSharedStage, ComparisonUpdateProgress};
+use super::model_cache::{
+    configured_model_device, model_device_capability, set_configured_model_device,
+};
 use super::{
     ComparisonCoordinator, ComparisonReadiness, ComparisonRun, MODEL_CATALOG, ProductionRuntime,
     cli::{CommandOutcome, human_outcome_document, presenters::human_freshness},
@@ -499,44 +503,66 @@ fn show_embedding_models<R: BufRead>(
             let selected = if descriptor.id == current { "✓" } else { "" };
             let ready =
                 embedding_model_cache_status(descriptor.id).is_ok_and(|status| status.ready());
-            let capabilities = model_runtime_capabilities(descriptor.id).ok();
-            let cpu = capabilities
-                .as_ref()
-                .map_or("✓", |capability| capability.cpu().marker());
-            let gpu = capabilities
-                .as_ref()
-                .map_or("?", |capability| capability.gpu().marker());
+            let assigned = configured_model_device(descriptor.id).unwrap_or_default();
+            let cpu_capability = model_device_capability(descriptor.id, ExecutionDevice::Cpu)
+                .unwrap_or(DeviceCapabilityStatus::Unknown);
+            let gpu_capability =
+                model_device_capability(descriptor.id, ExecutionDevice::GpuDirectMl)
+                    .unwrap_or(DeviceCapabilityStatus::Unknown);
+            let (cpu, cpu_style) =
+                device_assignment_cell(assigned, ExecutionDevice::Cpu, cpu_capability);
+            let (gpu, gpu_style) =
+                device_assignment_cell(assigned, ExecutionDevice::GpuDirectMl, gpu_capability);
             let number = MODEL_CATALOG
                 .iter()
                 .position(|candidate| candidate.id == descriptor.id)
                 .map_or(1, |index| index + 1);
-            document.with_row(TableRow::new(vec![
-                selected.to_owned(),
-                number.to_string(),
-                descriptor.id.display_name().to_owned(),
-                if ready {
-                    "ГОТОВА"
-                } else {
-                    "НУЖНА ЗАГРУЗКА"
-                }
-                .to_owned(),
-                cpu.to_owned(),
-                gpu.to_owned(),
-                descriptor
-                    .profile
-                    .rsplit_once(" · ")
-                    .filter(|(_, suffix)| suffix.contains("измер"))
-                    .map_or(descriptor.profile, |(profile, _)| profile)
+            document.with_row(
+                TableRow::new(vec![
+                    selected.to_owned(),
+                    number.to_string(),
+                    descriptor.id.display_name().to_owned(),
+                    if ready {
+                        "ГОТОВА"
+                    } else {
+                        "НУЖНА ЗАГРУЗКА"
+                    }
                     .to_owned(),
-                descriptor.id.dimension().to_string(),
-                format!(
-                    "~{:.2} ГБ",
-                    descriptor.approximate_download_bytes as f64 / 1_000_000_000.0
-                ),
-            ]))
+                    cpu.to_owned(),
+                    gpu.to_owned(),
+                    descriptor
+                        .profile
+                        .rsplit_once(" · ")
+                        .filter(|(_, suffix)| suffix.contains("измер"))
+                        .map_or(descriptor.profile, |(profile, _)| profile)
+                        .to_owned(),
+                    descriptor.id.dimension().to_string(),
+                    format!(
+                        "~{:.2} ГБ",
+                        descriptor.approximate_download_bytes as f64 / 1_000_000_000.0
+                    ),
+                ])
+                .with_cell_style(4, cpu_style)
+                .with_cell_style(5, gpu_style),
+            )
         },
     );
     chat.show_typed(&document.with_next_step(ui_guidance::model_catalog()))
+}
+
+fn device_assignment_cell(
+    assigned: ExecutionDevice,
+    candidate: ExecutionDevice,
+    capability: DeviceCapabilityStatus,
+) -> (&'static str, TextStyle) {
+    if assigned == candidate {
+        return ("✓", TextStyle::Success);
+    }
+    match capability {
+        DeviceCapabilityStatus::Ready => ("", TextStyle::Body),
+        DeviceCapabilityStatus::Unknown => ("?", TextStyle::Body),
+        DeviceCapabilityStatus::Unavailable => ("✗", TextStyle::Error),
+    }
 }
 
 fn show_embedding_model<R: BufRead>(
@@ -545,12 +571,22 @@ fn show_embedding_model<R: BufRead>(
 ) -> io::Result<()> {
     let descriptor = model_descriptor(model);
     let capabilities = model_runtime_capabilities(model).ok();
-    let cpu = capabilities
-        .as_ref()
-        .map_or("✓", |capability| capability.cpu().marker());
-    let gpu = capabilities
-        .as_ref()
-        .map_or("?", |capability| capability.gpu().marker());
+    let assigned = configured_model_device(model).unwrap_or_default();
+    let cpu = if assigned == ExecutionDevice::Cpu {
+        "✓"
+    } else {
+        ""
+    };
+    let gpu = if assigned == ExecutionDevice::GpuDirectMl {
+        "✓"
+    } else {
+        capabilities
+            .as_ref()
+            .map_or("?", |capability| match capability.gpu() {
+                DeviceCapabilityStatus::Ready => "",
+                other => other.marker(),
+            })
+    };
     let gpu_backend = capabilities
         .as_ref()
         .and_then(|capability| capability.gpu_backend())
@@ -559,6 +595,7 @@ fn show_embedding_model<R: BufRead>(
         .as_ref()
         .and_then(|capability| capability.gpu_detail());
     let mut runtime_section = ReportSection::new("Устройства")
+        .with_line(format!("Назначено: {}", assigned.label()))
         .with_line(format!("CPU: {cpu}"))
         .with_line(format!("GPU: {gpu} · {gpu_backend}"));
     if let Some(detail) = gpu_detail {
@@ -780,6 +817,60 @@ fn run_workspace<R: BufRead>(
                     continue;
                 };
                 show_embedding_model(chat, model)?;
+            }
+            "model device" => {
+                let mut parts = arguments.split_whitespace().collect::<Vec<_>>();
+                let explicit_device = parts.last().and_then(|value| ExecutionDevice::parse(value));
+                if explicit_device.is_some() {
+                    parts.pop();
+                }
+                let selector = parts.join(" ");
+                let Some(model) = resolve_embedding_model(&selector) else {
+                    show_error(
+                        chat,
+                        "MODEL_DEVICE",
+                        "Модель не распознана.",
+                        "Используйте /model device <N|slug> [cpu|gpu].",
+                    )?;
+                    continue;
+                };
+                let current = match configured_model_device(model) {
+                    Ok(device) => device,
+                    Err(error) => {
+                        show_error(
+                            chat,
+                            "MODEL_DEVICE_READ",
+                            error.message(),
+                            "Проверьте локальный device-preferences.toml.",
+                        )?;
+                        continue;
+                    }
+                };
+                let requested = explicit_device.unwrap_or_else(|| current.toggled());
+                match set_configured_model_device(model, requested) {
+                    Ok(()) => {
+                        show_notice(
+                            chat,
+                            &format!(
+                                "Для {} назначено {}. Настройка сохранена на этом устройстве.",
+                                model.display_name(),
+                                requested.label()
+                            ),
+                        )?;
+                        if model == store.profile().embedding_model() {
+                            runtime = open_workspace_runtime(chat, &store)?;
+                            last_search = None;
+                        } else {
+                            show_embedding_models(chat, store.profile().embedding_model())?;
+                        }
+                    }
+                    Err(error) => show_error(
+                        chat,
+                        "MODEL_DEVICE_UNAVAILABLE",
+                        error.message(),
+                        "Выберите CPU либо модель E5 с успешно проверенным DirectML.",
+                    )?,
+                }
             }
             "compare" => {
                 let Some(runtime) = runtime.as_mut() else {
@@ -1010,11 +1101,26 @@ fn open_workspace_runtime<R: BufRead>(
     } else {
         provision_model_with_ui(chat, selected)?
     };
+    let execution_device = match configured_model_device(selected) {
+        Ok(device) => device,
+        Err(error) => {
+            show_error(
+                chat,
+                "MODEL_DEVICE_READ",
+                error.message(),
+                "Используется CPU; проверьте локальный device-preferences.toml.",
+            )?;
+            ExecutionDevice::Cpu
+        }
+    };
     let config = match model {
         Some(model) => store
             .production_config()
-            .with_embedding_model(model.model(), model.root().to_path_buf()),
-        None => store.production_config(),
+            .with_embedding_model(model.model(), model.root().to_path_buf())
+            .with_execution_device(execution_device),
+        None => store
+            .production_config()
+            .with_execution_device(execution_device),
     };
     let runtime = match ProductionRuntime::open(config) {
         Ok(runtime) => runtime,
@@ -1414,87 +1520,11 @@ fn show_notice<R: BufRead>(chat: &mut ChatSession<'_, R>, message: &str) -> io::
     chat.show_typed(&NoticeDocument::new(message))
 }
 
-#[must_use]
-pub fn help_text() -> &'static str {
-    "FastSearch — локальный поиск по документации и исходному коду.\n\nЗапуск:\n  fastsearch                       рабочие области и интерактивный поиск\n  fastsearch chat                  то же самое явно\n  fastsearch [--json] <команда>    compatibility CLI для scripts/CI\n  fastsearch --help                эта справка\n  fastsearch --version             версия программы\n\nHuman-команды:\n  обычный текст                    выполнить поиск\n  /workspace                       выбрать или создать область\n  /sources [discover|set]          показать, найти или изменить roots\n  /model [set|info <N|slug>]       показать или выбрать embedding-модель\n  /compare                         сравнить выдачу всех готовых моделей\n  /experiment record <оценка>      записать результат последнего поиска\n  /status                          состояние области и providers\n  /index [status|update|rebuild]   обслуживание индекса\n  /open N                          открыть результат\n  /related N                       связанные материалы результата\n  /next | /prev | /page N         навигация по выдаче\n  /help                            контекстная справка\n  /exit                            выход\n\nCompatibility-команды сохраняют прежние arguments documents/code/service до отдельного machine-CLI cutover."
-}
+pub use commands::help_text;
 
 #[must_use]
 pub fn version_text() -> String {
     format!("FastSearch {}", env!("CARGO_PKG_VERSION"))
-}
-
-fn workspace_catalog() -> CommandCatalog {
-    CommandCatalog::new(vec![
-        CommandSpec::new("search", "найти документы или код", "/search <запрос>"),
-        CommandSpec::new("related", "показать связанные записи", "/related N"),
-        CommandSpec::new(
-            "sources set",
-            "изменить documentation/code roots",
-            "/sources set",
-        ),
-        CommandSpec::new(
-            "sources discover",
-            "заново обнаружить roots внутри области",
-            "/sources discover",
-        ),
-        CommandSpec::new("sources", "показать два source contours", "/sources"),
-        CommandSpec::new(
-            "model set",
-            "выбрать embedding-модель",
-            "/model set <N|slug>",
-        ),
-        CommandSpec::new(
-            "model info",
-            "показать источник и технические сведения модели",
-            "/model info <N|slug>",
-        ),
-        CommandSpec::new("model", "показать каталог embedding-моделей", "/model"),
-        CommandSpec::new(
-            "compare",
-            "сравнить выдачу всех embedding-моделей",
-            "/compare",
-        ),
-        CommandSpec::new(
-            "experiment record",
-            "записать оценку последнего поиска",
-            "/experiment record <оценка>",
-        ),
-        CommandSpec::new(
-            "index rebuild",
-            "полностью перестроить local index",
-            "/index rebuild",
-        ),
-        CommandSpec::new(
-            "index update",
-            "применить изменения sources",
-            "/index update",
-        ),
-        CommandSpec::new("index", "показать состояние индекса", "/index")
-            .with_alias("index status"),
-        CommandSpec::new(
-            "status",
-            "показать область, freshness и capabilities",
-            "/status",
-        ),
-        CommandSpec::new("workspace", "сменить рабочую область", "/workspace"),
-        CommandSpec::new("open", "открыть результат по номеру", "/open <N>"),
-        CommandSpec::new("next", "следующая страница результатов", "/next"),
-        CommandSpec::new("prev", "предыдущая страница результатов", "/prev").with_alias("previous"),
-        CommandSpec::new("page", "перейти к странице", "/page <N>"),
-        CommandSpec::new("repeat", "повторить текущую выдачу", "/repeat"),
-        CommandSpec::new("version", "показать версию", "/version")
-            .with_alias("--version")
-            .with_alias("-V"),
-        CommandSpec::new("help", "показать команды", "/help")
-            .with_alias("--help")
-            .with_alias("-h")
-            .with_alias("помощь"),
-        CommandSpec::new("exit", "закрыть FastSearch", "/exit")
-            .with_alias("quit")
-            .with_alias("выход"),
-    ])
-    .expect("FastSearch command catalog is static and valid")
 }
 
 fn is_exit(value: &str) -> bool {
@@ -1506,15 +1536,63 @@ fn is_exit(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, time::Duration};
-
-    use crate::application::production::{IndexingProgress, IndexingStage, IndexingWorkStage};
-
-    use super::index::indexing_progress_document;
     use super::{
-        contour_summary, display_path, display_relative_path, relative_match_percent,
-        result_excerpt,
+        contour_summary, device_assignment_cell, display_path, display_relative_path,
+        relative_match_percent, result_excerpt, workspace_catalog,
     };
+    use crate::domain::{DeviceCapabilityStatus, ExecutionDevice};
+    use std::path::Path;
+    use terminal_dialogue::{CommandResolution, LanguagePack, TerminalDocument, TextStyle};
+
+    #[test]
+    fn model_device_cells_mark_only_the_assignment_and_reject_unavailable_devices() {
+        assert_eq!(
+            device_assignment_cell(
+                ExecutionDevice::Cpu,
+                ExecutionDevice::Cpu,
+                DeviceCapabilityStatus::Ready,
+            ),
+            ("✓", TextStyle::Success)
+        );
+        assert_eq!(
+            device_assignment_cell(
+                ExecutionDevice::Cpu,
+                ExecutionDevice::GpuDirectMl,
+                DeviceCapabilityStatus::Ready,
+            ),
+            ("", TextStyle::Body)
+        );
+        assert_eq!(
+            device_assignment_cell(
+                ExecutionDevice::Cpu,
+                ExecutionDevice::GpuDirectMl,
+                DeviceCapabilityStatus::Unavailable,
+            ),
+            ("✗", TextStyle::Error)
+        );
+    }
+
+    #[test]
+    fn help_is_grouped_and_model_device_uses_the_longest_command_match() {
+        let catalog = workspace_catalog();
+        assert!(matches!(
+            catalog.resolve("/model device 2 gpu"),
+            CommandResolution::Match { arguments, .. } if arguments == "2 gpu"
+        ));
+        let help = catalog
+            .welcome_document("Команды", "Сводка")
+            .to_dialogue_document(&LanguagePack::russian())
+            .render(false);
+        for heading in [
+            "ПОИСК",
+            "ИСТОЧНИКИ И ИНДЕКС",
+            "МОДЕЛИ И СРАВНЕНИЕ",
+            "НАВИГАЦИЯ",
+            "ПРИЛОЖЕНИЕ",
+        ] {
+            assert!(help.contains(heading), "{help}");
+        }
+    }
 
     #[test]
     fn result_percent_is_relative_and_bounded() {
@@ -1537,27 +1615,6 @@ mod tests {
         assert_eq!(contour_summary(0, 0), "не настроены");
         assert_eq!(contour_summary(3, 0), "документация · 3 корней");
         assert_eq!(contour_summary(3, 2), "документация · код · 3 + 2 корней");
-    }
-
-    #[test]
-    fn indexing_heartbeat_reports_how_long_status_has_not_changed() {
-        let document = indexing_progress_document(
-            "Обновление индекса",
-            IndexingProgress {
-                completed: 3,
-                total: 4,
-                stage: IndexingStage::Vector,
-                work_completed: Some(0),
-                work_total: Some(100),
-                work_stage: Some(IndexingWorkStage::Vectorizing),
-            },
-            None,
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-        );
-        let detail = document.detail.unwrap();
-        assert!(detail.contains("прошло 10 сек"), "{detail}");
-        assert!(detail.contains("Статус не менялся 10 сек"), "{detail}");
     }
 
     #[test]

@@ -1,31 +1,7 @@
 use super::*;
+use terminal_dialogue::{CommandCatalog, CommandSpec};
 
-use std::{
-    sync::mpsc::{self, RecvTimeoutError},
-    thread,
-    time::{Duration, Instant},
-};
-
-use super::progress::{ProgressEstimator, ProgressForecast, human_duration as progress_duration};
-
-const MODEL_PHASE_UNITS: u64 = 1_000;
-const MODEL_PROGRESS_TOTAL: u64 = MODEL_PHASE_UNITS * 3;
-
-fn model_progress(current: u64, label: &str) -> ProgressValue {
-    ProgressValue::new(current, MODEL_PROGRESS_TOTAL).with_label(label)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ComparisonTaskPhase {
-    Shared,
-    Waiting,
-    Checking,
-    Downloading,
-    Validating,
-    Vectorizing,
-    Saving,
-    Finished,
-}
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 struct ComparisonResultRef {
@@ -40,404 +16,95 @@ struct ComparisonSearchSession {
     results: Vec<ComparisonResultRef>,
 }
 
-#[derive(Clone, Debug)]
-struct ComparisonTask {
-    model: Option<EmbeddingModelId>,
-    label: String,
-    state: TaskState,
-    detail: String,
-    progress: Option<ProgressValue>,
-    rendered_bar_step: Option<u64>,
-    phase: ComparisonTaskPhase,
-    stage_started: Option<Instant>,
-    last_progress_at: Option<Instant>,
-    work_completed: u64,
-    work_total: u64,
-    activity: String,
-    forecast: Option<ProgressForecast>,
-    estimator: ProgressEstimator,
-}
-
-impl ComparisonTask {
-    fn enter_phase(&mut self, phase: ComparisonTaskPhase, activity: impl Into<String>) {
-        if self.phase != phase {
-            self.phase = phase;
-            self.stage_started = Some(Instant::now());
-            self.last_progress_at = None;
-            self.work_completed = 0;
-            self.work_total = 0;
-            self.forecast = None;
-            self.estimator = ProgressEstimator::default();
-        }
-        self.activity = activity.into();
-    }
-
-    fn observe_work(&mut self, completed: u64, total: u64, download: bool) {
-        let now = Instant::now();
-        let started = self.stage_started.get_or_insert(now);
-        if completed > self.work_completed {
-            self.last_progress_at = Some(now);
-        }
-        self.work_completed = completed;
-        self.work_total = total;
-        self.forecast = self.estimator.observe(completed, total, started.elapsed());
-        self.refresh_detail_at(now, download);
-    }
-
-    fn refresh_detail_at(&mut self, now: Instant, download: bool) {
-        let elapsed = self.stage_started.map_or(Duration::ZERO, |started| {
-            now.saturating_duration_since(started)
-        });
-        let silence = self
-            .last_progress_at
-            .map_or(elapsed, |last| now.saturating_duration_since(last));
-        let silence_note = (silence >= Duration::from_secs(5))
-            .then(|| format!(" · новых данных нет {}", progress_duration(silence)));
-        self.detail = match self.phase {
-            ComparisonTaskPhase::Downloading => {
-                let transfer = if self.work_total == 0 {
-                    "объём пока неизвестен".to_owned()
-                } else {
-                    format!(
-                        "{} из {}",
-                        human_bytes(self.work_completed),
-                        human_bytes(self.work_total)
-                    )
-                };
-                let forecast = self.forecast.map_or_else(
-                    || format!("прошло {}", progress_duration(elapsed)),
-                    |forecast| {
-                        if download {
-                            forecast.download_detail()
-                        } else {
-                            forecast.detail()
-                        }
-                    },
-                );
-                format!(
-                    "{} · {transfer} · {forecast}{}",
-                    self.activity,
-                    silence_note.unwrap_or_default()
-                )
-            }
-            ComparisonTaskPhase::Vectorizing => {
-                let forecast = self.forecast.map_or_else(
-                    || {
-                        format!(
-                            "оценка после первых записей · прошло {}",
-                            progress_duration(elapsed)
-                        )
-                    },
-                    ProgressForecast::detail,
-                );
-                format!(
-                    "{} · {forecast}{}",
-                    self.activity,
-                    silence_note.unwrap_or_default()
-                )
-            }
-            ComparisonTaskPhase::Checking
-            | ComparisonTaskPhase::Validating
-            | ComparisonTaskPhase::Saving
-            | ComparisonTaskPhase::Shared => format!(
-                "{} · прошло {}{}",
-                self.activity,
-                progress_duration(elapsed),
-                silence_note.unwrap_or_default()
-            ),
-            ComparisonTaskPhase::Waiting | ComparisonTaskPhase::Finished => self.activity.clone(),
-        };
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ComparisonTaskBoard {
-    tasks: Vec<ComparisonTask>,
-}
-
-impl ComparisonTaskBoard {
-    fn new() -> Self {
-        let mut tasks = vec![ComparisonTask {
-            model: None,
-            label: "Общий корпус и лексический индекс".to_owned(),
-            state: TaskState::Running,
-            detail: "подготовка".to_owned(),
-            progress: None,
-            rendered_bar_step: None,
-            phase: ComparisonTaskPhase::Shared,
-            stage_started: Some(Instant::now()),
-            last_progress_at: None,
-            work_completed: 0,
-            work_total: 0,
-            activity: "подготовка".to_owned(),
-            forecast: None,
-            estimator: ProgressEstimator::default(),
-        }];
-        tasks.extend(
-            EmbeddingModelId::ALL
-                .into_iter()
-                .map(|model| ComparisonTask {
-                    model: Some(model),
-                    label: model.display_name().to_owned(),
-                    state: TaskState::Pending,
-                    detail: "ожидает".to_owned(),
-                    progress: Some(model_progress(0, "этап 1/3 · ожидает загрузки")),
-                    rendered_bar_step: None,
-                    phase: ComparisonTaskPhase::Waiting,
-                    stage_started: None,
-                    last_progress_at: None,
-                    work_completed: 0,
-                    work_total: 0,
-                    activity: "ожидает".to_owned(),
-                    forecast: None,
-                    estimator: ProgressEstimator::default(),
-                }),
-        );
-        Self { tasks }
-    }
-
-    fn apply(&mut self, event: ComparisonUpdateProgress) -> bool {
-        match event {
-            ComparisonUpdateProgress::Shared { stage, .. } => {
-                let task = &mut self.tasks[0];
-                task.state = TaskState::Running;
-                let activity = match stage {
-                    ComparisonSharedStage::Sources => "чтение исходных документов и кода",
-                    ComparisonSharedStage::State => "согласование общего корпуса",
-                    ComparisonSharedStage::Lexical => "построение полнотекстового индекса",
-                };
-                task.enter_phase(ComparisonTaskPhase::Shared, activity);
-                task.refresh_detail_at(Instant::now(), false);
-                task.progress = None;
-                true
-            }
-            ComparisonUpdateProgress::SharedCompleted => {
-                let task = &mut self.tasks[0];
-                task.state = TaskState::Completed;
-                task.detail = "готово".to_owned();
-                task.phase = ComparisonTaskPhase::Finished;
-                task.progress = None;
-                true
-            }
-            ComparisonUpdateProgress::SharedFailed { message } => {
-                let task = &mut self.tasks[0];
-                task.state = TaskState::Failed;
-                task.detail = message;
-                task.phase = ComparisonTaskPhase::Finished;
-                task.progress = None;
-                true
-            }
-            ComparisonUpdateProgress::Model { model, stage } => {
-                let task = self
-                    .tasks
-                    .iter_mut()
-                    .find(|task| task.model == Some(model))
-                    .expect("comparison board covers the static model catalog");
-                match stage {
-                    ComparisonModelStage::Checking => {
-                        task.state = TaskState::Running;
-                        task.enter_phase(ComparisonTaskPhase::Checking, "проверка готовности");
-                        task.refresh_detail_at(Instant::now(), false);
-                        task.progress = Some(model_progress(0, "этап 1/3 · проверка весов"));
-                        true
-                    }
-                    ComparisonModelStage::Downloading {
-                        asset,
-                        completed_bytes,
-                        total_bytes,
-                    } => {
-                        task.state = TaskState::Running;
-                        let activity = asset.map_or_else(
-                            || "проверка и загрузка весов".to_owned(),
-                            |asset| format!("загрузка весов: {asset}"),
-                        );
-                        task.enter_phase(ComparisonTaskPhase::Downloading, activity);
-                        let Some((completed, total)) = completed_bytes.zip(total_bytes) else {
-                            task.work_total = model_descriptor(model).approximate_download_bytes;
-                            task.refresh_detail_at(Instant::now(), true);
-                            task.progress = Some(model_progress(0, "этап 1/3 · загрузка весов"));
-                            task.rendered_bar_step = None;
-                            return true;
-                        };
-                        let phase_progress =
-                            completed.saturating_mul(MODEL_PHASE_UNITS) / total.max(1);
-                        let overall = phase_progress.min(MODEL_PHASE_UNITS);
-                        let bar_step = overall.saturating_mul(32) / MODEL_PROGRESS_TOTAL;
-                        task.progress = Some(model_progress(
-                            overall,
-                            &format!(
-                                "этап 1/3 · загрузка · {}%",
-                                completed.saturating_mul(100) / total.max(1)
-                            ),
-                        ));
-                        task.observe_work(completed, total, true);
-                        if task.rendered_bar_step == Some(bar_step) && completed < total {
-                            false
-                        } else {
-                            task.rendered_bar_step = Some(bar_step);
-                            true
-                        }
-                    }
-                    ComparisonModelStage::Validating => {
-                        task.state = TaskState::Running;
-                        task.enter_phase(
-                            ComparisonTaskPhase::Validating,
-                            "проверка загруженной модели",
-                        );
-                        task.refresh_detail_at(Instant::now(), false);
-                        task.progress = Some(model_progress(
-                            MODEL_PHASE_UNITS,
-                            "этап 1/3 · веса загружены · проверка runtime",
-                        ));
-                        task.rendered_bar_step = Some(10);
-                        true
-                    }
-                    ComparisonModelStage::Indexing {
-                        completed_records,
-                        total_records,
-                    } => {
-                        task.state = TaskState::Running;
-                        task.enter_phase(ComparisonTaskPhase::Vectorizing, "векторизация записей");
-                        let vector_progress = completed_records
-                            .saturating_mul(MODEL_PHASE_UNITS)
-                            .checked_div(total_records)
-                            .unwrap_or(0);
-                        let overall = MODEL_PHASE_UNITS
-                            .saturating_add(vector_progress.min(MODEL_PHASE_UNITS));
-                        task.progress = Some(model_progress(
-                            overall,
-                            &format!(
-                                "этап 2/3 · векторизация · {completed_records}/{total_records} записей"
-                            ),
-                        ));
-                        task.observe_work(completed_records, total_records, false);
-                        let bar_step = overall.saturating_mul(32) / MODEL_PROGRESS_TOTAL;
-                        if task.rendered_bar_step == Some(bar_step)
-                            && completed_records < total_records
-                        {
-                            false
-                        } else {
-                            task.rendered_bar_step = Some(bar_step);
-                            true
-                        }
-                    }
-                    ComparisonModelStage::Saving => {
-                        task.state = TaskState::Running;
-                        task.enter_phase(
-                            ComparisonTaskPhase::Saving,
-                            "атомарная запись модельного индекса",
-                        );
-                        task.refresh_detail_at(Instant::now(), false);
-                        task.progress = Some(model_progress(
-                            MODEL_PHASE_UNITS * 2,
-                            "этап 3/3 · сохранение индекса",
-                        ));
-                        task.rendered_bar_step = Some(21);
-                        true
-                    }
-                    ComparisonModelStage::Completed { reused } => {
-                        task.state = TaskState::Completed;
-                        task.detail = if reused {
-                            "уже готово, перестроение не требуется"
-                        } else {
-                            "веса и индекс готовы"
-                        }
-                        .to_owned();
-                        task.progress = Some(model_progress(MODEL_PROGRESS_TOTAL, "готово"));
-                        task.rendered_bar_step = Some(32);
-                        task.phase = ComparisonTaskPhase::Finished;
-                        task.stage_started = None;
-                        true
-                    }
-                    ComparisonModelStage::Failed { message } => {
-                        task.state = TaskState::Failed;
-                        task.detail = message;
-                        task.phase = ComparisonTaskPhase::Finished;
-                        task.rendered_bar_step = None;
-                        true
-                    }
-                }
-            }
-        }
-    }
-
-    fn heartbeat(&mut self) -> bool {
-        self.heartbeat_at(Instant::now())
-    }
-
-    fn heartbeat_at(&mut self, now: Instant) -> bool {
-        for task in &mut self.tasks {
-            if task.state == TaskState::Running {
-                task.refresh_detail_at(now, task.phase == ComparisonTaskPhase::Downloading);
-            }
-        }
-        true
-    }
-
-    fn finish_aborted(&mut self) {
-        for task in &mut self.tasks {
-            if matches!(task.state, TaskState::Pending | TaskState::Running) {
-                task.state = TaskState::Skipped;
-                task.detail = "не запускалось после предыдущей ошибки".to_owned();
-                task.phase = ComparisonTaskPhase::Finished;
-                if task.progress.is_none() {
-                    task.progress = Some(model_progress(0, "не запускалось"));
-                }
-                task.rendered_bar_step = None;
-            }
-        }
-    }
-
-    fn document(&self) -> TaskListDocument {
-        let finished = self
-            .tasks
-            .iter()
-            .filter(|task| {
-                matches!(
-                    task.state,
-                    TaskState::Completed | TaskState::Failed | TaskState::Skipped
-                )
-            })
-            .count();
-        let failures = self
-            .tasks
-            .iter()
-            .filter(|task| task.state == TaskState::Failed)
-            .count();
-        let state = if finished == self.tasks.len() {
-            if failures == 0 {
-                ProgressState::Completed
-            } else {
-                ProgressState::Failed
-            }
-        } else {
-            ProgressState::Running
-        };
-        self.tasks.iter().fold(
-            TaskListDocument::new("Подготовка сравнения", state).with_summary(format!(
-                "Завершено: {finished} из {} задач{}.",
-                self.tasks.len(),
-                if failures == 0 {
-                    String::new()
-                } else {
-                    format!(" · ошибок: {failures}")
-                }
-            )),
-            |document, task| {
-                let mut item = TaskItem::new(&task.label, task.state).with_detail(&task.detail);
-                if let Some(progress) = &task.progress {
-                    item = item.with_progress(progress.clone());
-                }
-                document.with_task(item)
-            },
-        )
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ComparisonTransition {
     Back,
     Exit,
+}
+
+fn comparison_progress_dashboard() -> ProgressDashboard {
+    let shared = ProgressTaskSpec::new(
+        "Общий корпус и лексический индекс",
+        vec![ProgressPhase::new(
+            "подготовка",
+            ProgressUnit::count("этапов", "этапов/с"),
+        )],
+    )
+    .without_bar();
+    let model_tasks = EmbeddingModelId::ALL.into_iter().map(|model| {
+        ProgressTaskSpec::new(
+            model.display_name(),
+            vec![
+                ProgressPhase::new("загрузка", ProgressUnit::bytes()),
+                ProgressPhase::new("индекс", ProgressUnit::count("записей", "зап./с")),
+                ProgressPhase::new("сохранение", ProgressUnit::count("этап", "этап/с")),
+            ],
+        )
+    });
+    ProgressDashboard::new(
+        "Подготовка сравнения",
+        std::iter::once(shared).chain(model_tasks).collect(),
+    )
+    .with_refresh_interval(Duration::from_secs(5))
+}
+
+fn report_comparison_progress(port: &ProgressPort, event: ComparisonUpdateProgress) {
+    match event {
+        ComparisonUpdateProgress::Shared { stage, .. } => {
+            let activity = match stage {
+                ComparisonSharedStage::Sources => "чтение исходных файлов",
+                ComparisonSharedStage::State => "обновление корпуса",
+                ComparisonSharedStage::Lexical => "лексический индекс",
+            };
+            port.stage(0, 0, activity);
+        }
+        ComparisonUpdateProgress::SharedCompleted => port.complete(0, "готово"),
+        ComparisonUpdateProgress::SharedFailed { message } => port.fail(0, message),
+        ComparisonUpdateProgress::Model { model, stage } => {
+            let task = EmbeddingModelId::ALL
+                .iter()
+                .position(|candidate| *candidate == model)
+                .expect("comparison progress uses the static model catalog")
+                + 1;
+            match stage {
+                ComparisonModelStage::Checking => port.stage(task, 0, "проверка"),
+                ComparisonModelStage::Downloading {
+                    asset,
+                    completed_bytes,
+                    total_bytes,
+                } => {
+                    port.stage(task, 0, asset.unwrap_or_else(|| "соединение".to_owned()));
+                    if let Some((completed, total)) = completed_bytes.zip(total_bytes) {
+                        port.progress(task, 0, completed, total);
+                    }
+                }
+                ComparisonModelStage::Validating => {
+                    port.stage(task, 0, "проверка runtime");
+                    port.progress(task, 0, 1, 1);
+                }
+                ComparisonModelStage::WaitingForIndex => {
+                    port.stage(task, 1, "ожидает индексации");
+                }
+                ComparisonModelStage::Indexing {
+                    completed_records,
+                    total_records,
+                } => {
+                    port.stage(task, 1, "векторизация");
+                    port.progress(task, 1, completed_records, total_records);
+                }
+                ComparisonModelStage::Saving => port.stage(task, 2, "сохранение"),
+                ComparisonModelStage::Completed { reused } => port.complete(
+                    task,
+                    if reused {
+                        "уже готово"
+                    } else {
+                        "готово"
+                    },
+                ),
+                ComparisonModelStage::Failed { message } => port.fail(task, message),
+            }
+        }
+    }
 }
 
 pub(super) fn run_comparison<R: BufRead>(
@@ -499,64 +166,17 @@ pub(super) fn run_comparison<R: BufRead>(
                 );
                 match chat.confirm_prepared(prepared)? {
                     PreparedOutcome::Confirmed(_) => {
-                        let mut board = ComparisonTaskBoard::new();
-                        let mut output_error = None;
-                        let result = {
-                            let mut region = chat.live_region();
-                            region.update_typed(&board.document())?;
-                            let (sender, receiver) = mpsc::channel();
-                            let runtime_for_update = &mut *runtime;
-                            let result = thread::scope(|scope| {
-                                let worker = scope.spawn(move || {
-                                    ComparisonCoordinator::new(runtime_for_update)
-                                        .update_required_with_progress(false, |event| {
-                                            let _ = sender.send(event);
-                                        })
-                                });
-                                let mut next_refresh = Instant::now() + Duration::from_secs(5);
-                                loop {
-                                    let wait =
-                                        next_refresh.saturating_duration_since(Instant::now());
-                                    match receiver.recv_timeout(wait) {
-                                        Ok(event) => {
-                                            if output_error.is_none() && board.apply(event) {
-                                                output_error =
-                                                    region.update_typed(&board.document()).err();
-                                            }
-                                        }
-                                        Err(RecvTimeoutError::Timeout) => {
-                                            if output_error.is_none() && board.heartbeat() {
-                                                output_error =
-                                                    region.update_typed(&board.document()).err();
-                                            }
-                                            next_refresh = Instant::now() + Duration::from_secs(5);
-                                        }
-                                        Err(RecvTimeoutError::Disconnected) => break,
-                                    }
-                                    if Instant::now() >= next_refresh {
-                                        if output_error.is_none() && board.heartbeat() {
-                                            output_error =
-                                                region.update_typed(&board.document()).err();
-                                        }
-                                        next_refresh = Instant::now() + Duration::from_secs(5);
-                                    }
-                                }
-                                worker.join().unwrap_or_else(|_| {
-                                    Err(crate::domain::FastSearchError::new(
-                                        crate::domain::ErrorKind::ProjectionFailure,
-                                        "comparison preparation worker terminated unexpectedly",
-                                    ))
-                                })
-                            });
-                            if result.is_err() && output_error.is_none() {
-                                board.finish_aborted();
-                                output_error = region.update_typed(&board.document()).err();
-                            }
-                            result
-                        };
-                        if let Some(error) = output_error {
-                            return Err(error);
-                        }
+                        let runtime_for_update = &mut *runtime;
+                        let result = run_progress_dashboard(
+                            chat,
+                            comparison_progress_dashboard(),
+                            move |port| {
+                                ComparisonCoordinator::new(runtime_for_update)
+                                    .update_required_with_progress(false, |event| {
+                                        report_comparison_progress(&port, event);
+                                    })
+                            },
+                        )?;
                         match result {
                             Ok(outcomes) => {
                                 let readiness = ComparisonCoordinator::new(runtime).readiness();
@@ -938,14 +558,18 @@ fn show_comparison_record<R: BufRead>(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::io::Cursor;
 
-    use terminal_dialogue::{LanguagePack, ProgressState, TerminalDocument};
+    use terminal_dialogue::{ChatSession, SessionConfig, run_progress_dashboard};
 
     use super::{
-        ComparisonModelStage, ComparisonTaskBoard, ComparisonUpdateProgress, EmbeddingModelId,
-        human_bytes, human_duration,
+        ComparisonModelStage, ComparisonUpdateProgress, EmbeddingModelId,
+        comparison_progress_dashboard, human_bytes, human_duration, report_comparison_progress,
     };
+
+    fn separator() -> String {
+        String::new()
+    }
 
     #[test]
     fn partition_measurements_are_compact_and_unambiguous() {
@@ -957,120 +581,73 @@ mod tests {
     }
 
     #[test]
-    fn comparison_board_tracks_every_task_in_one_three_phase_bar() {
+    fn comparison_events_flow_through_the_library_progress_port() {
+        let mut input = Cursor::new(Vec::<u8>::new());
+        let mut output = Vec::new();
+        let config = SessionConfig::for_terminal(false, false);
+        let mut chat = ChatSession::configured(&mut input, &mut output, config, separator);
         let model = EmbeddingModelId::MultilingualE5Small;
-        let mut board = ComparisonTaskBoard::new();
-        assert!(board.apply(ComparisonUpdateProgress::SharedCompleted));
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Downloading {
-                asset: Some("model.onnx".to_owned()),
-                completed_bytes: Some(50),
-                total_bytes: Some(100),
-            },
-        }));
 
-        let rendered = board
-            .document()
-            .to_dialogue_document(&LanguagePack::russian())
-            .render(false);
-        assert!(
-            rendered.contains("✓ Общий корпус и лексический индекс"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("▶ E5 Small — загрузка весов: model.onnx"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("этап 1/3 · загрузка · 50%"), "{rendered}");
-        assert!(!rendered.contains('░'), "{rendered}");
+        let result = run_progress_dashboard(&mut chat, comparison_progress_dashboard(), |port| {
+            report_comparison_progress(&port, ComparisonUpdateProgress::SharedCompleted);
+            report_comparison_progress(
+                &port,
+                ComparisonUpdateProgress::Model {
+                    model,
+                    stage: ComparisonModelStage::Downloading {
+                        asset: Some("model.onnx".to_owned()),
+                        completed_bytes: Some(50),
+                        total_bytes: Some(100),
+                    },
+                },
+            );
+            Ok::<_, ()>(())
+        })
+        .unwrap();
 
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Failed {
-                message: "ошибка модели".to_owned(),
-            },
-        }));
-        board.finish_aborted();
-        assert_eq!(board.document().state, ProgressState::Failed);
+        assert_eq!(result, Ok(()));
+        let transcript = String::from_utf8(output).unwrap();
+        assert!(transcript.contains("▶ E5 Small"), "{transcript}");
+        assert!(transcript.contains("1/3  загрузка  50%"), "{transcript}");
+        assert!(transcript.contains("50 Б / 100 Б"), "{transcript}");
+        assert!(transcript.contains("\n\n  ○ E5 Base"), "{transcript}");
     }
 
     #[test]
-    fn model_bar_advances_through_download_vectorization_save_and_ready() {
-        let model = EmbeddingModelId::MultilingualE5Small;
-        let mut board = ComparisonTaskBoard::new();
+    fn downloaded_model_is_shown_as_waiting_for_sequential_indexing() {
+        let mut input = Cursor::new(Vec::<u8>::new());
+        let mut output = Vec::new();
+        let config = SessionConfig::for_terminal(false, false);
+        let mut chat = ChatSession::configured(&mut input, &mut output, config, separator);
+        let model = EmbeddingModelId::Qwen3Embedding06B;
 
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Downloading {
-                asset: Some("model.onnx".to_owned()),
-                completed_bytes: Some(50),
-                total_bytes: Some(100),
-            },
-        }));
-        assert_eq!(board.tasks[1].progress.as_ref().unwrap().current, 500);
+        let result = run_progress_dashboard(&mut chat, comparison_progress_dashboard(), |port| {
+            report_comparison_progress(
+                &port,
+                ComparisonUpdateProgress::Model {
+                    model,
+                    stage: ComparisonModelStage::Downloading {
+                        asset: Some("model.safetensors".to_owned()),
+                        completed_bytes: Some(100),
+                        total_bytes: Some(100),
+                    },
+                },
+            );
+            report_comparison_progress(
+                &port,
+                ComparisonUpdateProgress::Model {
+                    model,
+                    stage: ComparisonModelStage::WaitingForIndex,
+                },
+            );
+            Ok::<_, ()>(())
+        })
+        .unwrap();
 
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Indexing {
-                completed_records: 5,
-                total_records: 10,
-            },
-        }));
-        assert_eq!(board.tasks[1].progress.as_ref().unwrap().current, 1_500);
-
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Saving,
-        }));
-        assert_eq!(board.tasks[1].progress.as_ref().unwrap().current, 2_000);
-
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Completed { reused: false },
-        }));
-        let task = &board.tasks[1];
-        assert_eq!(task.state, terminal_dialogue::TaskState::Completed);
-        assert_eq!(task.progress.as_ref().unwrap().current, 3_000);
-        assert_eq!(
-            task.progress.as_ref().unwrap().label.as_deref(),
-            Some("готово")
-        );
-    }
-
-    #[test]
-    fn heartbeat_explains_zero_percent_and_time_without_new_bytes() {
-        let model = EmbeddingModelId::MultilingualE5Large;
-        let mut board = ComparisonTaskBoard::new();
-        assert!(board.apply(ComparisonUpdateProgress::Model {
-            model,
-            stage: ComparisonModelStage::Downloading {
-                asset: Some("config.json".to_owned()),
-                completed_bytes: Some(0),
-                total_bytes: Some(2_253_012_762),
-            },
-        }));
-        let now = Instant::now();
-        let task = board
-            .tasks
-            .iter_mut()
-            .find(|task| task.model == Some(model))
-            .unwrap();
-        task.stage_started = Some(now - Duration::from_secs(10));
-        task.last_progress_at = None;
-
-        board.heartbeat_at(now);
-
-        let task = board
-            .tasks
-            .iter()
-            .find(|task| task.model == Some(model))
-            .unwrap();
-        assert!(task.detail.contains("прошло 10 сек"), "{}", task.detail);
-        assert!(
-            task.detail.contains("новых данных нет 10 сек"),
-            "{}",
-            task.detail
-        );
+        assert_eq!(result, Ok(()));
+        let transcript = String::from_utf8(output).unwrap();
+        assert!(transcript.contains("2/3"), "{transcript}");
+        assert!(transcript.contains("ожидает индексации"), "{transcript}");
+        assert!(transcript.contains("0%"), "{transcript}");
     }
 }

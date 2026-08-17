@@ -1,18 +1,18 @@
 use std::{
     io::{self, BufRead},
-    sync::mpsc::{self, RecvTimeoutError},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use terminal_dialogue::{ChatSession, ProgressDocument, ProgressState, ProgressValue};
+use terminal_dialogue::{
+    ChatSession, ProgressDashboard, ProgressPhase, ProgressTaskSpec, ProgressUnit,
+    run_progress_dashboard,
+};
 
 use super::super::{
     ProductionRuntime,
     production::{IndexingProgress, IndexingStage, IndexingWorkStage},
 };
-use super::progress::{ProgressEstimator, ProgressForecast, human_duration as progress_duration};
-use super::{human_freshness, show_error, show_no_sources};
+use super::{show_error, show_no_sources};
 
 pub(super) fn run_index<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
@@ -27,109 +27,46 @@ pub(super) fn run_index<R: BufRead>(
     } else {
         "Обновление индекса"
     };
-    let mut output_error = None;
-    let mut vector_started = None;
-    let mut vector_estimator = ProgressEstimator::default();
-    let mut vector_forecast = None;
-    let mut current_progress = None;
-    let mut current_stage = None;
-    let mut stage_started = Instant::now();
-    let mut last_event_at = Instant::now();
-    let result = {
-        let mut region = chat.live_region();
-        let (sender, receiver) = mpsc::channel();
-        let runtime_for_index = &mut *runtime;
-        let result = thread::scope(|scope| {
-            let worker = scope.spawn(move || {
-                let mut report = |progress| {
-                    let _ = sender.send(progress);
-                };
-                if rebuild {
-                    runtime_for_index.rebuild_with_progress(&mut report)
-                } else {
-                    runtime_for_index.index_with_progress(&mut report)
-                }
-            });
-            loop {
-                match receiver.recv_timeout(Duration::from_secs(5)) {
-                    Ok(progress) => {
-                        let now = Instant::now();
-                        if current_stage != Some((progress.stage, progress.work_stage)) {
-                            current_stage = Some((progress.stage, progress.work_stage));
-                            stage_started = now;
-                        }
-                        if let (
-                            Some(IndexingWorkStage::Vectorizing),
-                            Some(completed),
-                            Some(total),
-                        ) = (
-                            progress.work_stage,
-                            progress.work_completed,
-                            progress.work_total,
-                        ) {
-                            let started = vector_started.get_or_insert(now);
-                            vector_forecast =
-                                vector_estimator.observe(completed, total, started.elapsed());
-                        }
-                        current_progress = Some(progress);
-                        last_event_at = now;
-                        if output_error.is_none() {
-                            output_error = region
-                                .update_typed(&indexing_progress_document(
-                                    operation,
-                                    progress,
-                                    vector_forecast,
-                                    now.saturating_duration_since(stage_started),
-                                    Duration::ZERO,
-                                ))
-                                .err();
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {
-                        if let Some(progress) = current_progress {
-                            let now = Instant::now();
-                            if output_error.is_none() {
-                                output_error = region
-                                    .update_typed(&indexing_progress_document(
-                                        operation,
-                                        progress,
-                                        vector_forecast,
-                                        now.saturating_duration_since(stage_started),
-                                        now.saturating_duration_since(last_event_at),
-                                    ))
-                                    .err();
-                            }
-                        }
-                    }
-                    Err(RecvTimeoutError::Disconnected) => break,
-                }
-            }
-            worker.join().unwrap_or_else(|_| {
-                Err(crate::domain::FastSearchError::new(
-                    crate::domain::ErrorKind::ProjectionFailure,
-                    "indexing worker terminated unexpectedly",
-                ))
-            })
-        });
-        if output_error.is_none() {
-            let final_document = match &result {
-                Ok(status) => ProgressDocument::new(
-                    operation,
-                    ProgressState::Completed,
-                    "Операция завершена.",
-                )
-                .with_detail(format!("Индекс: {}.", human_freshness(status.freshness()))),
-                Err(error) => {
-                    ProgressDocument::new(operation, ProgressState::Failed, error.message())
-                }
+    let dashboard = ProgressDashboard::new(
+        operation,
+        vec![ProgressTaskSpec::new(
+            "Индекс рабочей области",
+            vec![
+                ProgressPhase::new("источники", ProgressUnit::count("этап", "этап/с")),
+                ProgressPhase::new("корпус", ProgressUnit::count("этап", "этап/с")),
+                ProgressPhase::new("лексика", ProgressUnit::count("этап", "этап/с")),
+                ProgressPhase::new("векторизация", ProgressUnit::count("записей", "зап./с")),
+                ProgressPhase::new("сохранение", ProgressUnit::count("этап", "этап/с")),
+            ],
+        )],
+    )
+    .with_refresh_interval(Duration::from_secs(5));
+    let runtime_for_index = &mut *runtime;
+    let result = run_progress_dashboard(chat, dashboard, move |port| {
+        let mut report = |progress: IndexingProgress| {
+            let phase = match (progress.stage, progress.work_stage) {
+                (IndexingStage::Sources, _) => 0,
+                (IndexingStage::State, _) => 1,
+                (IndexingStage::Lexical, _) => 2,
+                (IndexingStage::Vector, Some(IndexingWorkStage::Saving)) => 4,
+                (IndexingStage::Vector, _) => 3,
             };
-            output_error = region.update_typed(&final_document).err();
+            port.stage(0, phase, "выполняется");
+            if let (Some(completed), Some(total)) = (progress.work_completed, progress.work_total) {
+                port.progress(0, phase, completed, total);
+            }
+        };
+        let result = if rebuild {
+            runtime_for_index.rebuild_with_progress(&mut report)
+        } else {
+            runtime_for_index.index_with_progress(&mut report)
+        };
+        match &result {
+            Ok(_) => port.complete(0, "готово"),
+            Err(error) => port.fail(0, error.message()),
         }
         result
-    };
-    if let Some(error) = output_error {
-        return Err(error);
-    }
+    })?;
     match result {
         Ok(_) => Ok(()),
         Err(error) => show_error(
@@ -139,58 +76,4 @@ pub(super) fn run_index<R: BufRead>(
             "Проверьте sources и повторите операцию.",
         ),
     }
-}
-
-pub(super) fn indexing_progress_document(
-    operation: &str,
-    progress: IndexingProgress,
-    forecast: Option<ProgressForecast>,
-    stage_elapsed: Duration,
-    silence: Duration,
-) -> ProgressDocument {
-    let stage = match progress.stage {
-        IndexingStage::Sources => "FastSearch читает исходные документы и код…",
-        IndexingStage::State => "FastSearch применяет изменения корпуса…",
-        IndexingStage::Lexical => "FastSearch строит полнотекстовый индекс…",
-        IndexingStage::Vector if progress.work_stage == Some(IndexingWorkStage::Saving) => {
-            "FastSearch сохраняет векторный индекс…"
-        }
-        IndexingStage::Vector => "FastSearch векторизует записи…",
-    };
-    let silence_note = if silence >= Duration::from_secs(5) {
-        format!(" Статус не менялся {}.", progress_duration(silence))
-    } else {
-        String::new()
-    };
-    let mut document = ProgressDocument::new(operation, ProgressState::Running, stage);
-    if let (Some(IndexingWorkStage::Vectorizing), Some(completed), Some(total)) = (
-        progress.work_stage,
-        progress.work_completed,
-        progress.work_total,
-    ) {
-        if total > 0 {
-            document = document
-                .with_progress(ProgressValue::new(completed, total).with_unit("записей"))
-                .with_detail(format!(
-                    "{}{}",
-                    forecast.map_or_else(
-                        || format!(
-                            "Оценка времени появится после первых записей · прошло {}.",
-                            progress_duration(stage_elapsed)
-                        ),
-                        ProgressForecast::detail,
-                    ),
-                    silence_note
-                ));
-        } else {
-            document = document.with_detail("В корпусе нет записей для векторизации.");
-        }
-    } else {
-        document = document.with_detail(format!(
-            "Этап выполняется {}.{}",
-            progress_duration(stage_elapsed),
-            silence_note
-        ));
-    }
-    document
 }

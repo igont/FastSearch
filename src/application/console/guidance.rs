@@ -25,6 +25,10 @@ pub(super) fn model_catalog() -> NextStep {
             "/model info <N|slug>",
             "открыть подробности",
         ))
+        .with_action(ActionItem::new(
+            "/model device <N|slug> [cpu|gpu]",
+            "назначить или переключить устройство",
+        ))
 }
 
 pub(super) fn model_detail() -> NextStep {
@@ -33,6 +37,10 @@ pub(super) fn model_detail() -> NextStep {
         .with_action(ActionItem::new(
             "/model set <N>",
             "скачать при отсутствии и выбрать как основную",
+        ))
+        .with_action(ActionItem::new(
+            "/model device <N|slug> [cpu|gpu]",
+            "назначить или переключить устройство",
         ))
 }
 

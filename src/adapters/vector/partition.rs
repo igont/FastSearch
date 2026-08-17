@@ -7,7 +7,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -54,6 +54,223 @@ pub(super) struct ExpectedPartition<'a> {
     pub model_identity: &'a str,
     pub state_generation: u64,
     pub records: &'a [CanonicalRecord],
+}
+
+const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+const CHECKPOINT_MANIFEST: &str = "checkpoint.toml";
+const CHECKPOINT_VECTORS: &str = "checkpoint-vectors.bin";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct CheckpointManifest {
+    schema_version: u32,
+    model_slug: String,
+    model_identity: String,
+    artifact_manifest: String,
+    runtime_contract: String,
+    dimension: usize,
+    state_generation: u64,
+    corpus_fingerprint: String,
+    record_order_fingerprint: String,
+    record_count: usize,
+    completed_records: usize,
+}
+
+pub(super) fn load_checkpoint(
+    root: &Path,
+    expected: &PartitionManifest,
+    records: &[CanonicalRecord],
+) -> Result<Vec<Vec<f32>>, FastSearchError> {
+    let manifest_path = root.join(CHECKPOINT_MANIFEST);
+    if !manifest_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let lock = open_lock(root)?;
+    FileExt::lock_exclusive(&lock).map_err(partition_failure)?;
+    let loaded = try_load_checkpoint(root, expected, records);
+    match loaded {
+        Ok(Some(vectors)) => Ok(vectors),
+        Ok(None) | Err(_) => {
+            remove_checkpoint_files(root)?;
+            Ok(Vec::new())
+        }
+    }
+}
+
+pub(super) fn append_checkpoint(
+    root: &Path,
+    expected: &PartitionManifest,
+    records: &[CanonicalRecord],
+    completed_before: usize,
+    chunk: &[Vec<f32>],
+) -> Result<(), FastSearchError> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    if completed_before > records.len()
+        || chunk.len() > records.len().saturating_sub(completed_before)
+        || chunk.iter().any(|vector| {
+            vector.len() != expected.dimension || vector.iter().any(|value| !value.is_finite())
+        })
+    {
+        return Err(partition_failure("checkpoint chunk is inconsistent"));
+    }
+    fs::create_dir_all(root).map_err(partition_failure)?;
+    let lock = open_lock(root)?;
+    FileExt::lock_exclusive(&lock).map_err(partition_failure)?;
+
+    if completed_before == 0 {
+        remove_checkpoint_files(root)?;
+    } else {
+        let stored = read_checkpoint_manifest(root)?
+            .ok_or_else(|| partition_failure("checkpoint manifest is missing"))?;
+        if !checkpoint_matches(&stored, expected, records)
+            || stored.completed_records != completed_before
+        {
+            return Err(partition_failure(
+                "checkpoint changed while vectorization was running",
+            ));
+        }
+    }
+
+    let vector_path = root.join(CHECKPOINT_VECTORS);
+    let expected_bytes = checkpoint_vector_bytes(completed_before, expected.dimension)?;
+    let mut vectors = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&vector_path)
+        .map_err(partition_failure)?;
+    if vectors.metadata().map_err(partition_failure)?.len() < expected_bytes {
+        return Err(partition_failure("checkpoint vector file is truncated"));
+    }
+    vectors.set_len(expected_bytes).map_err(partition_failure)?;
+    vectors.seek(SeekFrom::End(0)).map_err(partition_failure)?;
+    for vector in chunk {
+        for value in vector {
+            vectors
+                .write_all(&value.to_le_bytes())
+                .map_err(partition_failure)?;
+        }
+    }
+    vectors.sync_all().map_err(partition_failure)?;
+
+    let checkpoint = CheckpointManifest {
+        schema_version: CHECKPOINT_SCHEMA_VERSION,
+        model_slug: expected.model_slug.clone(),
+        model_identity: expected.model_identity.clone(),
+        artifact_manifest: expected.artifact_manifest.clone(),
+        runtime_contract: expected.runtime_contract.clone(),
+        dimension: expected.dimension,
+        state_generation: expected.state_generation,
+        corpus_fingerprint: expected.corpus_fingerprint.clone(),
+        record_order_fingerprint: record_order_fingerprint(records),
+        record_count: expected.record_count,
+        completed_records: completed_before + chunk.len(),
+    };
+    let encoded = toml::to_string_pretty(&checkpoint).map_err(partition_failure)?;
+    let manifest_path = root.join(CHECKPOINT_MANIFEST);
+    let temporary = temporary_path(&manifest_path);
+    remove_if_exists(&temporary)?;
+    let mut manifest_file = File::create(&temporary).map_err(partition_failure)?;
+    manifest_file
+        .write_all(encoded.as_bytes())
+        .and_then(|()| manifest_file.sync_all())
+        .map_err(partition_failure)?;
+    replace_file(&temporary, &manifest_path)
+}
+
+pub(super) fn clear_checkpoint(root: &Path) -> Result<(), FastSearchError> {
+    let lock = open_lock(root)?;
+    FileExt::lock_exclusive(&lock).map_err(partition_failure)?;
+    remove_checkpoint_files(root)
+}
+
+fn try_load_checkpoint(
+    root: &Path,
+    expected: &PartitionManifest,
+    records: &[CanonicalRecord],
+) -> Result<Option<Vec<Vec<f32>>>, FastSearchError> {
+    let Some(manifest) = read_checkpoint_manifest(root)? else {
+        return Ok(None);
+    };
+    if !checkpoint_matches(&manifest, expected, records) {
+        return Ok(None);
+    }
+    let expected_bytes = checkpoint_vector_bytes(manifest.completed_records, manifest.dimension)?;
+    let vector_path = root.join(CHECKPOINT_VECTORS);
+    if fs::metadata(&vector_path).map_err(partition_failure)?.len() < expected_bytes {
+        return Ok(None);
+    }
+    let mut reader = BufReader::new(File::open(vector_path).map_err(partition_failure)?);
+    let mut vectors = Vec::with_capacity(manifest.completed_records);
+    for _ in 0..manifest.completed_records {
+        let mut vector = Vec::with_capacity(manifest.dimension);
+        for _ in 0..manifest.dimension {
+            let mut bytes = [0_u8; 4];
+            reader.read_exact(&mut bytes).map_err(partition_failure)?;
+            let value = f32::from_le_bytes(bytes);
+            if !value.is_finite() {
+                return Ok(None);
+            }
+            vector.push(value);
+        }
+        vectors.push(vector);
+    }
+    Ok(Some(vectors))
+}
+
+fn read_checkpoint_manifest(root: &Path) -> Result<Option<CheckpointManifest>, FastSearchError> {
+    let path = root.join(CHECKPOINT_MANIFEST);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    toml::from_str(&fs::read_to_string(path).map_err(partition_failure)?)
+        .map(Some)
+        .map_err(partition_failure)
+}
+
+fn checkpoint_matches(
+    actual: &CheckpointManifest,
+    expected: &PartitionManifest,
+    records: &[CanonicalRecord],
+) -> bool {
+    actual.schema_version == CHECKPOINT_SCHEMA_VERSION
+        && actual.model_slug == expected.model_slug
+        && actual.model_identity == expected.model_identity
+        && actual.artifact_manifest == expected.artifact_manifest
+        && actual.runtime_contract == expected.runtime_contract
+        && actual.dimension == expected.dimension
+        && actual.state_generation == expected.state_generation
+        && actual.corpus_fingerprint == expected.corpus_fingerprint
+        && actual.record_order_fingerprint == record_order_fingerprint(records)
+        && actual.record_count == expected.record_count
+        && actual.completed_records <= actual.record_count
+}
+
+fn checkpoint_vector_bytes(records: usize, dimension: usize) -> Result<u64, FastSearchError> {
+    records
+        .checked_mul(dimension)
+        .and_then(|value| value.checked_mul(4))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| partition_failure("checkpoint vector file size overflow"))
+}
+
+fn record_order_fingerprint(records: &[CanonicalRecord]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"fastsearch-corpus-order-v1\0");
+    for record in records {
+        digest.update(record.id().as_str().len().to_le_bytes());
+        digest.update(record.id().as_str().as_bytes());
+        digest.update(record.content_hash().as_str().len().to_le_bytes());
+        digest.update(record.content_hash().as_str().as_bytes());
+    }
+    format!("{:X}", digest.finalize())
+}
+
+fn remove_checkpoint_files(root: &Path) -> Result<(), FastSearchError> {
+    remove_if_exists(&root.join(CHECKPOINT_MANIFEST))?;
+    remove_if_exists(&root.join(CHECKPOINT_VECTORS))
 }
 
 pub(super) fn save(
@@ -399,9 +616,9 @@ mod tests {
         }
     }
 
-    fn record(hash: &str) -> CanonicalRecord {
+    fn record(id: &str, hash: &str) -> CanonicalRecord {
         CanonicalRecord::new(
-            StableId::parse("record-1").unwrap(),
+            StableId::parse(id).unwrap(),
             RecordKind::MarkdownSection,
             SourceLocator::whole_file("docs/one.md").unwrap(),
             "One",
@@ -416,7 +633,7 @@ mod tests {
     #[test]
     fn partition_round_trip_reopens_and_rejects_changed_corpus() {
         let temp = TempPartition::new();
-        let records = vec![record("hash-1")];
+        let records = vec![record("record-1", "hash-1")];
         let model = EmbeddingModelId::MultilingualE5Small;
         let identity = "intfloat/multilingual-e5-small@revision";
         let manifest = PartitionManifest {
@@ -460,7 +677,7 @@ mod tests {
         let metrics = stored_metrics(&temp.0).unwrap().unwrap();
         assert!(metrics.size_bytes > u64::try_from(model.dimension() * 4).unwrap());
 
-        let changed = vec![record("hash-2")];
+        let changed = vec![record("record-1", "hash-2")];
         assert!(
             load(
                 &temp.0,
@@ -474,5 +691,58 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn checkpoint_resumes_only_the_exact_model_and_ordered_corpus() {
+        let temp = TempPartition::new();
+        let records = vec![record("record-1", "hash-1"), record("record-2", "hash-2")];
+        let model = EmbeddingModelId::MultilingualE5Small;
+        let manifest = PartitionManifest {
+            schema_version: 2,
+            model_slug: model.slug().to_owned(),
+            model_identity: "model@revision".to_owned(),
+            artifact_manifest: "B".repeat(64),
+            runtime_contract: VECTOR_RUNTIME_CONTRACT.to_owned(),
+            dimension: model.dimension(),
+            state_generation: 9,
+            corpus_fingerprint: corpus_fingerprint(&records),
+            record_count: records.len(),
+            build_duration_ms: None,
+        };
+        let first = vec![vec![0.25; model.dimension()]];
+        append_checkpoint(&temp.0, &manifest, &records, 0, &first).unwrap();
+        let resumed = load_checkpoint(&temp.0, &manifest, &records).unwrap();
+        assert_eq!(resumed, first);
+
+        OpenOptions::new()
+            .append(true)
+            .open(temp.0.join(CHECKPOINT_VECTORS))
+            .unwrap()
+            .write_all(&123_f32.to_le_bytes())
+            .unwrap();
+        let second = vec![vec![0.75; model.dimension()]];
+        append_checkpoint(&temp.0, &manifest, &records, 1, &second).unwrap();
+        let resumed = load_checkpoint(&temp.0, &manifest, &records).unwrap();
+        assert_eq!(resumed.len(), 2);
+        assert_eq!(resumed[0], first[0]);
+        assert_eq!(resumed[1], second[0]);
+
+        let reordered = vec![records[1].clone(), records[0].clone()];
+        assert!(
+            load_checkpoint(&temp.0, &manifest, &reordered)
+                .unwrap()
+                .is_empty()
+        );
+        append_checkpoint(&temp.0, &manifest, &records, 0, &first).unwrap();
+        let mut changed = manifest.clone();
+        changed.state_generation += 1;
+        assert!(
+            load_checkpoint(&temp.0, &changed, &records)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!temp.0.join(CHECKPOINT_MANIFEST).exists());
+        assert!(!temp.0.join(CHECKPOINT_VECTORS).exists());
     }
 }

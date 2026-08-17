@@ -5,6 +5,7 @@
 //! transport, while the vector adapter owns the inference contract.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -27,7 +28,7 @@ use crate::{
     },
 };
 
-use super::workspace::product_home;
+use super::workspace::{atomic_write, product_home};
 
 pub const E5_REPOSITORY: &str = "intfloat/multilingual-e5-small";
 pub const E5_REVISION: &str = "614241f622f53c4eeff9890bdc4f31cfecc418b3";
@@ -375,6 +376,102 @@ pub fn ensure_embedding_model_with_progress(
     })
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct StoredDevicePreferences {
+    #[serde(default = "device_preferences_schema")]
+    schema: u8,
+    #[serde(default)]
+    models: BTreeMap<String, ExecutionDevice>,
+}
+
+const fn device_preferences_schema() -> u8 {
+    1
+}
+
+/// Returns the machine-local execution device assigned to one model. Missing
+/// configuration is deliberately CPU so first launch is predictable.
+pub(crate) fn configured_model_device(
+    model: EmbeddingModelId,
+) -> Result<ExecutionDevice, FastSearchError> {
+    let preferences = read_device_preferences()?;
+    Ok(preferences
+        .models
+        .get(model.slug())
+        .copied()
+        .unwrap_or_default())
+}
+
+/// Persists one model assignment outside workspace state so the choice follows
+/// this machine across workspaces and process restarts.
+pub(crate) fn set_configured_model_device(
+    model: EmbeddingModelId,
+    device: ExecutionDevice,
+) -> Result<(), FastSearchError> {
+    if model_device_capability(model, device)? != DeviceCapabilityStatus::Ready {
+        return Err(FastSearchError::new(
+            ErrorKind::CapabilityUnavailable {
+                capability: crate::domain::Capability::VectorRetrieval,
+            },
+            format!(
+                "{} недоступно для модели {} на этом устройстве",
+                device.label(),
+                model.display_name()
+            ),
+        ));
+    }
+    let mut preferences = read_device_preferences()?;
+    preferences.schema = device_preferences_schema();
+    if device == ExecutionDevice::Cpu {
+        preferences.models.remove(model.slug());
+    } else {
+        preferences.models.insert(model.slug().to_owned(), device);
+    }
+    let encoded = toml::to_string_pretty(&preferences).map_err(model_error)?;
+    atomic_write(&device_preferences_path()?, encoded.as_bytes())
+}
+
+pub(crate) fn model_device_capability(
+    model: EmbeddingModelId,
+    device: ExecutionDevice,
+) -> Result<DeviceCapabilityStatus, FastSearchError> {
+    if device == ExecutionDevice::Cpu {
+        return Ok(DeviceCapabilityStatus::Ready);
+    }
+    if matches!(
+        model,
+        EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe
+    ) {
+        return Ok(DeviceCapabilityStatus::Unavailable);
+    }
+    Ok(model_runtime_capabilities(model)?.gpu())
+}
+
+fn device_preferences_path() -> Result<PathBuf, FastSearchError> {
+    Ok(product_home()?.join("device-preferences.toml"))
+}
+
+fn read_device_preferences() -> Result<StoredDevicePreferences, FastSearchError> {
+    read_device_preferences_from(&device_preferences_path()?)
+}
+
+fn read_device_preferences_from(path: &Path) -> Result<StoredDevicePreferences, FastSearchError> {
+    if !path.is_file() {
+        return Ok(StoredDevicePreferences {
+            schema: device_preferences_schema(),
+            models: BTreeMap::new(),
+        });
+    }
+    let source = fs::read_to_string(path).map_err(model_error)?;
+    let preferences: StoredDevicePreferences = toml::from_str(&source).map_err(model_error)?;
+    if preferences.schema != device_preferences_schema() {
+        return Err(FastSearchError::new(
+            ErrorKind::StateFailure,
+            "unsupported device-preferences.toml schema",
+        ));
+    }
+    Ok(preferences)
+}
+
 /// Downloads only the catalog assets for one model. Runtime validation and
 /// ready-marker publication intentionally remain in the later sequential
 /// preparation phase so parallel network work cannot multiply RAM/VRAM use.
@@ -409,6 +506,19 @@ pub(super) fn download_embedding_model_assets_with_progress(
 pub fn model_runtime_capabilities(
     model: EmbeddingModelId,
 ) -> Result<ModelRuntimeCapabilities, FastSearchError> {
+    if matches!(
+        model,
+        EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe
+    ) {
+        return Ok(ModelRuntimeCapabilities {
+            cpu: DeviceCapabilityStatus::Ready,
+            gpu: DeviceCapabilityStatus::Unavailable,
+            gpu_backend: None,
+            gpu_detail: Some(
+                "текущий Candle-backend FastSearch выполняет эту модель только на CPU".to_owned(),
+            ),
+        });
+    }
     let (model_directory, _) = model_paths(model)?;
     let path = model_directory.join("runtime-capabilities.toml");
     if !path.is_file() {
@@ -770,6 +880,48 @@ fn model_error(error: impl std::fmt::Display) -> FastSearchError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn machine_device_preferences_default_to_cpu_and_round_trip() {
+        let root = std::env::temp_dir().join(format!(
+            "fastsearch-device-preferences-{}",
+            std::process::id()
+        ));
+        let path = root.join("device-preferences.toml");
+        let _ = fs::remove_dir_all(&root);
+        let defaults = read_device_preferences_from(&path).unwrap();
+        assert!(defaults.models.is_empty());
+
+        let mut stored = StoredDevicePreferences {
+            schema: device_preferences_schema(),
+            models: BTreeMap::new(),
+        };
+        stored.models.insert(
+            EmbeddingModelId::MultilingualE5Base.slug().to_owned(),
+            ExecutionDevice::GpuDirectMl,
+        );
+        let encoded = toml::to_string_pretty(&stored).unwrap();
+        atomic_write(&path, encoded.as_bytes()).unwrap();
+
+        let restored = read_device_preferences_from(&path).unwrap();
+        assert_eq!(
+            restored
+                .models
+                .get(EmbeddingModelId::MultilingualE5Base.slug()),
+            Some(&ExecutionDevice::GpuDirectMl)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn candle_models_report_gpu_as_unavailable_without_a_probe() {
+        assert_eq!(
+            model_runtime_capabilities(EmbeddingModelId::Qwen3Embedding06B)
+                .unwrap()
+                .gpu(),
+            DeviceCapabilityStatus::Unavailable
+        );
+    }
 
     #[test]
     fn copy_with_progress_keeps_large_transfer_buffer_off_the_thread_stack() {

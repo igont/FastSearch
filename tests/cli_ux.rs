@@ -472,8 +472,50 @@ fn index_rebuild_accepts_lowercase_russian_confirmation() {
     let text = stdout(&output);
     assert!(!text.contains("НЕКОРРЕКТНЫЙ ВВОД"), "{text}");
     assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
-    assert!(text.contains("Индекс: актуален."), "{text}");
+    assert!(text.contains("Готово: 1/1"), "{text}");
     assert!(!text.contains("этапов"), "{text}");
+}
+
+#[test]
+fn model_device_assignment_is_applied_and_survives_a_restart() {
+    let fixture = Fixture::new();
+    let capability_root = fixture
+        .catalog_home
+        .join("models")
+        .join("multilingual-e5-small");
+    fs::create_dir_all(&capability_root).unwrap();
+    fs::write(
+        capability_root.join("runtime-capabilities.toml"),
+        "schema = 1\nmodel_revision = \"614241f622f53c4eeff9890bdc4f31cfecc418b3\"\ncpu = \"ready\"\ngpu = \"ready\"\ngpu_backend = \"DirectML\"\ngpu_detail = \"test probe\"\n",
+    )
+    .unwrap();
+
+    let first = run_workspace_input(
+        &fixture,
+        "n\n\n\n1\n/model device 1 gpu\n/model\n/exit\n",
+        true,
+    );
+    assert!(first.status.success(), "{}", stderr(&first));
+    let first_text = stdout(&first);
+    assert!(
+        first_text.contains("назначено GPU · DirectML"),
+        "{first_text}"
+    );
+    let preferences =
+        fs::read_to_string(fixture.catalog_home.join("device-preferences.toml")).unwrap();
+    assert!(
+        preferences.contains("multilingual-e5-small"),
+        "{preferences}"
+    );
+    assert!(preferences.contains("gpu"), "{preferences}");
+
+    let restarted = run_workspace_input(&fixture, "1\n/model info 1\n/exit\n", true);
+    assert!(restarted.status.success(), "{}", stderr(&restarted));
+    let restarted_text = stdout(&restarted);
+    assert!(
+        restarted_text.contains("Назначено: GPU · DirectML"),
+        "{restarted_text}"
+    );
 }
 
 #[test]

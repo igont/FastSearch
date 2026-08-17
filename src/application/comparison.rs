@@ -37,6 +37,7 @@ pub(super) enum ComparisonModelStage {
         total_bytes: Option<u64>,
     },
     Validating,
+    WaitingForIndex,
     Indexing {
         completed_records: u64,
         total_records: u64,
@@ -270,6 +271,14 @@ impl<'a> ComparisonCoordinator<'a> {
         }
 
         let mut downloads = download_model_assets_in_parallel(&pending, &mut progress);
+        for (model, result) in &downloads {
+            if result.as_ref().is_some_and(Result::is_ok) {
+                progress(ComparisonUpdateProgress::Model {
+                    model: *model,
+                    stage: ComparisonModelStage::WaitingForIndex,
+                });
+            }
+        }
         for model in pending {
             let download = downloads
                 .iter_mut()

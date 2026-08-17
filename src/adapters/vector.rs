@@ -191,6 +191,7 @@ pub(super) struct ProjectedRecord {
 struct ProjectionState {
     model_root: PathBuf,
     model_id: EmbeddingModelId,
+    execution_device: ExecutionDevice,
     allow_catalog_download: bool,
     model_identity: String,
     model_manifest: Option<String>,
@@ -240,6 +241,7 @@ impl LocalE5Vector {
             model_identity,
             EmbeddingModelId::MultilingualE5Small,
             false,
+            ExecutionDevice::Cpu,
         )
     }
 
@@ -249,7 +251,23 @@ impl LocalE5Vector {
         model_identity: impl Into<String>,
         model_id: EmbeddingModelId,
     ) -> Self {
-        Self::open_internal(model_root, model_identity, model_id, true)
+        Self::open_internal(
+            model_root,
+            model_identity,
+            model_id,
+            true,
+            ExecutionDevice::Cpu,
+        )
+    }
+
+    #[must_use]
+    pub fn open_with_model_on_device(
+        model_root: impl Into<PathBuf>,
+        model_identity: impl Into<String>,
+        model_id: EmbeddingModelId,
+        device: ExecutionDevice,
+    ) -> Self {
+        Self::open_internal(model_root, model_identity, model_id, true, device)
     }
 
     fn open_internal(
@@ -257,12 +275,14 @@ impl LocalE5Vector {
         model_identity: impl Into<String>,
         model_id: EmbeddingModelId,
         allow_catalog_download: bool,
+        execution_device: ExecutionDevice,
     ) -> Self {
         Self {
             operation: Mutex::new(()),
             state: Mutex::new(ProjectionState {
                 model_root: model_root.into(),
                 model_id,
+                execution_device,
                 allow_catalog_download,
                 model_identity: model_identity.into(),
                 model_manifest: None,
@@ -283,7 +303,28 @@ impl LocalE5Vector {
         model_id: EmbeddingModelId,
         partition_root: impl Into<PathBuf>,
     ) -> Self {
-        let vector = Self::open_internal(model_root, model_identity, model_id, true);
+        let vector = Self::open_internal(
+            model_root,
+            model_identity,
+            model_id,
+            true,
+            ExecutionDevice::Cpu,
+        );
+        if let Ok(mut state) = vector.state.lock() {
+            state.partition_root = Some(partition_root.into());
+        }
+        vector
+    }
+
+    #[must_use]
+    pub fn open_persistent_with_model_on_device(
+        model_root: impl Into<PathBuf>,
+        model_identity: impl Into<String>,
+        model_id: EmbeddingModelId,
+        partition_root: impl Into<PathBuf>,
+        device: ExecutionDevice,
+    ) -> Self {
+        let vector = Self::open_internal(model_root, model_identity, model_id, true, device);
         if let Ok(mut state) = vector.state.lock() {
             state.partition_root = Some(partition_root.into());
         }
@@ -420,28 +461,43 @@ impl LocalE5Vector {
         progress: &mut dyn FnMut(VectorBuildProgress),
     ) -> Result<LifecycleStatus, FastSearchError> {
         let total = records.len() as u64;
-        progress(VectorBuildProgress::Embedding {
-            completed_records: 0,
-            total_records: total,
-        });
         let build_started = Instant::now();
-        let (root, identity, model_id, allow_catalog_download) = {
+        let (root, identity, model_id, allow_catalog_download, partition_root, device) = {
             let state = self.lock()?;
             (
                 state.model_root.clone(),
                 state.model_identity.clone(),
                 state.model_id,
                 state.allow_catalog_download,
+                state.partition_root.clone(),
+                state.execution_device,
             )
         };
-        let mut verified =
-            VerifiedProvider::acquire(&root, model_id, false, allow_catalog_download)
-                .map_err(|error| self.provider_failed(state_generation, error))?;
-        let manifest = verified.manifest.clone();
+        let mut verified = VerifiedProvider::acquire_on_device(
+            &root,
+            model_id,
+            false,
+            allow_catalog_download,
+            device,
+        )
+        .map_err(|error| self.provider_failed(state_generation, error))?;
+        let artifact_manifest = verified.manifest.clone();
+        let partition_manifest = partition::PartitionManifest {
+            schema_version: 2,
+            model_slug: model_id.slug().to_owned(),
+            model_identity: identity.clone(),
+            artifact_manifest: artifact_manifest.clone(),
+            runtime_contract: partition::VECTOR_RUNTIME_CONTRACT.to_owned(),
+            dimension: model_id.dimension(),
+            state_generation,
+            corpus_fingerprint: partition::corpus_fingerprint(records),
+            record_count: records.len(),
+            build_duration_ms: None,
+        };
         let unchanged = {
             let state = self.lock()?;
             state.freshness == IndexFreshness::Current
-                && state.model_manifest.as_deref() == Some(&manifest)
+                && state.model_manifest.as_deref() == Some(&artifact_manifest)
                 && state.records.len() == records.len()
                 && records.iter().all(|record| {
                     state
@@ -453,6 +509,9 @@ impl LocalE5Vector {
                 })
         };
         if unchanged {
+            if let Some(partition_root) = &partition_root {
+                let _ = partition::clear_checkpoint(partition_root);
+            }
             progress(VectorBuildProgress::Embedding {
                 completed_records: total,
                 total_records: total,
@@ -462,14 +521,38 @@ impl LocalE5Vector {
             state.projection_generation = Some(state_generation);
             return Ok(status(&state));
         }
-        let vectors = verified
-            .embed_records_with_progress(records, &mut |completed, total| {
-                progress(VectorBuildProgress::Embedding {
-                    completed_records: completed as u64,
-                    total_records: total as u64,
-                });
-            })
+        let mut vectors = if let Some(partition_root) = &partition_root {
+            partition::load_checkpoint(partition_root, &partition_manifest, records)
+                .map_err(|error| self.provider_failed(state_generation, error))?
+        } else {
+            Vec::new()
+        };
+        let completed_records = vectors.len();
+        let additional = verified
+            .embed_records_from_with_progress(
+                records,
+                completed_records,
+                &mut |completed, total| {
+                    progress(VectorBuildProgress::Embedding {
+                        completed_records: completed as u64,
+                        total_records: total as u64,
+                    });
+                },
+                &mut |completed_before, chunk| {
+                    if let Some(partition_root) = &partition_root {
+                        partition::append_checkpoint(
+                            partition_root,
+                            &partition_manifest,
+                            records,
+                            completed_before,
+                            chunk,
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
             .map_err(|error| self.provider_failed(state_generation, error))?;
+        vectors.extend(additional);
         let mut next = BTreeMap::new();
         for (record, vector) in records.iter().cloned().zip(vectors) {
             if next.contains_key(record.id().as_str()) {
@@ -487,7 +570,7 @@ impl LocalE5Vector {
                 },
             );
         }
-        let partition_root = {
+        {
             let mut state = self.lock()?;
             // Reconfiguration during embedding is a causal stale result, never Current.
             if state.model_identity != identity
@@ -496,33 +579,17 @@ impl LocalE5Vector {
                 || state
                     .model_manifest
                     .as_deref()
-                    .is_some_and(|current| current != manifest)
+                    .is_some_and(|current| current != artifact_manifest)
             {
                 state.freshness = IndexFreshness::Stale;
                 state.detail = "model identity changed while projection was building".to_owned();
                 return Ok(status(&state));
             }
-            state.partition_root.clone()
-        };
-        if let Some(partition_root) = partition_root {
+        }
+        if let Some(partition_root) = &partition_root {
             progress(VectorBuildProgress::Saving);
-            partition::save(
-                &partition_root,
-                &partition::PartitionManifest {
-                    schema_version: 2,
-                    model_slug: model_id.slug().to_owned(),
-                    model_identity: identity.clone(),
-                    artifact_manifest: manifest.clone(),
-                    runtime_contract: partition::VECTOR_RUNTIME_CONTRACT.to_owned(),
-                    dimension: model_id.dimension(),
-                    state_generation,
-                    corpus_fingerprint: partition::corpus_fingerprint(records),
-                    record_count: records.len(),
-                    build_duration_ms: None,
-                },
-                &next,
-                build_started,
-            )?;
+            partition::save(partition_root, &partition_manifest, &next, build_started)?;
+            let _ = partition::clear_checkpoint(partition_root);
         }
         let mut state = self.lock()?;
         if state.model_identity != identity
@@ -534,7 +601,7 @@ impl LocalE5Vector {
             return Ok(status(&state));
         }
         state.records = next;
-        state.model_manifest = Some(manifest);
+        state.model_manifest = Some(artifact_manifest);
         state.state_generation = state_generation;
         state.projection_generation = Some(state_generation);
         state.freshness = IndexFreshness::Current;
@@ -665,6 +732,7 @@ impl VectorRetrieval for LocalE5Vector {
             projection_generation,
             declared_identity,
             manifest,
+            device,
         ) = {
             let state = self.lock()?;
             (
@@ -677,22 +745,28 @@ impl VectorRetrieval for LocalE5Vector {
                 state.projection_generation,
                 state.model_identity.clone(),
                 state.model_manifest.clone(),
+                state.execution_device,
             )
         };
         if freshness != IndexFreshness::Current {
             return Ok(SearchResponse::with_freshness(Vec::new(), freshness));
         }
-        let mut verified =
-            match VerifiedProvider::acquire(&root, model_id, false, allow_catalog_download) {
-                Ok(value) => value,
-                Err(error) => {
-                    self.provider_failed(generation, error);
-                    return Ok(SearchResponse::with_freshness(
-                        Vec::new(),
-                        IndexFreshness::Degraded,
-                    ));
-                }
-            };
+        let mut verified = match VerifiedProvider::acquire_on_device(
+            &root,
+            model_id,
+            false,
+            allow_catalog_download,
+            device,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.provider_failed(generation, error);
+                return Ok(SearchResponse::with_freshness(
+                    Vec::new(),
+                    IndexFreshness::Degraded,
+                ));
+            }
+        };
         if manifest.as_deref() != Some(&verified.manifest) {
             let mut state = self.lock()?;
             state.freshness = IndexFreshness::Stale;
@@ -845,6 +919,76 @@ mod security_tests {
             ContentHash::parse("race-v1").unwrap(),
         )
         .unwrap()
+    }
+
+    fn resume_record(index: usize) -> CanonicalRecord {
+        CanonicalRecord::new(
+            StableId::parse(format!("resume-{index}")).unwrap(),
+            RecordKind::MarkdownSection,
+            SourceLocator::whole_file(format!("resume-{index}.md")).unwrap(),
+            format!("Resume {index}"),
+            format!("durable vector checkpoint record number {index}"),
+            BTreeMap::new(),
+            Vec::new(),
+            ContentHash::parse(format!("resume-hash-{index}")).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    #[ignore = "requires FASTSEARCH_E5_MODEL_ROOT local-only cache"]
+    fn interrupted_vectorization_resumes_from_the_last_durable_record_block() {
+        let model_root = PathBuf::from(std::env::var("FASTSEARCH_E5_MODEL_ROOT").unwrap());
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let partition = TempTree(std::env::temp_dir().join(format!(
+            "fastsearch-vector-resume-{}-{unique}",
+            std::process::id()
+        )));
+        let records = (0..16).map(resume_record).collect::<Vec<_>>();
+        let model = EmbeddingModelId::MultilingualE5Small;
+        let identity = "multilingual-e5-small@resume-test";
+        let first = LocalE5Vector::open_persistent_with_model(
+            &model_root,
+            identity,
+            model,
+            partition.0.clone(),
+        );
+        verified_provider::install_verify_load_hook(|| {
+            verified_provider::install_verify_load_hook(|| {
+                panic!("simulated process interruption after the first durable block");
+            });
+        });
+        let interrupted =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| first.apply(&records, 1)));
+        assert!(interrupted.is_err());
+        assert!(partition.0.join("checkpoint.toml").is_file());
+        assert!(partition.0.join("checkpoint-vectors.bin").is_file());
+
+        let resumed = LocalE5Vector::open_persistent_with_model(
+            &model_root,
+            identity,
+            model,
+            partition.0.clone(),
+        );
+        let mut first_position = None;
+        let status = resumed
+            .apply_with_progress(&records, 1, &mut |event| {
+                if let VectorBuildProgress::Embedding {
+                    completed_records, ..
+                } = event
+                {
+                    first_position.get_or_insert(completed_records);
+                }
+            })
+            .unwrap();
+        assert_eq!(first_position, Some(8));
+        assert_eq!(status.freshness(), IndexFreshness::Current);
+        assert!(!partition.0.join("checkpoint.toml").exists());
+        assert!(!partition.0.join("checkpoint-vectors.bin").exists());
+        assert!(partition.0.join("manifest.toml").is_file());
     }
 
     #[cfg(windows)]

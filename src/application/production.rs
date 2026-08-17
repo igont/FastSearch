@@ -17,8 +17,8 @@ use crate::{
     application::fusion::{ChannelCandidates, FusionCoordinator},
     domain::{
         BackendKind, CanonicalRecord, Capability, CapabilityStatus, EmbeddingModelId, ErrorKind,
-        FastSearchError, IndexFreshness, LifecycleStatus, LogicalRootId, RelatedQuery,
-        RetrievalChannel, SearchHit, SearchQuery, SearchResponse, StableId,
+        ExecutionDevice, FastSearchError, IndexFreshness, LifecycleStatus, LogicalRootId,
+        RelatedQuery, RetrievalChannel, SearchHit, SearchQuery, SearchResponse, StableId,
     },
     ports::{
         AgentSurface, CodeMapPort, LexicalRetrieval, SourcePort, StateChange, StateStore,
@@ -624,6 +624,7 @@ pub struct ProductionConfig {
     service_root: PathBuf,
     e5_root: Option<PathBuf>,
     embedding_model: EmbeddingModelId,
+    execution_device: ExecutionDevice,
     workspace_root: Option<PathBuf>,
     workspace_layout: bool,
 }
@@ -653,6 +654,7 @@ impl ProductionConfig {
             service_root: service_root.into(),
             e5_root: None,
             embedding_model: EmbeddingModelId::MultilingualE5Small,
+            execution_device: ExecutionDevice::Cpu,
             workspace_root: None,
             workspace_layout: false,
         }
@@ -676,6 +678,7 @@ impl ProductionConfig {
             service_root: service_root.into(),
             e5_root: None,
             embedding_model: EmbeddingModelId::MultilingualE5Small,
+            execution_device: ExecutionDevice::Cpu,
             workspace_root: Some(workspace_root.into()),
             workspace_layout: true,
         }
@@ -696,6 +699,12 @@ impl ProductionConfig {
     ) -> Self {
         self.e5_root = Some(model_root.into());
         self.embedding_model = model;
+        self
+    }
+
+    #[must_use]
+    pub fn with_execution_device(mut self, device: ExecutionDevice) -> Self {
+        self.execution_device = device;
         self
     }
 }
@@ -1000,6 +1009,7 @@ impl ProductionRuntime {
     pub fn open(config: ProductionConfig) -> Result<Self, FastSearchError> {
         let workspace_layout = config.workspace_layout;
         let embedding_model = config.embedding_model;
+        let execution_device = config.execution_device;
         let document_roots = canonical_roots(&config.document_roots, "document root")?;
         let code_roots = canonical_roots(&config.code_roots, "code root")?;
         let source_paths = document_roots
@@ -1080,17 +1090,19 @@ impl ProductionRuntime {
 
         let state = SqliteStateStore::open(service.service_root().join("state.sqlite"))?;
         let vector = if workspace_layout {
-            LocalE5Vector::open_persistent_with_model(
+            LocalE5Vector::open_persistent_with_model_on_device(
                 model_root,
                 super::model_cache::model_identity(embedding_model),
                 embedding_model,
                 model_partition_root(service.service_root(), embedding_model),
+                execution_device,
             )
         } else {
-            LocalE5Vector::open_with_model(
+            LocalE5Vector::open_with_model_on_device(
                 model_root,
                 super::model_cache::model_identity(embedding_model),
                 embedding_model,
+                execution_device,
             )
         };
         if workspace_layout && vector_configured {
@@ -1206,11 +1218,12 @@ impl ProductionRuntime {
         }
         let records = self.state.all_records()?;
         let generation = self.state.durable_generation()?;
-        let vector = LocalE5Vector::open_persistent_with_model(
+        let vector = LocalE5Vector::open_persistent_with_model_on_device(
             model_root,
             super::model_cache::model_identity(model),
             model,
             model_partition_root(self.service.service_root(), model),
+            super::model_cache::configured_model_device(model)?,
         );
         vector.restore(&records, generation)?;
         vector.apply_with_progress(&records, generation, &mut progress)
@@ -1226,11 +1239,12 @@ impl ProductionRuntime {
     ) -> Result<SearchResponse, FastSearchError> {
         let records = self.state.all_records()?;
         let generation = self.state.durable_generation()?;
-        let vector = LocalE5Vector::open_persistent_with_model(
+        let vector = LocalE5Vector::open_persistent_with_model_on_device(
             model_root,
             super::model_cache::model_identity(model),
             model,
             model_partition_root(self.service.service_root(), model),
+            super::model_cache::configured_model_device(model)?,
         );
         vector.restore(&records, generation)?;
         vector.search(query)

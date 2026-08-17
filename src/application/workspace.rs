@@ -881,7 +881,7 @@ pub(crate) fn product_home() -> Result<PathBuf, FastSearchError> {
     ))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FastSearchError> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FastSearchError> {
     let parent = path.parent().ok_or_else(|| {
         FastSearchError::new(ErrorKind::InvalidContent, "storage file has no parent")
     })?;

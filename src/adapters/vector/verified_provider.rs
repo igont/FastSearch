@@ -52,6 +52,7 @@ enum ProviderRuntime {
 // to padding heterogeneous source documents to the longest text in a batch.
 const ONNX_INDEX_BATCH_SIZE: usize = 1;
 const PROGRESS_CHUNK_SIZE: usize = 8;
+type CheckpointCallback<'a> = dyn FnMut(usize, &[Vec<f32>]) -> Result<(), FastSearchError> + 'a;
 
 pub(super) struct VerifiedProvider {
     model_id: EmbeddingModelId,
@@ -206,32 +207,42 @@ impl VerifiedProvider {
         })
     }
 
-    pub(super) fn embed_records_with_progress(
+    pub(super) fn embed_records_from_with_progress(
         &mut self,
         records: &[CanonicalRecord],
+        completed_records: usize,
         progress: &mut dyn FnMut(usize, usize),
+        checkpoint: &mut CheckpointCallback<'_>,
     ) -> Result<Vec<Vec<f32>>, FastSearchError> {
-        let texts = records
-            .iter()
-            .map(|record| {
-                let text = format!("{}\n{}", record.title(), record.searchable_content());
-                match self.model_id {
-                    EmbeddingModelId::MultilingualE5Small
-                    | EmbeddingModelId::MultilingualE5Base
-                    | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
-                    EmbeddingModelId::Qwen3Embedding06B => text,
-                    EmbeddingModelId::NomicEmbedTextV2Moe => {
-                        format!("search_document: {text}")
+        if completed_records > records.len() {
+            return Err(provider_error(
+                "vector checkpoint exceeds the current record count",
+            ));
+        }
+        let total = records.len();
+        progress(completed_records, total);
+        let mut vectors = Vec::with_capacity(total - completed_records);
+        for chunk in records[completed_records..].chunks(PROGRESS_CHUNK_SIZE) {
+            let texts = chunk
+                .iter()
+                .map(|record| {
+                    let text = format!("{}\n{}", record.title(), record.searchable_content());
+                    match self.model_id {
+                        EmbeddingModelId::MultilingualE5Small
+                        | EmbeddingModelId::MultilingualE5Base
+                        | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
+                        EmbeddingModelId::Qwen3Embedding06B => text,
+                        EmbeddingModelId::NomicEmbedTextV2Moe => {
+                            format!("search_document: {text}")
+                        }
                     }
-                }
-            })
-            .collect::<Vec<_>>();
-        let total = texts.len();
-        progress(0, total);
-        let mut vectors = Vec::with_capacity(total);
-        for chunk in texts.chunks(PROGRESS_CHUNK_SIZE) {
-            vectors.extend(self.embed_formatted(chunk, None)?);
-            progress(vectors.len(), total);
+                })
+                .collect::<Vec<_>>();
+            let embedded = self.embed_formatted(&texts, None)?;
+            let completed_before = completed_records + vectors.len();
+            checkpoint(completed_before, &embedded)?;
+            vectors.extend(embedded);
+            progress(completed_records + vectors.len(), total);
         }
         Ok(vectors)
     }
