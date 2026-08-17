@@ -375,6 +375,35 @@ pub fn ensure_embedding_model_with_progress(
     })
 }
 
+/// Downloads only the catalog assets for one model. Runtime validation and
+/// ready-marker publication intentionally remain in the later sequential
+/// preparation phase so parallel network work cannot multiply RAM/VRAM use.
+pub(super) fn download_embedding_model_assets_with_progress(
+    model: EmbeddingModelId,
+    mut progress: impl FnMut(ModelProvisionProgress),
+) -> Result<(), FastSearchError> {
+    let (model_directory, root) = model_paths(model)?;
+    fs::create_dir_all(&model_directory).map_err(model_error)?;
+    fs::create_dir_all(&root).map_err(model_error)?;
+    let marker = model_directory.join(".ready");
+    let install_lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(model_directory.join(".install.lock"))
+        .map_err(model_error)?;
+    install_lock.lock_exclusive().map_err(model_error)?;
+
+    if marker.is_file() && cached_model_artifacts_are_present(model, &root) {
+        return Ok(());
+    }
+    if marker.is_file() {
+        fs::remove_file(marker).map_err(model_error)?;
+    }
+    provision_catalog_assets(model, &root, &mut progress)
+}
+
 /// Returns persisted machine-local execution capability evidence. A missing
 /// probe is intentionally represented as unknown rather than guessed.
 pub fn model_runtime_capabilities(
@@ -560,6 +589,11 @@ fn download_asset_with_resume(
         let offset = fs::metadata(&partial)
             .map(|metadata| metadata.len())
             .unwrap_or(0);
+        progress(ModelProvisionProgress {
+            completed_bytes: completed_before + offset.min(asset.size),
+            total_bytes,
+            asset: asset.path.to_owned(),
+        });
         let mut request = client.get(&url);
         if offset > 0 {
             request = request.header(RANGE, format!("bytes={offset}-"));
@@ -648,7 +682,7 @@ fn copy_with_progress(
     total_bytes: u64,
     progress: &mut dyn FnMut(ModelProvisionProgress),
 ) -> io::Result<()> {
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; 1024 * 1024];
     let mut asset_completed = starting_length;
     let mut last_reported = starting_length;
     loop {
@@ -736,6 +770,42 @@ fn model_error(error: impl std::fmt::Display) -> FastSearchError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_with_progress_keeps_large_transfer_buffer_off_the_thread_stack() {
+        const PAYLOAD_SIZE: usize = 2 * 1024 * 1024;
+
+        let worker = thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut input = io::Cursor::new(vec![7_u8; PAYLOAD_SIZE]);
+                let mut output = Vec::with_capacity(PAYLOAD_SIZE);
+                let asset = ModelAsset {
+                    path: "model.onnx",
+                    size: PAYLOAD_SIZE as u64,
+                };
+                let mut progress = Vec::new();
+
+                copy_with_progress(
+                    &mut input,
+                    &mut output,
+                    0,
+                    asset,
+                    0,
+                    asset.size,
+                    &mut |event| progress.push(event.completed_bytes()),
+                )
+                .expect("copy must fit on a deliberately small thread stack");
+
+                assert_eq!(output.len(), PAYLOAD_SIZE);
+                assert_eq!(output.first(), Some(&7));
+                assert_eq!(output.last(), Some(&7));
+                assert_eq!(progress, [asset.size]);
+            })
+            .expect("small-stack worker must start");
+
+        worker.join().expect("copy must not overflow the stack");
+    }
 
     #[test]
     fn catalog_is_complete_unique_and_dimensioned() {

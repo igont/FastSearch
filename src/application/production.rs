@@ -12,7 +12,7 @@ use crate::{
         source::FilesystemSource,
         state::SqliteStateStore,
         symbols::SymbolSource,
-        vector::LocalE5Vector,
+        vector::{LocalE5Vector, VectorBuildProgress},
     },
     application::fusion::{ChannelCandidates, FusionCoordinator},
     domain::{
@@ -394,6 +394,11 @@ mod security {
 
     #[cfg(windows)]
     struct OwnedDirectoryHandle(HANDLE);
+    // SAFETY: a Windows kernel HANDLE is process-wide and may be used or closed
+    // from any thread. This wrapper has exclusive ownership, is never cloned,
+    // and closes the handle exactly once from Drop after the move completes.
+    #[cfg(windows)]
+    unsafe impl Send for OwnedDirectoryHandle {}
     #[cfg(windows)]
     impl Drop for OwnedDirectoryHandle {
         fn drop(&mut self) {
@@ -723,10 +728,19 @@ pub(super) enum IndexingStage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum IndexingWorkStage {
+    Vectorizing,
+    Saving,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct IndexingProgress {
     pub(super) completed: u64,
     pub(super) total: u64,
     pub(super) stage: IndexingStage,
+    pub(super) work_completed: Option<u64>,
+    pub(super) work_total: Option<u64>,
+    pub(super) work_stage: Option<IndexingWorkStage>,
 }
 
 impl ModelPartitionMetrics {
@@ -772,6 +786,9 @@ impl IndexingCoordinator<'_> {
             completed: 0,
             total,
             stage: IndexingStage::Sources,
+            work_completed: None,
+            work_total: None,
+            work_stage: None,
         });
         let mut snapshots = Vec::new();
         for source in self.documents {
@@ -791,12 +808,18 @@ impl IndexingCoordinator<'_> {
             completed: 1,
             total,
             stage: IndexingStage::State,
+            work_completed: None,
+            work_total: None,
+            work_stage: None,
         });
         let changes = self.state.reconcile_snapshots(&snapshots)?;
         progress(IndexingProgress {
             completed: 2,
             total,
             stage: IndexingStage::Lexical,
+            work_completed: None,
+            work_total: None,
+            work_stage: None,
         });
         let lexical = if rebuild {
             self.lexical
@@ -822,12 +845,35 @@ impl IndexingCoordinator<'_> {
                 completed: 3,
                 total,
                 stage: IndexingStage::Vector,
+                work_completed: Some(0),
+                work_total: Some(records.len() as u64),
+                work_stage: Some(IndexingWorkStage::Vectorizing),
             });
-            if rebuild {
-                self.vector.rebuild(&records, changes.durable_generation())
-            } else {
-                self.vector.apply(&records, changes.durable_generation())
-            }?;
+            self.vector.apply_with_progress(
+                &records,
+                changes.durable_generation(),
+                &mut |event| {
+                    let (work_completed, work_total, work_stage) = match event {
+                        VectorBuildProgress::Embedding {
+                            completed_records,
+                            total_records,
+                        } => (
+                            Some(completed_records),
+                            Some(total_records),
+                            IndexingWorkStage::Vectorizing,
+                        ),
+                        VectorBuildProgress::Saving => (None, None, IndexingWorkStage::Saving),
+                    };
+                    progress(IndexingProgress {
+                        completed: 3,
+                        total,
+                        stage: IndexingStage::Vector,
+                        work_completed,
+                        work_total,
+                        work_stage: Some(work_stage),
+                    });
+                },
+            )?;
         }
         Ok(lexical)
     }
@@ -1143,6 +1189,15 @@ impl ProductionRuntime {
         model: EmbeddingModelId,
         model_root: &Path,
     ) -> Result<LifecycleStatus, FastSearchError> {
+        self.build_model_partition_with_progress(model, model_root, |_| {})
+    }
+
+    pub(super) fn build_model_partition_with_progress(
+        &self,
+        model: EmbeddingModelId,
+        model_root: &Path,
+        mut progress: impl FnMut(VectorBuildProgress),
+    ) -> Result<LifecycleStatus, FastSearchError> {
         if !self.workspace_layout {
             return Err(FastSearchError::new(
                 ErrorKind::InvalidContent,
@@ -1158,7 +1213,7 @@ impl ProductionRuntime {
             model_partition_root(self.service.service_root(), model),
         );
         vector.restore(&records, generation)?;
-        vector.apply(&records, generation)
+        vector.apply_with_progress(&records, generation, &mut progress)
     }
 
     /// Executes vector-only retrieval for one already admitted model

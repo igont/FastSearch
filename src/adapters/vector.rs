@@ -400,15 +400,30 @@ impl LocalE5Vector {
         records: &[CanonicalRecord],
         state_generation: u64,
     ) -> Result<LifecycleStatus, FastSearchError> {
+        self.apply_with_progress(records, state_generation, &mut |_| {})
+    }
+
+    pub(crate) fn apply_with_progress(
+        &self,
+        records: &[CanonicalRecord],
+        state_generation: u64,
+        progress: &mut dyn FnMut(VectorBuildProgress),
+    ) -> Result<LifecycleStatus, FastSearchError> {
         let _operation = self.lock_operation()?;
-        self.apply_locked(records, state_generation)
+        self.apply_locked(records, state_generation, progress)
     }
 
     fn apply_locked(
         &self,
         records: &[CanonicalRecord],
         state_generation: u64,
+        progress: &mut dyn FnMut(VectorBuildProgress),
     ) -> Result<LifecycleStatus, FastSearchError> {
+        let total = records.len() as u64;
+        progress(VectorBuildProgress::Embedding {
+            completed_records: 0,
+            total_records: total,
+        });
         let build_started = Instant::now();
         let (root, identity, model_id, allow_catalog_download) = {
             let state = self.lock()?;
@@ -438,13 +453,22 @@ impl LocalE5Vector {
                 })
         };
         if unchanged {
+            progress(VectorBuildProgress::Embedding {
+                completed_records: total,
+                total_records: total,
+            });
             let mut state = self.lock()?;
             state.state_generation = state_generation;
             state.projection_generation = Some(state_generation);
             return Ok(status(&state));
         }
         let vectors = verified
-            .embed_records(records)
+            .embed_records_with_progress(records, &mut |completed, total| {
+                progress(VectorBuildProgress::Embedding {
+                    completed_records: completed as u64,
+                    total_records: total as u64,
+                });
+            })
             .map_err(|error| self.provider_failed(state_generation, error))?;
         let mut next = BTreeMap::new();
         for (record, vector) in records.iter().cloned().zip(vectors) {
@@ -481,6 +505,7 @@ impl LocalE5Vector {
             state.partition_root.clone()
         };
         if let Some(partition_root) = partition_root {
+            progress(VectorBuildProgress::Saving);
             partition::save(
                 &partition_root,
                 &partition::PartitionManifest {
@@ -616,6 +641,15 @@ impl LocalE5Vector {
             )
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VectorBuildProgress {
+    Embedding {
+        completed_records: u64,
+        total_records: u64,
+    },
+    Saving,
 }
 
 impl VectorRetrieval for LocalE5Vector {

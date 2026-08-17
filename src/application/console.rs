@@ -1,9 +1,12 @@
 mod comparison;
 mod guidance;
+mod index;
 mod model;
+mod progress;
 
 use comparison::{ComparisonTransition, run_comparison};
 use guidance as ui_guidance;
+use index::run_index;
 use model::provision_model_with_ui;
 
 use std::{
@@ -30,7 +33,6 @@ use crate::{
 };
 
 use super::comparison::{ComparisonModelStage, ComparisonSharedStage, ComparisonUpdateProgress};
-use super::production::{IndexingProgress, IndexingStage};
 use super::{
     ComparisonCoordinator, ComparisonReadiness, ComparisonRun, MODEL_CATALOG, ProductionRuntime,
     cli::{CommandOutcome, human_outcome_document, presenters::human_freshness},
@@ -1029,67 +1031,6 @@ fn open_workspace_runtime<R: BufRead>(
     Ok(Some(runtime))
 }
 
-fn run_index<R: BufRead>(
-    chat: &mut ChatSession<'_, R>,
-    runtime: Option<&mut ProductionRuntime>,
-    rebuild: bool,
-) -> io::Result<()> {
-    let Some(runtime) = runtime else {
-        return show_no_sources(chat);
-    };
-    let operation = if rebuild {
-        "Перестроение индекса"
-    } else {
-        "Обновление индекса"
-    };
-    let mut output_error = None;
-    let mut progress_total = 1;
-    let result = {
-        let mut show_progress = |progress: IndexingProgress| {
-            progress_total = progress.total;
-            if output_error.is_some() {
-                return;
-            }
-            let stage = match progress.stage {
-                IndexingStage::Sources => "FastSearch читает исходные документы и код…",
-                IndexingStage::State => "FastSearch применяет изменения корпуса…",
-                IndexingStage::Lexical => "FastSearch строит полнотекстовый индекс…",
-                IndexingStage::Vector => "FastSearch строит векторный индекс…",
-            };
-            output_error = chat
-                .show_typed(
-                    &ProgressDocument::new(operation, ProgressState::Running, stage).with_progress(
-                        ProgressValue::new(progress.completed, progress.total).with_unit("этапов"),
-                    ),
-                )
-                .err();
-        };
-        if rebuild {
-            runtime.rebuild_with_progress(&mut show_progress)
-        } else {
-            runtime.index_with_progress(&mut show_progress)
-        }
-    };
-    if let Some(error) = output_error {
-        return Err(error);
-    }
-    match result {
-        Ok(status) => chat.show_typed(
-            &ProgressDocument::new(operation, ProgressState::Completed, "Операция завершена.")
-                .with_progress(
-                    ProgressValue::new(progress_total, progress_total).with_unit("этапов"),
-                )
-                .with_detail(format!("Индекс: {}.", human_freshness(status.freshness()))),
-        ),
-        Err(error) => show_error(
-            chat,
-            "INDEX_FAILED",
-            error.message(),
-            "Проверьте sources и повторите операцию.",
-        ),
-    }
-}
-
 fn handle_navigation<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
     runtime: Option<&ProductionRuntime>,
@@ -1565,8 +1506,11 @@ fn is_exit(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{path::Path, time::Duration};
 
+    use crate::application::production::{IndexingProgress, IndexingStage, IndexingWorkStage};
+
+    use super::index::indexing_progress_document;
     use super::{
         contour_summary, display_path, display_relative_path, relative_match_percent,
         result_excerpt,
@@ -1593,6 +1537,27 @@ mod tests {
         assert_eq!(contour_summary(0, 0), "не настроены");
         assert_eq!(contour_summary(3, 0), "документация · 3 корней");
         assert_eq!(contour_summary(3, 2), "документация · код · 3 + 2 корней");
+    }
+
+    #[test]
+    fn indexing_heartbeat_reports_how_long_status_has_not_changed() {
+        let document = indexing_progress_document(
+            "Обновление индекса",
+            IndexingProgress {
+                completed: 3,
+                total: 4,
+                stage: IndexingStage::Vector,
+                work_completed: Some(0),
+                work_total: Some(100),
+                work_stage: Some(IndexingWorkStage::Vectorizing),
+            },
+            None,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        );
+        let detail = document.detail.unwrap();
+        assert!(detail.contains("прошло 10 сек"), "{detail}");
+        assert!(detail.contains("Статус не менялся 10 сек"), "{detail}");
     }
 
     #[test]

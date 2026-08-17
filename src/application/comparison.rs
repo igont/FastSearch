@@ -4,9 +4,10 @@
 //! reuses the shared canonical/lexical state, owns no rendering, and never
 //! changes the workspace model selection.
 
-use std::time::Instant;
+use std::{sync::mpsc, thread, time::Instant};
 
 use crate::{
+    adapters::vector::VectorBuildProgress,
     domain::{
         EmbeddingModelId, FastSearchError, IndexFreshness, LifecycleStatus, SearchHit, SearchQuery,
     },
@@ -14,8 +15,9 @@ use crate::{
 };
 
 use super::{
-    ModelPartitionMetrics, ProductionRuntime, embedding_model_cache_status,
+    ModelPartitionMetrics, ModelProvisionProgress, ProductionRuntime, embedding_model_cache_status,
     ensure_embedding_model_with_progress,
+    model_cache::download_embedding_model_assets_with_progress,
     production::{IndexingProgress, IndexingStage},
 };
 
@@ -34,7 +36,12 @@ pub(super) enum ComparisonModelStage {
         completed_bytes: Option<u64>,
         total_bytes: Option<u64>,
     },
-    Indexing,
+    Validating,
+    Indexing {
+        completed_records: u64,
+        total_records: u64,
+    },
+    Saving,
     Completed {
         reused: bool,
     },
@@ -57,6 +64,17 @@ pub(super) enum ComparisonUpdateProgress {
     Model {
         model: EmbeddingModelId,
         stage: ComparisonModelStage,
+    },
+}
+
+enum DownloadMessage {
+    Progress {
+        model: EmbeddingModelId,
+        event: ModelProvisionProgress,
+    },
+    Finished {
+        model: EmbeddingModelId,
+        result: Result<(), FastSearchError>,
     },
 }
 
@@ -209,6 +227,7 @@ impl<'a> ComparisonCoordinator<'a> {
         }
         progress(ComparisonUpdateProgress::SharedCompleted);
         let mut outcomes = Vec::with_capacity(EmbeddingModelId::ALL.len());
+        let mut pending = Vec::new();
         for model in EmbeddingModelId::ALL {
             progress(ComparisonUpdateProgress::Model {
                 model,
@@ -247,24 +266,48 @@ impl<'a> ComparisonCoordinator<'a> {
                     total_bytes: None,
                 },
             });
-            let availability =
-                ensure_embedding_model_with_progress(model, show_download_progress, |event| {
-                    progress(ComparisonUpdateProgress::Model {
-                        model,
-                        stage: ComparisonModelStage::Downloading {
-                            asset: Some(event.asset().to_owned()),
-                            completed_bytes: Some(event.completed_bytes()),
-                            total_bytes: Some(event.total_bytes()),
-                        },
-                    });
-                });
-            let result = availability.and_then(|availability| {
+            pending.push(model);
+        }
+
+        let mut downloads = download_model_assets_in_parallel(&pending, &mut progress);
+        for model in pending {
+            let download = downloads
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == model)
+                .and_then(|(_, result)| result.take())
+                .expect("parallel downloader returns one result per requested model");
+            let result = download.and_then(|()| {
                 progress(ComparisonUpdateProgress::Model {
                     model,
-                    stage: ComparisonModelStage::Indexing,
+                    stage: ComparisonModelStage::Validating,
                 });
-                self.runtime
-                    .build_model_partition(model, availability.root())
+                ensure_embedding_model_with_progress(model, show_download_progress, |_| {})
+            });
+            let result = result.and_then(|availability| {
+                progress(ComparisonUpdateProgress::Model {
+                    model,
+                    stage: ComparisonModelStage::Indexing {
+                        completed_records: 0,
+                        total_records: 0,
+                    },
+                });
+                self.runtime.build_model_partition_with_progress(
+                    model,
+                    availability.root(),
+                    |event| {
+                        let stage = match event {
+                            VectorBuildProgress::Embedding {
+                                completed_records,
+                                total_records,
+                            } => ComparisonModelStage::Indexing {
+                                completed_records,
+                                total_records,
+                            },
+                            VectorBuildProgress::Saving => ComparisonModelStage::Saving,
+                        };
+                        progress(ComparisonUpdateProgress::Model { model, stage });
+                    },
+                )
             });
             match result {
                 Ok(status) => {
@@ -293,6 +336,12 @@ impl<'a> ComparisonCoordinator<'a> {
                 }
             }
         }
+        outcomes.sort_by_key(|outcome| {
+            EmbeddingModelId::ALL
+                .iter()
+                .position(|model| *model == outcome.model)
+                .unwrap_or(EmbeddingModelId::ALL.len())
+        });
         Ok(outcomes)
     }
 
@@ -356,6 +405,68 @@ impl<'a> ComparisonCoordinator<'a> {
     }
 }
 
+fn download_model_assets_in_parallel(
+    models: &[EmbeddingModelId],
+    progress: &mut impl FnMut(ComparisonUpdateProgress),
+) -> Vec<(EmbeddingModelId, Option<Result<(), FastSearchError>>)> {
+    run_model_downloads_in_parallel(models, progress, |model, report| {
+        download_embedding_model_assets_with_progress(model, report)
+    })
+}
+
+fn run_model_downloads_in_parallel(
+    models: &[EmbeddingModelId],
+    progress: &mut impl FnMut(ComparisonUpdateProgress),
+    download: impl Fn(
+        EmbeddingModelId,
+        &mut dyn FnMut(ModelProvisionProgress),
+    ) -> Result<(), FastSearchError>
+    + Sync,
+) -> Vec<(EmbeddingModelId, Option<Result<(), FastSearchError>>)> {
+    let (sender, receiver) = mpsc::channel();
+    let mut results = models
+        .iter()
+        .copied()
+        .map(|model| (model, None))
+        .collect::<Vec<_>>();
+
+    thread::scope(|scope| {
+        for model in models.iter().copied() {
+            let sender = sender.clone();
+            let download = &download;
+            scope.spawn(move || {
+                let result = download(model, &mut |event| {
+                    let _ = sender.send(DownloadMessage::Progress { model, event });
+                });
+                let _ = sender.send(DownloadMessage::Finished { model, result });
+            });
+        }
+        drop(sender);
+        for message in receiver {
+            match message {
+                DownloadMessage::Progress { model, event } => {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Downloading {
+                            asset: Some(event.asset().to_owned()),
+                            completed_bytes: Some(event.completed_bytes()),
+                            total_bytes: Some(event.total_bytes()),
+                        },
+                    });
+                }
+                DownloadMessage::Finished { model, result } => {
+                    let slot = results
+                        .iter_mut()
+                        .find(|(candidate, _)| *candidate == model)
+                        .expect("parallel download result belongs to the requested model");
+                    slot.1 = Some(result);
+                }
+            }
+        }
+    });
+    results
+}
+
 fn shared_progress(progress: IndexingProgress) -> ComparisonUpdateProgress {
     ComparisonUpdateProgress::Shared {
         completed: progress.completed,
@@ -366,5 +477,44 @@ fn shared_progress(progress: IndexingProgress) -> ComparisonUpdateProgress {
             IndexingStage::Lexical => ComparisonSharedStage::Lexical,
             IndexingStage::Vector => unreachable!("shared comparison indexing excludes vectors"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use super::*;
+
+    #[test]
+    fn model_download_scheduler_runs_network_jobs_concurrently() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let models = &EmbeddingModelId::ALL[2..5];
+        let results = run_model_downloads_in_parallel(models, &mut |_| {}, {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            move |_, _| {
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(current, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(40));
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            }
+        });
+
+        assert_eq!(results.len(), models.len());
+        assert!(
+            results
+                .iter()
+                .all(|(_, result)| result.as_ref().is_some_and(Result::is_ok))
+        );
+        assert!(maximum.load(Ordering::SeqCst) >= 2);
     }
 }

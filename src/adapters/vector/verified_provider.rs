@@ -51,6 +51,7 @@ enum ProviderRuntime {
 // ~0.95 GiB; larger batches were slower and peaked at ~5.08 GiB for 64 due
 // to padding heterogeneous source documents to the longest text in a batch.
 const ONNX_INDEX_BATCH_SIZE: usize = 1;
+const PROGRESS_CHUNK_SIZE: usize = 8;
 
 pub(super) struct VerifiedProvider {
     model_id: EmbeddingModelId,
@@ -205,9 +206,10 @@ impl VerifiedProvider {
         })
     }
 
-    pub(super) fn embed_records(
+    pub(super) fn embed_records_with_progress(
         &mut self,
         records: &[CanonicalRecord],
+        progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Vec<Vec<f32>>, FastSearchError> {
         let texts = records
             .iter()
@@ -224,7 +226,14 @@ impl VerifiedProvider {
                 }
             })
             .collect::<Vec<_>>();
-        self.embed_formatted(&texts, None)
+        let total = texts.len();
+        progress(0, total);
+        let mut vectors = Vec::with_capacity(total);
+        for chunk in texts.chunks(PROGRESS_CHUNK_SIZE) {
+            vectors.extend(self.embed_formatted(chunk, None)?);
+            progress(vectors.len(), total);
+        }
+        Ok(vectors)
     }
 
     pub(super) fn embed_query(&mut self, query: &str) -> Result<Vec<f32>, FastSearchError> {
