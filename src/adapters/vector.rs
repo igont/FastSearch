@@ -187,7 +187,6 @@ impl VectorPartitionMetrics {
     }
 }
 
-#[derive(Clone)]
 pub(super) struct ProjectedRecord {
     pub(super) record: CanonicalRecord,
     pub(super) content_hash: String,
@@ -212,6 +211,7 @@ struct ProjectionState {
 pub struct LocalE5Vector {
     operation: Mutex<()>,
     state: Mutex<ProjectionState>,
+    provider: Mutex<Option<VerifiedProvider>>,
 }
 
 /// Provenance of the currently usable derived projection.  Consumers must not
@@ -284,6 +284,7 @@ impl LocalE5Vector {
     ) -> Self {
         Self {
             operation: Mutex::new(()),
+            provider: Mutex::new(None),
             state: Mutex::new(ProjectionState {
                 model_root: model_root.into(),
                 model_id,
@@ -344,6 +345,7 @@ impl LocalE5Vector {
         state_generation: u64,
     ) -> Result<LifecycleStatus, FastSearchError> {
         let _operation = self.lock_operation()?;
+        self.lock_provider()?.take();
         let (partition_root, model_id, model_identity) = {
             let state = self.lock()?;
             (
@@ -465,6 +467,7 @@ impl LocalE5Vector {
         state_generation: u64,
         progress: &mut dyn FnMut(VectorBuildProgress),
     ) -> Result<LifecycleStatus, FastSearchError> {
+        self.lock_provider()?.take();
         let total = records.len() as u64;
         let build_started = Instant::now();
         let (root, identity, model_id, allow_catalog_download, partition_root, device) = {
@@ -750,6 +753,8 @@ impl LocalE5Vector {
         state.projection_generation = None;
         state.freshness = IndexFreshness::Stale;
         state.detail = "model identity changed; vector projection must rebuild".to_owned();
+        drop(state);
+        self.lock_provider()?.take();
         Ok(())
     }
 
@@ -823,6 +828,17 @@ impl LocalE5Vector {
             FastSearchError::new(
                 ErrorKind::ProjectionFailure,
                 "vector operation lock is poisoned",
+            )
+        })
+    }
+
+    fn lock_provider(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<VerifiedProvider>>, FastSearchError> {
+        self.provider.lock().map_err(|_| {
+            FastSearchError::new(
+                ErrorKind::ProjectionFailure,
+                "vector provider lock is poisoned",
             )
         })
     }
@@ -975,7 +991,6 @@ impl VectorRetrieval for LocalE5Vector {
             root,
             model_id,
             allow_catalog_download,
-            entries,
             freshness,
             generation,
             projection_generation,
@@ -988,7 +1003,6 @@ impl VectorRetrieval for LocalE5Vector {
                 state.model_root.clone(),
                 state.model_id,
                 state.allow_catalog_download,
-                state.records.values().cloned().collect::<Vec<_>>(),
                 state.freshness,
                 state.state_generation,
                 state.projection_generation,
@@ -1000,23 +1014,42 @@ impl VectorRetrieval for LocalE5Vector {
         if freshness != IndexFreshness::Current {
             return Ok(SearchResponse::with_freshness(Vec::new(), freshness));
         }
-        let mut verified = match VerifiedProvider::acquire_on_device(
-            &root,
-            model_id,
-            false,
-            allow_catalog_download,
-            device,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                self.provider_failed(generation, error);
+        let mut provider = self.lock_provider()?;
+        if provider.is_none() {
+            let acquired = match VerifiedProvider::acquire_on_device(
+                &root,
+                model_id,
+                false,
+                allow_catalog_download,
+                device,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    drop(provider);
+                    self.provider_failed(generation, error);
+                    return Ok(SearchResponse::with_freshness(
+                        Vec::new(),
+                        IndexFreshness::Degraded,
+                    ));
+                }
+            };
+            if manifest.as_deref() != Some(&acquired.manifest) {
+                drop(provider);
+                let mut state = self.lock()?;
+                state.freshness = IndexFreshness::Stale;
+                state.projection_generation = None;
+                state.detail =
+                    "local E5 artifact manifest changed; vector projection must rebuild".to_owned();
                 return Ok(SearchResponse::with_freshness(
                     Vec::new(),
-                    IndexFreshness::Degraded,
+                    IndexFreshness::Stale,
                 ));
             }
-        };
-        if manifest.as_deref() != Some(&verified.manifest) {
+            *provider = Some(acquired);
+        }
+        if manifest.as_deref() != provider.as_ref().map(|verified| verified.manifest.as_str()) {
+            provider.take();
+            drop(provider);
             let mut state = self.lock()?;
             state.freshness = IndexFreshness::Stale;
             state.projection_generation = None;
@@ -1027,29 +1060,56 @@ impl VectorRetrieval for LocalE5Vector {
                 IndexFreshness::Stale,
             ));
         }
-        let query_vector = verified
+        if let Err(error) = provider
+            .as_ref()
+            .expect("provider is initialized and manifest-matched")
+            .validate_resident_files()
+        {
+            provider.take();
+            drop(provider);
+            self.provider_failed(generation, error);
+            return Ok(SearchResponse::with_freshness(
+                Vec::new(),
+                IndexFreshness::Degraded,
+            ));
+        }
+        let query_vector = match provider
+            .as_mut()
+            .expect("provider is initialized and manifest-matched")
             .embed_query(query.text())
-            .map_err(|error| self.provider_failed(generation, error))?;
+        {
+            Ok(vector) => vector,
+            Err(error) => {
+                provider.take();
+                drop(provider);
+                return Err(self.provider_failed(generation, error));
+            }
+        };
+        drop(provider);
         let provenance = projection_generation
             .zip(manifest)
             .map(|(projection, fingerprint)| {
                 projection_provenance(&declared_identity, fingerprint, generation, projection)
             })
             .transpose()?;
-        let mut hits = entries
-            .into_iter()
-            .map(|entry| {
-                let hit = SearchHit::new(
-                    entry.record,
-                    RetrievalChannel::Vector,
-                    f64::from(cosine(&query_vector, &entry.vector)),
-                );
-                match &provenance {
-                    Some(value) => hit.with_projection_provenance(value.clone()),
-                    None => hit,
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut hits = {
+            let state = self.lock()?;
+            state
+                .records
+                .values()
+                .map(|entry| {
+                    let hit = SearchHit::new(
+                        entry.record.clone(),
+                        RetrievalChannel::Vector,
+                        f64::from(cosine(&query_vector, &entry.vector)),
+                    );
+                    match &provenance {
+                        Some(value) => hit.with_projection_provenance(value.clone()),
+                        None => hit,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
         hits.sort_by(|left, right| {
             right
                 .score()
@@ -1330,7 +1390,25 @@ mod security_tests {
         assert_eq!(response.freshness(), IndexFreshness::Current);
         assert_eq!(response.hits().len(), 1);
         assert!(response.hits()[0].projection_provenance().is_some());
+        assert!(adapter.provider.lock().unwrap().is_some());
+        assert_eq!(
+            adapter.search(&query).unwrap().freshness(),
+            IndexFreshness::Current
+        );
+        assert!(adapter.provider.lock().unwrap().is_some());
         assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+
+        // A resident provider deliberately pins the admitted model until a
+        // lifecycle transition. Reconfigure releases it before the separate
+        // pre-existing-junction control mutates this disposable fixture.
+        adapter
+            .reconfigure(root.clone(), "multilingual-e5-small@614241f")
+            .unwrap();
+        assert!(adapter.provider.lock().unwrap().is_none());
+        assert_eq!(
+            adapter.rebuild(&[record()], 2).unwrap().freshness(),
+            IndexFreshness::Current
+        );
 
         // A pre-existing inner junction is the fail-closed control: it is
         // rejected before bytes are admitted and cannot publish Current/hits.
@@ -1392,6 +1470,7 @@ mod security_tests {
         assert_eq!(completed.freshness(), IndexFreshness::Current);
         configured_rx.recv_timeout(Duration::from_secs(30)).unwrap();
         reconfigure.join().unwrap();
+        assert!(adapter.provider.lock().unwrap().is_none());
         assert_ne!(
             adapter.lifecycle_status().freshness(),
             IndexFreshness::Current

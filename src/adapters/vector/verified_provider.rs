@@ -7,7 +7,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[cfg(test)]
@@ -62,6 +62,7 @@ pub(super) struct VerifiedProvider {
     device: ExecutionDevice,
     runtime: ProviderRuntime,
     pub(super) manifest: String,
+    strict_snapshot_root: Option<PathBuf>,
     _files: Vec<File>,
     _directories: Vec<DirectoryGuard>,
 }
@@ -142,6 +143,7 @@ impl VerifiedProvider {
             device,
             runtime: ProviderRuntime::Onnx(runtime),
             manifest: snapshot.manifest,
+            strict_snapshot_root: Some(root.to_path_buf()),
             _files: snapshot.files,
             _directories: snapshot.directories,
         })
@@ -221,6 +223,7 @@ impl VerifiedProvider {
             device,
             runtime,
             manifest,
+            strict_snapshot_root: None,
             _files: Vec::new(),
             _directories: Vec::new(),
         })
@@ -298,6 +301,16 @@ impl VerifiedProvider {
             .into_iter()
             .next()
             .ok_or_else(|| provider_error("embedding model returned no query vector"))
+    }
+
+    /// Resident strict providers keep verified handles pinned. Rechecking the
+    /// small directory layout detects added paths without rereading model bytes
+    /// or reconstructing the inference runtime.
+    pub(super) fn validate_resident_files(&self) -> Result<(), FastSearchError> {
+        match &self.strict_snapshot_root {
+            Some(root) => validate_allowlisted_layout(root),
+            None => Ok(()),
+        }
     }
 
     pub(super) fn embed_benchmark_texts(
@@ -549,6 +562,58 @@ fn verified_snapshot(root: &Path) -> Result<VerifiedSnapshot, FastSearchError> {
     })
 }
 
+fn validate_allowlisted_layout(root: &Path) -> Result<(), FastSearchError> {
+    fn collect(root: &Path, directory: &Path, files: &mut usize) -> Result<(), FastSearchError> {
+        ensure_not_link_or_reparse(directory)?;
+        if directory != root {
+            let locator = directory
+                .strip_prefix(root)
+                .map_err(provider_error)?
+                .to_string_lossy()
+                .replace('/', "\\");
+            if !B1_E5_DIRECTORIES.contains(&locator.as_str()) {
+                return Err(provider_error("unexpected model directory"));
+            }
+        }
+        for entry in fs::read_dir(directory).map_err(provider_error)? {
+            let entry = entry.map_err(provider_error)?;
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
+            ensure_not_link_or_reparse(&path)?;
+            let metadata = fs::symlink_metadata(&path).map_err(provider_error)?;
+            if metadata.is_dir() {
+                collect(root, &path, files)?;
+            } else if metadata.is_file() {
+                let locator = path
+                    .strip_prefix(root)
+                    .map_err(provider_error)?
+                    .to_string_lossy()
+                    .replace('/', "\\");
+                let Some((_, expected_size)) = B1_E5_FILES
+                    .iter()
+                    .find(|(expected, _)| *expected == locator)
+                else {
+                    return Err(provider_error("unexpected model file"));
+                };
+                if metadata.len() != *expected_size {
+                    return Err(provider_error("model file size mismatch"));
+                }
+                *files += 1;
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = 0;
+    collect(root, root, &mut files)?;
+    if files != B1_E5_FILES.len() {
+        return Err(provider_error("model file set is incomplete"));
+    }
+    Ok(())
+}
+
 pub(super) fn read_exact_allowlisted_file(
     file: &mut File,
     expected_size: u64,
@@ -599,6 +664,12 @@ fn ensure_not_link_or_reparse(path: &Path) -> Result<(), FastSearchError> {
 
 #[cfg(windows)]
 struct DirectoryGuard(HANDLE);
+
+// SAFETY: a Windows HANDLE belongs to the process rather than to the thread
+// that opened it. DirectoryGuard exposes no handle operations and its only
+// action is CloseHandle on drop, which Windows permits from any thread.
+#[cfg(windows)]
+unsafe impl Send for DirectoryGuard {}
 
 #[cfg(windows)]
 impl Drop for DirectoryGuard {

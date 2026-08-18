@@ -318,42 +318,57 @@ impl<'a> ComparisonCoordinator<'a> {
             .cloned()
             .collect();
         let mut models = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
+        let mut ready = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
         for model in EmbeddingModelId::DISPLAY_ORDER {
             let started = Instant::now();
             let cache = embedding_model_cache_status(model)?;
-            let partition = self.runtime.model_partition_status(model);
-            if !cache.ready() || partition.freshness() != IndexFreshness::Current {
-                let reason = if !cache.ready() {
-                    "model weights are absent"
-                } else {
-                    partition.detail()
-                };
+            if !cache.ready() {
                 models.push(ComparisonModelResult {
                     model,
                     latency_ms: started.elapsed().as_millis(),
                     hits: Vec::new(),
-                    error: Some(reason.to_owned()),
+                    error: Some("model weights are absent".to_owned()),
                 });
                 continue;
             }
-            match self
-                .runtime
-                .search_model_partition(model, cache.root(), query)
-            {
+            ready.push((model, cache.root().to_path_buf()));
+        }
+        for (model, latency_ms, response) in self
+            .runtime
+            .search_model_partitions_parallel(&ready, query)?
+        {
+            match response {
+                Ok(response) if response.freshness() == IndexFreshness::Current => {
+                    models.push(ComparisonModelResult {
+                        model,
+                        latency_ms,
+                        hits: response.hits().iter().take(top_k).cloned().collect(),
+                        error: None,
+                    });
+                }
                 Ok(response) => models.push(ComparisonModelResult {
                     model,
-                    latency_ms: started.elapsed().as_millis(),
-                    hits: response.hits().iter().take(top_k).cloned().collect(),
-                    error: None,
+                    latency_ms,
+                    hits: Vec::new(),
+                    error: Some(format!(
+                        "model partition is not current ({:?})",
+                        response.freshness()
+                    )),
                 }),
                 Err(error) => models.push(ComparisonModelResult {
                     model,
-                    latency_ms: started.elapsed().as_millis(),
+                    latency_ms,
                     hits: Vec::new(),
                     error: Some(error.message().to_owned()),
                 }),
             }
         }
+        models.sort_by_key(|result| {
+            EmbeddingModelId::DISPLAY_ORDER
+                .iter()
+                .position(|model| *model == result.model)
+                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
+        });
         Ok(ComparisonRun {
             lexical_hits,
             models,

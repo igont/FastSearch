@@ -3,6 +3,9 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
+    time::Instant,
 };
 
 use crate::{
@@ -25,6 +28,12 @@ use crate::{
         SymbolPort, VectorRetrieval,
     },
 };
+
+pub(super) type ModelPartitionSearchOutcome = (
+    EmbeddingModelId,
+    u128,
+    Result<SearchResponse, FastSearchError>,
+);
 
 mod security {
     use std::{
@@ -1283,6 +1292,44 @@ impl ProductionRuntime {
         vector.search(query)
     }
 
+    /// Executes every requested model partition in its own worker. The SQLite
+    /// authority is read once on the caller thread; workers receive only the
+    /// immutable canonical snapshot and construct independent model runtimes.
+    pub(super) fn search_model_partitions_parallel(
+        &self,
+        requests: &[(EmbeddingModelId, PathBuf)],
+        query: &SearchQuery,
+    ) -> Result<Vec<ModelPartitionSearchOutcome>, FastSearchError> {
+        let records = self.state.all_records()?;
+        let generation = self.state.durable_generation()?;
+        let service_root = self.service.service_root().to_path_buf();
+        let attempts = run_jobs_resilient(requests, |(model, model_root)| {
+            super::model_cache::configured_model_device(*model).and_then(|device| {
+                let vector = LocalE5Vector::open_persistent_with_model_on_device(
+                    model_root,
+                    super::model_cache::model_identity(*model),
+                    *model,
+                    model_partition_root(&service_root, *model),
+                    device,
+                );
+                vector.restore(&records, generation)?;
+                vector.search(query)
+            })
+        });
+        let mut outcomes = requests
+            .iter()
+            .zip(attempts)
+            .map(|((model, _), (latency_ms, response))| (*model, latency_ms, response))
+            .collect::<Vec<_>>();
+        outcomes.sort_by_key(|(model, _, _)| {
+            EmbeddingModelId::DISPLAY_ORDER
+                .iter()
+                .position(|candidate| candidate == model)
+                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
+        });
+        Ok(outcomes)
+    }
+
     pub fn lexical_baseline(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
         self.lexical.search(query)
     }
@@ -1341,6 +1388,83 @@ fn model_partition_root(service_root: &Path, model: EmbeddingModelId) -> PathBuf
         .join("vector")
         .join(model.slug())
         .join(super::model_cache::model_descriptor(model).revision)
+}
+
+fn run_jobs_in_parallel<T: Sync, U: Send>(jobs: &[T], run: impl Fn(&T) -> U + Sync) -> Vec<U> {
+    let (sender, receiver) = mpsc::channel();
+    thread::scope(|scope| {
+        for job in jobs {
+            let sender = sender.clone();
+            let run = &run;
+            scope.spawn(move || {
+                let _ = sender.send(run(job));
+            });
+        }
+        drop(sender);
+        receiver.into_iter().collect()
+    })
+}
+
+/// Runs the first wave at full width. Failed jobs are queued only after the
+/// whole wave finishes. A wave with no successful jobs halves concurrency;
+/// concurrency one is the final isolated attempt for permanent failures.
+fn run_jobs_resilient<T: Sync, U: Send, E: Send>(
+    jobs: &[T],
+    run: impl Fn(&T) -> Result<U, E> + Sync,
+) -> Vec<(u128, Result<U, E>)> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let mut pending = (0..jobs.len()).collect::<Vec<_>>();
+    let mut concurrency = jobs.len();
+    let mut elapsed = vec![0_u128; jobs.len()];
+    let mut completed = BTreeMap::new();
+
+    loop {
+        let terminal_wave = concurrency == 1;
+        let mut retry = Vec::new();
+        let mut successes = 0;
+        for batch in pending.chunks(concurrency) {
+            let outcomes = run_jobs_in_parallel(batch, |index| {
+                let started = Instant::now();
+                let outcome = run(&jobs[*index]);
+                (*index, started.elapsed().as_millis(), outcome)
+            });
+            for (index, duration_ms, outcome) in outcomes {
+                elapsed[index] = elapsed[index].saturating_add(duration_ms);
+                match outcome {
+                    Ok(value) => {
+                        successes += 1;
+                        completed.insert(index, Ok(value));
+                    }
+                    Err(error) if terminal_wave => {
+                        completed.insert(index, Err(error));
+                    }
+                    Err(_) => retry.push(index),
+                }
+            }
+        }
+        if retry.is_empty() {
+            break;
+        }
+        pending = retry;
+        concurrency = if successes == 0 {
+            (concurrency / 2).max(1)
+        } else {
+            concurrency.min(pending.len()).max(1)
+        };
+    }
+
+    (0..jobs.len())
+        .map(|index| {
+            (
+                elapsed[index],
+                completed
+                    .remove(&index)
+                    .expect("every resilient job reaches a terminal outcome"),
+            )
+        })
+        .collect()
 }
 
 impl AgentSurface for ProductionRuntime {
@@ -1433,6 +1557,92 @@ fn canonical_roots(
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod parallel_search_tests {
+    use super::{run_jobs_in_parallel, run_jobs_resilient};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    fn model_job_scheduler_starts_every_job_without_a_concurrency_cap() {
+        let jobs = [0, 1, 2, 3, 4, 5];
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let outputs = run_jobs_in_parallel(&jobs, {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            move |job| {
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(current, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(40));
+                active.fetch_sub(1, Ordering::SeqCst);
+                *job
+            }
+        });
+
+        assert_eq!(outputs.len(), jobs.len());
+        assert_eq!(maximum.load(Ordering::SeqCst), jobs.len());
+    }
+
+    #[test]
+    fn failed_parallel_jobs_are_retried_in_narrower_waves_until_isolated() {
+        let jobs = [0, 1, 2, 3, 4, 5];
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let outcomes = run_jobs_resilient(&jobs, {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            let attempts = Arc::clone(&attempts);
+            move |job| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(current, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(40));
+                active.fetch_sub(1, Ordering::SeqCst);
+                if current > 2 {
+                    Err("simulated memory pressure")
+                } else {
+                    Ok(*job)
+                }
+            }
+        });
+
+        assert_eq!(maximum.load(Ordering::SeqCst), jobs.len());
+        assert!(attempts.load(Ordering::SeqCst) > jobs.len());
+        assert!(outcomes.into_iter().all(|(_, outcome)| outcome.is_ok()));
+    }
+
+    #[test]
+    fn permanent_failure_stops_after_its_isolated_attempt() {
+        let jobs = [0, 1, 2];
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let outcomes = run_jobs_resilient(&jobs, {
+            let attempts = Arc::clone(&attempts);
+            move |job| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                if *job == 2 {
+                    Err("permanent")
+                } else {
+                    Ok(*job)
+                }
+            }
+        });
+
+        assert_eq!(outcomes.len(), jobs.len());
+        assert!(outcomes[0].1.is_ok());
+        assert!(outcomes[1].1.is_ok());
+        assert_eq!(outcomes[2].1, Err("permanent"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+    }
 }
 
 #[cfg(all(test, windows))]

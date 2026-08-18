@@ -113,7 +113,11 @@ pub(super) fn run_comparison<R: BufRead>(
 ) -> io::Result<ComparisonTransition> {
     let commands = comparison_catalog();
     let mut last_search: Option<ComparisonSearchSession> = None;
-    show_comparison_readiness(chat, &ComparisonCoordinator::new(runtime).readiness())?;
+    // A readiness check fully validates every persisted partition. Keep its
+    // result for query admission and refresh it only on explicit status/update;
+    // the actual search independently restores and validates each partition.
+    let mut readiness = ComparisonCoordinator::new(runtime).readiness();
+    show_comparison_readiness(chat, &readiness)?;
     loop {
         let Some(line) = chat.read_command("compare")? else {
             return Ok(ComparisonTransition::Exit);
@@ -149,7 +153,8 @@ pub(super) fn run_comparison<R: BufRead>(
                 "Обычный текст выполняет один и тот же запрос всеми готовыми моделями.",
             ))?,
             "status" => {
-                show_comparison_readiness(chat, &ComparisonCoordinator::new(runtime).readiness())?
+                readiness = ComparisonCoordinator::new(runtime).readiness();
+                show_comparison_readiness(chat, &readiness)?
             }
             "update" => {
                 let runtime_for_update = &mut *runtime;
@@ -162,7 +167,7 @@ pub(super) fn run_comparison<R: BufRead>(
                     })?;
                 match result {
                     Ok(outcomes) => {
-                        let readiness = ComparisonCoordinator::new(runtime).readiness();
+                        readiness = ComparisonCoordinator::new(runtime).readiness();
                         show_comparison_readiness(chat, &readiness)?;
                         for outcome in outcomes.iter().filter(|item| item.error().is_some()) {
                             show_error(
@@ -217,19 +222,10 @@ pub(super) fn run_comparison<R: BufRead>(
                     )?;
                     continue;
                 }
-                let readiness = match ComparisonCoordinator::new(runtime).readiness() {
-                    Ok(readiness) => readiness,
-                    Err(error) => {
-                        show_error(
-                            chat,
-                            "COMPARE_READINESS",
-                            error.message(),
-                            "Повторите /status или проверьте локальный кеш моделей.",
-                        )?;
-                        continue;
-                    }
-                };
-                if !readiness.iter().any(ComparisonReadiness::ready) {
+                if !readiness
+                    .as_ref()
+                    .is_ok_and(|items| items.iter().any(ComparisonReadiness::ready))
+                {
                     show_error(
                         chat,
                         "COMPARE_NOT_READY",
