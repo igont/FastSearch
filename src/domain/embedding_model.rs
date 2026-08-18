@@ -11,15 +11,23 @@ pub enum EmbeddingModelId {
     #[serde(rename = "qwen3-embedding-0.6b")]
     Qwen3Embedding06B,
     NomicEmbedTextV2Moe,
+    SnowflakeArcticEmbedLV2,
+    GteMultilingualBase,
+    BgeM3,
+    JinaEmbeddingsV3,
 }
 
 impl EmbeddingModelId {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 9] = [
         Self::MultilingualE5Small,
         Self::MultilingualE5Base,
         Self::MultilingualE5Large,
         Self::Qwen3Embedding06B,
         Self::NomicEmbedTextV2Moe,
+        Self::SnowflakeArcticEmbedLV2,
+        Self::GteMultilingualBase,
+        Self::BgeM3,
+        Self::JinaEmbeddingsV3,
     ];
 
     #[must_use]
@@ -30,6 +38,10 @@ impl EmbeddingModelId {
             Self::MultilingualE5Large => "multilingual-e5-large",
             Self::Qwen3Embedding06B => "qwen3-embedding-0.6b",
             Self::NomicEmbedTextV2Moe => "nomic-embed-text-v2-moe",
+            Self::SnowflakeArcticEmbedLV2 => "arctic-embed-l-v2",
+            Self::GteMultilingualBase => "gte-multilingual-base",
+            Self::BgeM3 => "bge-m3",
+            Self::JinaEmbeddingsV3 => "jina-embeddings-v3",
         }
     }
 
@@ -41,6 +53,10 @@ impl EmbeddingModelId {
             Self::MultilingualE5Large => "E5 Large",
             Self::Qwen3Embedding06B => "Qwen3 Embedding 0.6B",
             Self::NomicEmbedTextV2Moe => "Nomic Embed Text v2 MoE",
+            Self::SnowflakeArcticEmbedLV2 => "Arctic Embed L v2",
+            Self::GteMultilingualBase => "GTE Multilingual Base",
+            Self::BgeM3 => "BGE-M3",
+            Self::JinaEmbeddingsV3 => "Jina Embeddings v3",
         }
     }
 
@@ -48,8 +64,12 @@ impl EmbeddingModelId {
     pub const fn dimension(self) -> usize {
         match self {
             Self::MultilingualE5Small => 384,
-            Self::MultilingualE5Base | Self::NomicEmbedTextV2Moe => 768,
-            Self::MultilingualE5Large | Self::Qwen3Embedding06B => 1024,
+            Self::MultilingualE5Base | Self::NomicEmbedTextV2Moe | Self::GteMultilingualBase => 768,
+            Self::MultilingualE5Large
+            | Self::Qwen3Embedding06B
+            | Self::SnowflakeArcticEmbedLV2
+            | Self::BgeM3
+            | Self::JinaEmbeddingsV3 => 1024,
         }
     }
 
@@ -64,6 +84,12 @@ impl EmbeddingModelId {
                     Self::MultilingualE5Large => matches!(value.as_str(), "large" | "e5-large"),
                     Self::Qwen3Embedding06B => matches!(value.as_str(), "qwen" | "qwen3"),
                     Self::NomicEmbedTextV2Moe => matches!(value.as_str(), "nomic" | "nomic-v2"),
+                    Self::SnowflakeArcticEmbedLV2 => {
+                        matches!(value.as_str(), "arctic" | "snowflake")
+                    }
+                    Self::GteMultilingualBase => matches!(value.as_str(), "gte" | "gte-base"),
+                    Self::BgeM3 => matches!(value.as_str(), "bge" | "m3"),
+                    Self::JinaEmbeddingsV3 => matches!(value.as_str(), "jina" | "jina-v3"),
                 }
         })
     }

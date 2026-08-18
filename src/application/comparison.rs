@@ -37,7 +37,6 @@ pub(super) enum ComparisonModelStage {
         total_bytes: Option<u64>,
     },
     Validating,
-    WaitingForIndex,
     Indexing {
         completed_records: u64,
         total_records: u64,
@@ -270,81 +269,13 @@ impl<'a> ComparisonCoordinator<'a> {
             pending.push(model);
         }
 
-        let mut downloads = download_model_assets_in_parallel(&pending, &mut progress);
-        for (model, result) in &downloads {
-            if result.as_ref().is_some_and(Result::is_ok) {
-                progress(ComparisonUpdateProgress::Model {
-                    model: *model,
-                    stage: ComparisonModelStage::WaitingForIndex,
-                });
-            }
-        }
-        for model in pending {
-            let download = downloads
-                .iter_mut()
-                .find(|(candidate, _)| *candidate == model)
-                .and_then(|(_, result)| result.take())
-                .expect("parallel downloader returns one result per requested model");
-            let result = download.and_then(|()| {
-                progress(ComparisonUpdateProgress::Model {
-                    model,
-                    stage: ComparisonModelStage::Validating,
-                });
-                ensure_embedding_model_with_progress(model, show_download_progress, |_| {})
-            });
-            let result = result.and_then(|availability| {
-                progress(ComparisonUpdateProgress::Model {
-                    model,
-                    stage: ComparisonModelStage::Indexing {
-                        completed_records: 0,
-                        total_records: 0,
-                    },
-                });
-                self.runtime.build_model_partition_with_progress(
-                    model,
-                    availability.root(),
-                    |event| {
-                        let stage = match event {
-                            VectorBuildProgress::Embedding {
-                                completed_records,
-                                total_records,
-                            } => ComparisonModelStage::Indexing {
-                                completed_records,
-                                total_records,
-                            },
-                            VectorBuildProgress::Saving => ComparisonModelStage::Saving,
-                        };
-                        progress(ComparisonUpdateProgress::Model { model, stage });
-                    },
-                )
-            });
-            match result {
-                Ok(status) => {
-                    progress(ComparisonUpdateProgress::Model {
-                        model,
-                        stage: ComparisonModelStage::Completed { reused: false },
-                    });
-                    outcomes.push(ComparisonUpdateOutcome {
-                        model,
-                        status,
-                        error: None,
-                    });
-                }
-                Err(error) => {
-                    progress(ComparisonUpdateProgress::Model {
-                        model,
-                        stage: ComparisonModelStage::Failed {
-                            message: error.message().to_owned(),
-                        },
-                    });
-                    outcomes.push(ComparisonUpdateOutcome {
-                        model,
-                        status: self.runtime.model_partition_status(model),
-                        error: Some(error.message().to_owned()),
-                    });
-                }
-            }
-        }
+        provision_and_index_pipeline(
+            self.runtime,
+            &pending,
+            show_download_progress,
+            &mut progress,
+            &mut outcomes,
+        );
         outcomes.sort_by_key(|outcome| {
             EmbeddingModelId::ALL
                 .iter()
@@ -414,15 +345,107 @@ impl<'a> ComparisonCoordinator<'a> {
     }
 }
 
-fn download_model_assets_in_parallel(
+/// Keeps network transfers parallel while consuming successful downloads in
+/// arrival order with exactly one validation/indexing lane. This deliberately
+/// never opens two model runtimes at once, avoiding RAM/VRAM contention.
+fn provision_and_index_pipeline(
+    runtime: &mut ProductionRuntime,
     models: &[EmbeddingModelId],
+    show_download_progress: bool,
     progress: &mut impl FnMut(ComparisonUpdateProgress),
-) -> Vec<(EmbeddingModelId, Option<Result<(), FastSearchError>>)> {
-    run_model_downloads_in_parallel(models, progress, |model, report| {
-        download_embedding_model_assets_with_progress(model, report)
-    })
+    outcomes: &mut Vec<ComparisonUpdateOutcome>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    thread::scope(|scope| {
+        for model in models.iter().copied() {
+            let sender = sender.clone();
+            scope.spawn(move || {
+                let result = download_embedding_model_assets_with_progress(model, |event| {
+                    let _ = sender.send(DownloadMessage::Progress { model, event });
+                });
+                let _ = sender.send(DownloadMessage::Finished { model, result });
+            });
+        }
+        drop(sender);
+        for message in receiver {
+            match message {
+                DownloadMessage::Progress { model, event } => {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Downloading {
+                            asset: Some(event.asset().to_owned()),
+                            completed_bytes: Some(event.completed_bytes()),
+                            total_bytes: Some(event.total_bytes()),
+                        },
+                    });
+                }
+                DownloadMessage::Finished { model, result } => {
+                    let result = result.and_then(|()| {
+                        progress(ComparisonUpdateProgress::Model {
+                            model,
+                            stage: ComparisonModelStage::Validating,
+                        });
+                        ensure_embedding_model_with_progress(model, show_download_progress, |_| {})
+                    });
+                    let result = result.and_then(|availability| {
+                        progress(ComparisonUpdateProgress::Model {
+                            model,
+                            stage: ComparisonModelStage::Indexing {
+                                completed_records: 0,
+                                total_records: 0,
+                            },
+                        });
+                        runtime.build_model_partition_with_progress(
+                            model,
+                            availability.root(),
+                            |event| {
+                                let stage = match event {
+                                    VectorBuildProgress::Embedding {
+                                        completed_records,
+                                        total_records,
+                                    } => ComparisonModelStage::Indexing {
+                                        completed_records,
+                                        total_records,
+                                    },
+                                    VectorBuildProgress::Saving => ComparisonModelStage::Saving,
+                                };
+                                progress(ComparisonUpdateProgress::Model { model, stage });
+                            },
+                        )
+                    });
+                    match result {
+                        Ok(status) => {
+                            progress(ComparisonUpdateProgress::Model {
+                                model,
+                                stage: ComparisonModelStage::Completed { reused: false },
+                            });
+                            outcomes.push(ComparisonUpdateOutcome {
+                                model,
+                                status,
+                                error: None,
+                            });
+                        }
+                        Err(error) => {
+                            progress(ComparisonUpdateProgress::Model {
+                                model,
+                                stage: ComparisonModelStage::Failed {
+                                    message: error.message().to_owned(),
+                                },
+                            });
+                            outcomes.push(ComparisonUpdateOutcome {
+                                model,
+                                status: runtime.model_partition_status(model),
+                                error: Some(error.message().to_owned()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
+#[cfg(test)]
 fn run_model_downloads_in_parallel(
     models: &[EmbeddingModelId],
     progress: &mut impl FnMut(ComparisonUpdateProgress),

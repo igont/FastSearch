@@ -37,6 +37,7 @@ use fastembed::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::application::model_descriptor;
 use crate::domain::{
     CanonicalRecord, Capability, EmbeddingModelId, ErrorKind, ExecutionDevice, FastSearchError,
 };
@@ -197,6 +198,19 @@ impl VerifiedProvider {
                     "this Candle model has no GPU backend in the current FastSearch build",
                 ));
             }
+            EmbeddingModelId::SnowflakeArcticEmbedLV2
+            | EmbeddingModelId::GteMultilingualBase
+            | EmbeddingModelId::BgeM3 => ProviderRuntime::Onnx(user_defined_catalog_onnx(
+                root,
+                model_id,
+                device,
+                Pooling::Cls,
+            )?),
+            EmbeddingModelId::JinaEmbeddingsV3 => {
+                return Err(provider_error(
+                    "Jina Embeddings v3 requires task_id-aware ONNX inference; the dedicated provider is not bundled yet",
+                ));
+            }
         };
         let manifest = format!(
             "{:X}",
@@ -256,6 +270,10 @@ impl VerifiedProvider {
                     EmbeddingModelId::NomicEmbedTextV2Moe => {
                         format!("search_document: {text}")
                     }
+                    EmbeddingModelId::SnowflakeArcticEmbedLV2
+                    | EmbeddingModelId::GteMultilingualBase
+                    | EmbeddingModelId::BgeM3
+                    | EmbeddingModelId::JinaEmbeddingsV3 => text,
                 }
             })
             .collect::<Vec<_>>();
@@ -271,6 +289,10 @@ impl VerifiedProvider {
                 "Instruct: Given a search query, retrieve relevant documentation and source-code passages\nQuery: {query}"
             ),
             EmbeddingModelId::NomicEmbedTextV2Moe => format!("search_query: {query}"),
+            EmbeddingModelId::SnowflakeArcticEmbedLV2
+            | EmbeddingModelId::GteMultilingualBase
+            | EmbeddingModelId::BgeM3
+            | EmbeddingModelId::JinaEmbeddingsV3 => query.to_owned(),
         };
         self.embed_formatted(&[query], None)?
             .into_iter()
@@ -291,6 +313,10 @@ impl VerifiedProvider {
                 | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
                 EmbeddingModelId::Qwen3Embedding06B => text.clone(),
                 EmbeddingModelId::NomicEmbedTextV2Moe => format!("search_document: {text}"),
+                EmbeddingModelId::SnowflakeArcticEmbedLV2
+                | EmbeddingModelId::GteMultilingualBase
+                | EmbeddingModelId::BgeM3
+                | EmbeddingModelId::JinaEmbeddingsV3 => text.clone(),
             })
             .collect::<Vec<_>>();
         self.embed_formatted(&formatted, Some(batch_size))
@@ -306,7 +332,10 @@ impl VerifiedProvider {
             ProviderRuntime::Onnx(runtime) => runtime
                 .embed(
                     texts,
-                    Some(onnx_batch_size.unwrap_or_else(|| onnx_index_batch_size(self.device))),
+                    Some(
+                        onnx_batch_size
+                            .unwrap_or_else(|| onnx_index_batch_size(self.model_id, self.device)),
+                    ),
                 )
                 .map_err(provider_error)?,
             ProviderRuntime::Qwen(runtime) => runtime.embed(texts).map_err(provider_error)?,
@@ -326,10 +355,60 @@ impl VerifiedProvider {
     }
 }
 
-const fn onnx_index_batch_size(device: ExecutionDevice) -> usize {
-    match device {
-        ExecutionDevice::Cpu => CPU_ONNX_BATCH_SIZE,
-        ExecutionDevice::GpuDirectMl => GPU_ONNX_BATCH_SIZE,
+fn user_defined_catalog_onnx(
+    root: &Path,
+    model_id: EmbeddingModelId,
+    device: ExecutionDevice,
+    pooling: Pooling,
+) -> Result<TextEmbedding, FastSearchError> {
+    let repository = hf_hub::Cache::new(root.to_path_buf())
+        .model(model_descriptor(model_id).repository.to_owned());
+    let model_path = repository
+        .get("onnx/model.onnx")
+        .ok_or_else(|| provider_error("catalog model is missing onnx/model.onnx"))?;
+    let tokenizer = |name: &str| {
+        let path = repository
+            .get(name)
+            .ok_or_else(|| provider_error(format!("catalog model is missing {name}")))?;
+        fs::read(path).map_err(provider_error)
+    };
+    let mut model = UserDefinedEmbeddingModel::new(
+        fs::read(model_path).map_err(provider_error)?,
+        TokenizerFiles {
+            tokenizer_file: tokenizer("tokenizer.json")?,
+            config_file: tokenizer("config.json")?,
+            special_tokens_map_file: tokenizer("special_tokens_map.json")?,
+            tokenizer_config_file: tokenizer("tokenizer_config.json")?,
+        },
+    )
+    .with_pooling(pooling);
+    if let Some(external_path) = repository.get("onnx/model.onnx_data") {
+        model = model.with_external_initializer(
+            "model.onnx_data".to_owned(),
+            fs::read(external_path).map_err(provider_error)?,
+        );
+    }
+    TextEmbedding::try_new_from_user_defined(model, user_defined_options(device)?)
+        .map_err(provider_error)
+}
+
+const fn onnx_index_batch_size(model: EmbeddingModelId, device: ExecutionDevice) -> usize {
+    match (model, device) {
+        // The large external-data ONNX graphs already reserve several GiB.
+        // Conservative GPU batches keep DirectML viable on 4 GiB adapters.
+        (
+            EmbeddingModelId::SnowflakeArcticEmbedLV2 | EmbeddingModelId::BgeM3,
+            ExecutionDevice::GpuDirectMl,
+        ) => 4,
+        (EmbeddingModelId::GteMultilingualBase, ExecutionDevice::GpuDirectMl) => 8,
+        (
+            EmbeddingModelId::SnowflakeArcticEmbedLV2
+            | EmbeddingModelId::GteMultilingualBase
+            | EmbeddingModelId::BgeM3,
+            ExecutionDevice::Cpu,
+        ) => DURABLE_CHECKPOINT_CHUNK_SIZE,
+        (_, ExecutionDevice::Cpu) => CPU_ONNX_BATCH_SIZE,
+        (_, ExecutionDevice::GpuDirectMl) => GPU_ONNX_BATCH_SIZE,
     }
 }
 
@@ -638,9 +717,25 @@ mod tests {
 
     #[test]
     fn directml_uses_the_qualified_batch_while_cpu_keeps_its_low_memory_batch() {
-        assert_eq!(onnx_index_batch_size(ExecutionDevice::Cpu), 1);
+        assert_eq!(
+            onnx_index_batch_size(EmbeddingModelId::MultilingualE5Small, ExecutionDevice::Cpu),
+            1
+        );
         assert_eq!(inference_chunk_size(ExecutionDevice::Cpu), 8);
-        assert_eq!(onnx_index_batch_size(ExecutionDevice::GpuDirectMl), 32);
+        assert_eq!(
+            onnx_index_batch_size(
+                EmbeddingModelId::MultilingualE5Small,
+                ExecutionDevice::GpuDirectMl
+            ),
+            32
+        );
+        assert_eq!(
+            onnx_index_batch_size(
+                EmbeddingModelId::SnowflakeArcticEmbedLV2,
+                ExecutionDevice::GpuDirectMl
+            ),
+            4
+        );
         assert_eq!(inference_chunk_size(ExecutionDevice::GpuDirectMl), 32);
         assert_eq!(DURABLE_CHECKPOINT_CHUNK_SIZE, 8);
     }

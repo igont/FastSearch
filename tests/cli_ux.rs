@@ -437,7 +437,7 @@ fn workspace_creation_and_model_command_use_the_selectable_catalog() {
     let text = stdout(&output);
     assert!(text.contains("МОДЕЛЬ ПОИСКА"), "{text}");
     assert!(text.contains("Qwen3 Embedding 0.6B"), "{text}");
-    assert!(text.contains("✓  4  Qwen3 Embedding 0.6B"), "{text}");
+    assert!(text.contains("МОДЕЛЬ: Qwen3 Embedding 0.6B"), "{text}");
     assert!(text.contains("МОДЕЛЬ"), "{text}");
     assert!(text.contains("СОСТОЯНИЕ"), "{text}");
     assert!(text.contains("CPU"), "{text}");
@@ -464,7 +464,7 @@ fn model_catalog_accepts_plain_number_as_the_next_selection() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
-    assert!(text.contains("✓  2  E5 Base"), "{text}");
+    assert!(text.contains("МОДЕЛЬ: E5 Base"), "{text}");
     assert!(text.contains("Модель: E5 Base"), "{text}");
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
     assert!(profile.contains("multilingual-e5-base"), "{profile}");
@@ -479,7 +479,7 @@ fn model_command_accepts_a_number_without_opening_the_catalog_first() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
-    assert!(text.contains("✓  2  E5 Base"), "{text}");
+    assert!(text.contains("МОДЕЛЬ: E5 Base"), "{text}");
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
     assert!(profile.contains("multilingual-e5-base"), "{profile}");
 }

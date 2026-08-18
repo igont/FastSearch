@@ -157,6 +157,173 @@ impl SqliteStateStore {
         self.generation()
     }
 
+    /// File fingerprints from the last complete successful scan, keyed by the
+    /// source snapshot storage identity.  Filesystem adapters use this only to
+    /// avoid reparsing byte-identical sources; deletion still comes from the
+    /// fresh directory walk performed on every update.
+    pub fn source_hashes(&self) -> Result<BTreeMap<String, String>, FastSearchError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT source_key, file_hash FROM state_source_snapshots ORDER BY source_key")
+            .map_err(state_failure)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(state_failure)?
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(state_failure)
+    }
+
+    /// Reconciles only parsed changed sources while treating `seen_source_keys`
+    /// as the authoritative result of the current directory walk.  This keeps
+    /// unchanged files and their records in SQLite, while still removing files
+    /// that disappeared since the preceding scan.
+    pub fn reconcile_incremental(
+        &mut self,
+        snapshots: &[SourceSnapshot],
+        seen_source_keys: &BTreeSet<String>,
+        force_source_keys: &BTreeSet<String>,
+    ) -> Result<StateChangeSet, FastSearchError> {
+        // A copied legacy database has records without source ownership. Only
+        // the established full reconciliation can safely evict that state.
+        if self.mandatory_rebuild {
+            return StateStore::reconcile_snapshots(self, snapshots);
+        }
+        let known_hashes = self.source_hashes()?;
+        let mut changed = Vec::new();
+        let mut incoming_ids = BTreeSet::new();
+        for snapshot in snapshots {
+            let key = snapshot.storage_key();
+            if !seen_source_keys.contains(&key) {
+                return Err(FastSearchError::new(
+                    ErrorKind::StateFailure,
+                    "incremental snapshot is absent from its observed source set",
+                ));
+            }
+            if !force_source_keys.contains(&key)
+                && known_hashes.get(&key) == Some(&snapshot.file_hash().as_str().to_owned())
+            {
+                continue;
+            }
+            for record in snapshot.records() {
+                if !incoming_ids.insert(record.id().clone()) {
+                    return Err(FastSearchError::new(
+                        ErrorKind::DuplicateStableId,
+                        "incremental scan contains duplicate stable IDs",
+                    ));
+                }
+            }
+            self.reject_cross_source_ids(&key, snapshot.records())?;
+            changed.push((key, snapshot));
+        }
+
+        let removed = known_hashes
+            .keys()
+            .filter(|key| !seen_source_keys.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let previous_by_source = changed
+            .iter()
+            .map(|(source_key, _)| {
+                self.existing_source_records(source_key)
+                    .map(|records| (source_key.clone(), records))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let removed_record_counts = removed
+            .iter()
+            .map(|source_key| {
+                self.existing_source_records(source_key)
+                    .map(|records| (source_key.clone(), records.len()))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let mut changes = Vec::new();
+        let transaction = self.connection.transaction().map_err(state_failure)?;
+        for (source_key, snapshot) in &changed {
+            let previous = previous_by_source
+                .get(source_key)
+                .ok_or_else(|| state_failure("changed source lost its prior snapshot"))?;
+            let current_ids = snapshot
+                .records()
+                .iter()
+                .map(|record| record.id().clone())
+                .collect::<BTreeSet<_>>();
+            changes.extend(snapshot.records().iter().map(
+                |record| match previous.get(record.id()) {
+                    None => StateChange::Added,
+                    Some(hash) if hash == record.content_hash() => StateChange::Unchanged,
+                    Some(_) => StateChange::Changed,
+                },
+            ));
+            changes.extend(
+                previous
+                    .keys()
+                    .filter(|id| !current_ids.contains(*id))
+                    .map(|_| StateChange::Deleted),
+            );
+            transaction
+                .execute("DELETE FROM state_records WHERE id IN (SELECT record_id FROM state_source_memberships WHERE source_key = ?1)", [source_key])
+                .map_err(state_failure)?;
+            transaction
+                .execute(
+                    "DELETE FROM state_source_snapshots WHERE source_key = ?1",
+                    [source_key],
+                )
+                .map_err(state_failure)?;
+            transaction
+                .execute(
+                    "INSERT INTO state_source_snapshots (source_key, file_hash) VALUES (?1, ?2)",
+                    params![source_key, snapshot.file_hash().as_str()],
+                )
+                .map_err(state_failure)?;
+            for record in snapshot.records() {
+                write_record(&transaction, record)?;
+                transaction
+                    .execute(
+                        "INSERT INTO state_source_memberships (source_key, record_id) VALUES (?1, ?2)",
+                        params![source_key, record.id().as_str()],
+                    )
+                    .map_err(state_failure)?;
+            }
+        }
+        for source_key in &removed {
+            transaction
+                .execute(
+                    "DELETE FROM state_records WHERE id IN (SELECT record_id FROM state_source_memberships WHERE source_key = ?1)",
+                    [source_key],
+                )
+                .map_err(state_failure)?;
+            let count = *removed_record_counts
+                .get(source_key)
+                .ok_or_else(|| state_failure("removed source lost its prior snapshot"))?;
+            changes.extend(std::iter::repeat_n(StateChange::Deleted, count));
+            transaction
+                .execute(
+                    "DELETE FROM state_source_snapshots WHERE source_key = ?1",
+                    [source_key],
+                )
+                .map_err(state_failure)?;
+        }
+        if changes
+            .iter()
+            .any(|change| *change != StateChange::Unchanged)
+        {
+            increment_generation(&transaction)?;
+        }
+        transaction.commit().map_err(state_failure)?;
+        if self.mandatory_rebuild {
+            self.connection
+                .execute(
+                    "INSERT INTO state_identity_version (singleton, version) VALUES (1, 'named-root-v1')
+                     ON CONFLICT(singleton) DO UPDATE SET version = excluded.version",
+                    [],
+                )
+                .map_err(state_failure)?;
+            self.mandatory_rebuild = false;
+        }
+        Ok(StateChangeSet::new(changes, self.generation()?))
+    }
+
     fn generation(&self) -> Result<u64, FastSearchError> {
         let value: i64 = self
             .connection

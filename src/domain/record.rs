@@ -317,6 +317,47 @@ impl SourceSnapshot {
     pub fn records(&self) -> &[CanonicalRecord] {
         &self.records
     }
+
+    /// Stable storage identity for one physical source snapshot.  It is kept
+    /// independent from record IDs so a file can add, remove or rename its
+    /// internal sections without losing the ability to reconcile the file.
+    #[must_use]
+    pub fn storage_key(&self) -> String {
+        Self::storage_key_for(self.root(), self.locator())
+    }
+
+    #[must_use]
+    pub fn storage_key_for(root: Option<&LogicalRootId>, locator: &SourceLocator) -> String {
+        fn append_component(key: &mut String, value: &str) {
+            key.push_str(&value.len().to_string());
+            key.push(':');
+            key.push_str(value);
+        }
+
+        let mut key = String::new();
+        if let Some(root) = root {
+            append_component(&mut key, root.as_str());
+        }
+        append_component(&mut key, locator.path());
+        match locator.selector() {
+            SourceSelector::MarkdownHeading { heading_path } => {
+                key.push('M');
+                for heading in heading_path {
+                    append_component(&mut key, heading);
+                }
+            }
+            SourceSelector::RegistryRow { row } => {
+                key.push('R');
+                append_component(&mut key, &row.get().to_string());
+            }
+            SourceSelector::CodeSymbol { symbol } => {
+                key.push('C');
+                append_component(&mut key, symbol);
+            }
+            SourceSelector::WholeFile => key.push('F'),
+        }
+        key
+    }
 }
 
 /// Единая индексируемая сущность для документов, реестров, карт и symbols.

@@ -33,7 +33,26 @@ pub(super) struct ScannedSource {
     pub(super) kind: ScannedSourceKind,
 }
 
+/// A discovered eligible source before its contents are read.  Incremental
+/// indexing still enumerates the tree to detect additions/deletions, but can
+/// avoid reparsing byte-identical files.
+#[derive(Debug)]
+pub(super) struct DiscoveredSource {
+    pub(super) locator: String,
+    pub(super) path: PathBuf,
+    pub(super) kind: ScannedSourceKind,
+}
+
 pub(super) fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
+    let mut sources = discover_sources(root)?
+        .into_iter()
+        .map(|source| read_source(source.path, source.locator, source.kind))
+        .collect::<Result<Vec<_>, _>>()?;
+    sources.retain(|source| !is_generated_traceability_coverage_registry(source));
+    Ok(sources)
+}
+
+pub(super) fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>, FastSearchError> {
     let root = root
         .canonicalize()
         .map_err(|error| source_failure("canonicalize source root", error))?;
@@ -80,10 +99,30 @@ pub(super) fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearch
             continue;
         }
         if let Some(kind) = source_kind(entry.path()) {
-            let source = read_source(&root, entry.into_path(), kind)?;
-            if !is_generated_traceability_coverage_registry(&source) {
-                sources.push(source);
+            let path = entry.into_path();
+            let canonical_path = path
+                .canonicalize()
+                .map_err(|error| source_failure("canonicalize source file", error))?;
+            let relative = canonical_path.strip_prefix(&root).map_err(|_| {
+                FastSearchError::new(
+                    ErrorKind::SourceFailure,
+                    "source file escapes configured root",
+                )
+            })?;
+            if !relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(FastSearchError::new(
+                    ErrorKind::SourceFailure,
+                    "source locator is not a contained relative path",
+                ));
             }
+            sources.push(DiscoveredSource {
+                locator: relative.to_string_lossy().replace('\\', "/"),
+                path: canonical_path,
+                kind,
+            });
         }
     }
     sources.sort_by(|left, right| left.locator.cmp(&right.locator));
@@ -93,7 +132,7 @@ pub(super) fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearch
 /// Generated coverage tables flatten text already present in canonical Markdown
 /// sources. They remain on disk for traceability tooling, but admitting them to
 /// the ordinary corpus duplicates content across lexical and vector projections.
-fn is_generated_traceability_coverage_registry(source: &ScannedSource) -> bool {
+pub(super) fn is_generated_traceability_coverage_registry(source: &ScannedSource) -> bool {
     if source.kind != ScannedSourceKind::Tsv
         || !Path::new(&source.locator).components().any(|component| {
             component
@@ -124,35 +163,14 @@ fn is_generated_traceability_coverage_registry(source: &ScannedSource) -> bool {
         && columns.iter().any(|column| column.ends_with("_coverage"))
 }
 
-fn read_source(
-    root: &Path,
+pub(super) fn read_source(
     path: PathBuf,
+    locator: String,
     kind: ScannedSourceKind,
 ) -> Result<ScannedSource, FastSearchError> {
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|error| source_failure("canonicalize source file", error))?;
-    let relative = canonical_path.strip_prefix(root).map_err(|_| {
-        FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "source file escapes configured root",
-        )
-    })?;
-    if !relative
-        .components()
-        .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(FastSearchError::new(
-            ErrorKind::SourceFailure,
-            "source locator is not a contained relative path",
-        ));
-    }
-    let bytes =
-        fs::read(&canonical_path).map_err(|error| source_failure("read source file", error))?;
+    let bytes = fs::read(&path).map_err(|error| source_failure("read source file", error))?;
     std::str::from_utf8(&bytes)
         .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
-    let locator = relative.to_string_lossy().replace('\\', "/");
-
     Ok(ScannedSource {
         locator,
         bytes,

@@ -1,6 +1,6 @@
 use terminal_dialogue::{ActionItem, NextStep, UserErrorDocument};
 
-use crate::domain::IndexFreshness;
+use crate::domain::{EmbeddingModelId, IndexFreshness};
 
 pub(super) fn discovery_create() -> NextStep {
     NextStep::instruction("Проверьте найденные источники и выберите действие:")
@@ -18,7 +18,7 @@ pub(super) fn discovery_apply() -> NextStep {
 pub(super) fn model_catalog() -> NextStep {
     NextStep::instruction("Введите номер модели или выберите действие:")
         .with_action(ActionItem::new(
-            "<номер 1–5>",
+            format!("<номер 1–{}>", EmbeddingModelId::ALL.len()),
             "скачать при отсутствии и выбрать как основную",
         ))
         .with_action(ActionItem::new(

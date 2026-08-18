@@ -1,18 +1,31 @@
 //! Filesystem boundary for read-only document sources.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::domain::{CanonicalRecord, ErrorKind, FastSearchError, LogicalRootId, SourceSnapshot};
+use crate::domain::{
+    CanonicalRecord, ErrorKind, FastSearchError, FileHash, LogicalRootId, SourceLocator,
+    SourceSnapshot,
+};
 use crate::ports::SourcePort;
 
 mod markdown;
 mod scanner;
 mod tsv;
 
-use scanner::{ScannedSourceKind, scan_sources};
+use scanner::{
+    ScannedSourceKind, discover_sources, is_generated_traceability_coverage_registry, read_source,
+    scan_sources,
+};
+
+/// The changed subset of one source root plus every source key observed during
+/// this scan.  The latter is what makes deletion detection exact.
+pub struct IncrementalSnapshots {
+    pub snapshots: Vec<SourceSnapshot>,
+    pub seen_source_keys: BTreeSet<String>,
+}
 
 /// Reads canonical Markdown snapshots from the verified source root.
 pub fn markdown_snapshots(root: &Path) -> Result<Vec<SourceSnapshot>, FastSearchError> {
@@ -47,6 +60,56 @@ impl FilesystemSource {
         let snapshots = collect_snapshots(&self.root, None, self.root_id.as_ref())?;
         ensure_unique_snapshot_ids(&snapshots)?;
         Ok(snapshots)
+    }
+
+    /// Reads every eligible file once to calculate its canonical file hash,
+    /// but parses Markdown/TSV only if that hash differs from the durable
+    /// SQLite snapshot. This is deliberately content-hash based rather than
+    /// `mtime` based, so copied files and restored timestamps stay correct.
+    pub fn snapshots_incremental(
+        &self,
+        known_hashes: &BTreeMap<String, String>,
+    ) -> Result<IncrementalSnapshots, FastSearchError> {
+        let mut snapshots = Vec::new();
+        let mut seen_source_keys = BTreeSet::new();
+        for discovered in discover_sources(&self.root)? {
+            let source = read_source(discovered.path, discovered.locator, discovered.kind)?;
+            if is_generated_traceability_coverage_registry(&source) {
+                continue;
+            }
+            let locator = SourceLocator::whole_file(source.locator.clone())
+                .map_err(|error| source_contract_failure(error.message()))?;
+            let key = SourceSnapshot::storage_key_for(self.root_id.as_ref(), &locator);
+            seen_source_keys.insert(key.clone());
+            let file_hash = normalized_file_hash(&source.bytes)?;
+            if known_hashes.get(&key) == Some(&file_hash.as_str().to_owned()) {
+                continue;
+            }
+            let snapshot = parse_source(
+                source.kind,
+                &source.locator,
+                &source.bytes,
+                self.root_id.as_ref(),
+            )
+            .map_err(|error| {
+                FastSearchError::new(
+                    error.kind().clone(),
+                    format!("{}: {}", source.locator, error.message()),
+                )
+            })?;
+            if snapshot.file_hash() != &file_hash {
+                return Err(FastSearchError::new(
+                    ErrorKind::SourceFailure,
+                    "source parser produced a file hash inconsistent with canonical normalization",
+                ));
+            }
+            snapshots.push(snapshot);
+        }
+        ensure_unique_snapshot_ids(&snapshots)?;
+        Ok(IncrementalSnapshots {
+            snapshots,
+            seen_source_keys,
+        })
     }
 }
 
@@ -120,6 +183,16 @@ pub(super) fn normalize_document(document: &str) -> String {
         .unwrap_or(document)
         .replace("\r\n", "\n")
         .replace('\r', "\n")
+}
+
+pub(super) fn normalized_file_hash(bytes: &[u8]) -> Result<FileHash, FastSearchError> {
+    let document = std::str::from_utf8(bytes)
+        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
+    FileHash::parse(versioned_hash(
+        "file",
+        [normalize_document(document).as_str()],
+    ))
+    .map_err(|error| source_contract_failure(error.message()))
 }
 
 pub(super) fn versioned_hash<'a>(scope: &str, fields: impl IntoIterator<Item = &'a str>) -> String {
@@ -239,6 +312,31 @@ mod tests {
                 "Traceability/Alignment Evidence Registry.tsv"
             ]
         );
+    }
+
+    #[test]
+    fn incremental_snapshot_scan_parses_only_the_file_with_a_new_content_hash() {
+        let fixture = Fixture::new();
+        fixture.write("one.md", "# One\noriginal");
+        fixture.write("two.md", "# Two\nunchanged");
+        let source = FilesystemSource::new(fixture.path());
+        let initial = source.snapshot().unwrap();
+        let known = initial
+            .iter()
+            .map(|snapshot| {
+                (
+                    snapshot.storage_key(),
+                    snapshot.file_hash().as_str().to_owned(),
+                )
+            })
+            .collect();
+
+        fixture.write("one.md", "# One\nchanged");
+        let delta = source.snapshots_incremental(&known).unwrap();
+
+        assert_eq!(delta.seen_source_keys.len(), 2);
+        assert_eq!(delta.snapshots.len(), 1);
+        assert_eq!(delta.snapshots[0].locator().path(), "one.md");
     }
 
     #[test]

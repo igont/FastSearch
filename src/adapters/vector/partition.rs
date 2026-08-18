@@ -49,6 +49,18 @@ pub(super) struct LoadedPartition {
     pub records: BTreeMap<String, ProjectedRecord>,
 }
 
+/// A structurally verified previous partition, independent of the current
+/// corpus generation.  It is used only as an embedding cache: callers must
+/// still compare each content hash before reusing a vector.
+pub(super) struct ReusablePartition {
+    pub records: BTreeMap<String, ReusableVector>,
+}
+
+pub(super) struct ReusableVector {
+    pub content_hash: String,
+    pub vector: Vec<f32>,
+}
+
 pub(super) struct ExpectedPartition<'a> {
     pub model_id: EmbeddingModelId,
     pub model_identity: &'a str,
@@ -497,6 +509,124 @@ pub(super) fn load(
     }))
 }
 
+/// Loads vectors from the last committed partition for delta vectorization.
+///
+/// Unlike [`load`], this deliberately does not require the current state
+/// generation or corpus fingerprint to match.  The model artefact identity
+/// and every stored vector layout are still verified here; the caller then
+/// admits an individual vector only when its record content hash matches.
+pub(super) fn load_reusable(
+    root: &Path,
+    model_id: EmbeddingModelId,
+    model_identity: &str,
+    artifact_manifest: &str,
+) -> Result<Option<ReusablePartition>, FastSearchError> {
+    let manifest_path = root.join("manifest.toml");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let lock = open_lock(root)?;
+    FileExt::lock_shared(&lock).map_err(partition_failure)?;
+    let manifest: PartitionManifest =
+        toml::from_str(&fs::read_to_string(&manifest_path).map_err(partition_failure)?)
+            .map_err(partition_failure)?;
+    if manifest.schema_version != 2
+        || manifest.model_slug != model_id.slug()
+        || manifest.model_identity != model_identity
+        || manifest.artifact_manifest != artifact_manifest
+        || manifest.runtime_contract != VECTOR_RUNTIME_CONTRACT
+        || manifest.dimension != model_id.dimension()
+        || manifest.build_duration_ms.is_none()
+    {
+        return Ok(None);
+    }
+
+    let connection = Connection::open_with_flags(
+        root.join("records.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(partition_failure)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT position, record_id, content_hash, offset_bytes, dimension
+             FROM projection_records ORDER BY position",
+        )
+        .map_err(partition_failure)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(partition_failure)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(partition_failure)?;
+    drop(statement);
+    drop(connection);
+    if rows.len() != manifest.record_count {
+        return Err(partition_failure("partition record count is inconsistent"));
+    }
+    let expected_bytes = manifest
+        .record_count
+        .checked_mul(manifest.dimension)
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| partition_failure("partition vector file size overflow"))?;
+    let vectors_path = root.join("vectors.bin");
+    if fs::metadata(&vectors_path)
+        .map_err(partition_failure)?
+        .len()
+        != u64::try_from(expected_bytes).map_err(partition_failure)?
+    {
+        return Err(partition_failure(
+            "partition vector file size is inconsistent",
+        ));
+    }
+    let mut reader = BufReader::new(File::open(vectors_path).map_err(partition_failure)?);
+    let mut records = BTreeMap::new();
+    for (expected_position, (position, id, hash, offset, dimension)) in rows.into_iter().enumerate()
+    {
+        if position != i64::try_from(expected_position).map_err(partition_failure)?
+            || offset
+                != i64::try_from(expected_position * manifest.dimension * 4)
+                    .map_err(partition_failure)?
+            || dimension != i64::try_from(manifest.dimension).map_err(partition_failure)?
+        {
+            return Err(partition_failure(
+                "partition record offsets are inconsistent",
+            ));
+        }
+        let mut vector = Vec::with_capacity(manifest.dimension);
+        for _ in 0..manifest.dimension {
+            let mut bytes = [0_u8; 4];
+            reader.read_exact(&mut bytes).map_err(partition_failure)?;
+            let value = f32::from_le_bytes(bytes);
+            if !value.is_finite() {
+                return Err(partition_failure("partition contains a non-finite vector"));
+            }
+            vector.push(value);
+        }
+        if records
+            .insert(
+                id,
+                ReusableVector {
+                    content_hash: hash,
+                    vector,
+                },
+            )
+            .is_some()
+        {
+            return Err(partition_failure(
+                "partition contains duplicate record identifiers",
+            ));
+        }
+    }
+    Ok(Some(ReusablePartition { records }))
+}
+
 pub(super) fn stored_metrics(
     root: &Path,
 ) -> Result<Option<StoredPartitionMetrics>, FastSearchError> {
@@ -674,6 +804,11 @@ mod tests {
         assert!(loaded.manifest.build_duration_ms.is_some());
         assert_eq!(loaded.records.len(), 1);
         assert_eq!(loaded.records["record-1"].vector.len(), model.dimension());
+        let reusable = load_reusable(&temp.0, model, identity, &"A".repeat(64))
+            .unwrap()
+            .unwrap();
+        assert_eq!(reusable.records["record-1"].content_hash, "hash-1");
+        assert_eq!(reusable.records["record-1"].vector.len(), model.dimension());
         let metrics = stored_metrics(&temp.0).unwrap().unwrap();
         assert!(metrics.size_bytes > u64::try_from(model.dimension() * 4).unwrap());
 

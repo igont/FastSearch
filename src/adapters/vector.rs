@@ -526,32 +526,76 @@ impl LocalE5Vector {
             state.projection_generation = Some(state_generation);
             return Ok(status(&state));
         }
-        let mut vectors = if let Some(partition_root) = &partition_root {
-            partition::load_checkpoint(partition_root, &partition_manifest, records)
+        // A committed partition is also a durable embedding cache.  A changed
+        // state generation must not force unrelated files through the model:
+        // reuse only an exact stable-id/content-hash match and embed the rest.
+        let mut reusable = if let Some(partition_root) = &partition_root {
+            partition::load_reusable(partition_root, model_id, &identity, &artifact_manifest)
                 .map_err(|error| self.provider_failed(state_generation, error))?
+                .map(|partition| partition.records)
+                .unwrap_or_default()
         } else {
+            BTreeMap::new()
+        };
+        reusable.retain(|id, cached| {
+            records.iter().any(|record| {
+                record.id().as_str() == id
+                    && record.content_hash().as_str() == cached.content_hash
+                    && cached.vector.len() == model_id.dimension()
+            })
+        });
+        let records_to_embed = records
+            .iter()
+            .filter(|record| !reusable.contains_key(record.id().as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let reused_count = reusable.len();
+        // A checkpoint contains a positional prefix of the whole old corpus.
+        // It is safe only when no cached records are being spliced in.
+        let mut vectors = if reused_count == 0 {
+            if let Some(partition_root) = &partition_root {
+                partition::load_checkpoint(partition_root, &partition_manifest, records)
+                    .map_err(|error| self.provider_failed(state_generation, error))?
+            } else {
+                Vec::new()
+            }
+        } else {
+            if let Some(partition_root) = &partition_root {
+                let _ = partition::clear_checkpoint(partition_root);
+            }
             Vec::new()
         };
         let completed_records = vectors.len();
-        let additional = if let Some(worker_count) = candle_worker_count(model_id, device) {
+        let checkpoint_enabled = reused_count == 0;
+        let additional = if records_to_embed.is_empty() {
+            progress(VectorBuildProgress::Embedding {
+                completed_records: total,
+                total_records: total,
+            });
+            Vec::new()
+        } else if let Some(worker_count) = candle_worker_count(model_id, device) {
             drop(verified);
             embed_candle_records_in_parallel(
                 CandleParallelJob {
                     root: &root,
                     model_id,
                     allow_catalog_download,
-                    records,
+                    records: if checkpoint_enabled {
+                        records
+                    } else {
+                        &records_to_embed
+                    },
                     completed_records,
                     worker_count,
                 },
                 &mut |completed, total| {
                     progress(VectorBuildProgress::Embedding {
-                        completed_records: completed as u64,
-                        total_records: total as u64,
+                        completed_records: (reused_count + completed) as u64,
+                        total_records: (reused_count + total) as u64,
                     });
                 },
                 &mut |completed_before, chunk| {
-                    if let Some(partition_root) = &partition_root {
+                    if checkpoint_enabled && let Some(partition_root) = &partition_root {
                         partition::append_checkpoint(
                             partition_root,
                             &partition_manifest,
@@ -567,16 +611,20 @@ impl LocalE5Vector {
         } else {
             verified
                 .embed_records_from_with_progress(
-                    records,
+                    if checkpoint_enabled {
+                        records
+                    } else {
+                        &records_to_embed
+                    },
                     completed_records,
                     &mut |completed, total| {
                         progress(VectorBuildProgress::Embedding {
-                            completed_records: completed as u64,
-                            total_records: total as u64,
+                            completed_records: (reused_count + completed) as u64,
+                            total_records: (reused_count + total) as u64,
                         });
                     },
                     &mut |completed_before, chunk| {
-                        if let Some(partition_root) = &partition_root {
+                        if checkpoint_enabled && let Some(partition_root) = &partition_root {
                             partition::append_checkpoint(
                                 partition_root,
                                 &partition_manifest,
@@ -591,14 +639,46 @@ impl LocalE5Vector {
                 .map_err(|error| self.provider_failed(state_generation, error))?
         };
         vectors.extend(additional);
+        let embedded_records = if checkpoint_enabled {
+            records
+        } else {
+            &records_to_embed
+        };
+        if vectors.len() != embedded_records.len() {
+            return Err(self.provider_failed(
+                state_generation,
+                FastSearchError::new(
+                    ErrorKind::ProjectionFailure,
+                    "embedding provider returned an incomplete delta vector batch",
+                ),
+            ));
+        }
+        let embedded = embedded_records
+            .iter()
+            .map(|record| record.id().as_str().to_owned())
+            .zip(vectors)
+            .collect::<BTreeMap<_, _>>();
         let mut next = BTreeMap::new();
-        for (record, vector) in records.iter().cloned().zip(vectors) {
+        for record in records.iter().cloned() {
             if next.contains_key(record.id().as_str()) {
                 return Err(FastSearchError::new(
                     ErrorKind::ProjectionFailure,
                     "vector projection input contains a duplicate stable identifier",
                 ));
             }
+            let vector = reusable
+                .remove(record.id().as_str())
+                .map(|cached| cached.vector)
+                .or_else(|| embedded.get(record.id().as_str()).cloned())
+                .ok_or_else(|| {
+                    self.provider_failed(
+                        state_generation,
+                        FastSearchError::new(
+                            ErrorKind::ProjectionFailure,
+                            "missing vector for a canonical record during delta publish",
+                        ),
+                    )
+                })?;
             next.insert(
                 record.id().as_str().to_owned(),
                 ProjectedRecord {

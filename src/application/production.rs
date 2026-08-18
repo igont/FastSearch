@@ -801,20 +801,36 @@ impl IndexingCoordinator<'_> {
             work_total: None,
             work_stage: None,
         });
+        let known_hashes = self.state.source_hashes()?;
         let mut snapshots = Vec::new();
+        let mut seen_source_keys = std::collections::BTreeSet::new();
+        // AUTO maps derive their metadata from the current document set, so a
+        // byte-identical map may still change from CURRENT to STALE.
+        let mut force_source_keys = std::collections::BTreeSet::new();
         for source in self.documents {
-            snapshots.extend(source.snapshot()?);
+            let delta = source.snapshots_incremental(&known_hashes)?;
+            snapshots.extend(delta.snapshots);
+            seen_source_keys.extend(delta.seen_source_keys);
         }
         for source in self.maps {
-            snapshots.extend(source.snapshot()?);
+            let source_snapshots = source.snapshot()?;
+            let keys = source_snapshots
+                .iter()
+                .map(|snapshot| snapshot.storage_key())
+                .collect::<Vec<_>>();
+            seen_source_keys.extend(keys.iter().cloned());
+            force_source_keys.extend(keys);
+            snapshots.extend(source_snapshots);
         }
         for source in self.symbols {
-            snapshots.extend(source.snapshot()?);
+            let source_snapshots = source.snapshot()?;
+            seen_source_keys.extend(
+                source_snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.storage_key()),
+            );
+            snapshots.extend(source_snapshots);
         }
-        let records = snapshots
-            .iter()
-            .flat_map(|snapshot| snapshot.records().iter().cloned())
-            .collect::<Vec<_>>();
         progress(IndexingProgress {
             completed: 1,
             total,
@@ -823,7 +839,10 @@ impl IndexingCoordinator<'_> {
             work_total: None,
             work_stage: None,
         });
-        let changes = self.state.reconcile_snapshots(&snapshots)?;
+        let changes =
+            self.state
+                .reconcile_incremental(&snapshots, &seen_source_keys, &force_source_keys)?;
+        let records = self.state.all_records()?;
         progress(IndexingProgress {
             completed: 2,
             total,

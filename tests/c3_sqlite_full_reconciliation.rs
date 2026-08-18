@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -112,6 +112,60 @@ fn complete_scan_reconciles_every_source_and_empty_scan_removes_the_corpus() {
     assert_eq!(store.lifecycle_status().state_generation(), 3);
     assert_eq!(store.lifecycle_status().freshness(), IndexFreshness::Stale);
     assert_record(&store, "guide:first", false);
+    drop(store);
+    fs::remove_file(path).expect("remove database");
+}
+
+#[test]
+fn incremental_reconciliation_preserves_unchanged_sources_and_removes_missing_ones() {
+    let path = database_path("incremental-scan");
+    let guide = snapshot(
+        "docs/guide.md",
+        "file:guide-v1",
+        vec![record("guide", "guide-v1")],
+    );
+    let reference = snapshot(
+        "docs/reference.md",
+        "file:reference-v1",
+        vec![record("reference", "reference-v1")],
+    );
+    let changed_reference = snapshot(
+        "docs/reference.md",
+        "file:reference-v2",
+        vec![record("reference", "reference-v2")],
+    );
+    let mut store = SqliteStateStore::open(&path).expect("open state");
+    store
+        .reconcile_snapshots(&[guide.clone(), reference])
+        .expect("initial full reconcile");
+
+    let seen = [guide.storage_key(), changed_reference.storage_key()]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let changes = store
+        .reconcile_incremental(&[changed_reference], &seen, &BTreeSet::new())
+        .expect("one changed source applies without replacing the whole corpus");
+    assert_eq!(changes.changes(), &[StateChange::Changed]);
+    assert_record(&store, "guide", true);
+    assert_record(&store, "reference", true);
+
+    let reference_key = store
+        .source_hashes()
+        .expect("read source hashes")
+        .keys()
+        .find(|key| key.contains("reference.md"))
+        .cloned()
+        .expect("reference snapshot is durable");
+    let changes = store
+        .reconcile_incremental(
+            &[],
+            &[reference_key].into_iter().collect(),
+            &BTreeSet::new(),
+        )
+        .expect("missing guide source is removed from durable state");
+    assert_eq!(changes.changes(), &[StateChange::Deleted]);
+    assert_record(&store, "guide", false);
+    assert_record(&store, "reference", true);
     drop(store);
     fs::remove_file(path).expect("remove database");
 }

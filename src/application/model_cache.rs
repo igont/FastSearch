@@ -43,7 +43,7 @@ pub struct EmbeddingModelDescriptor {
     pub approximate_download_bytes: u64,
 }
 
-pub const MODEL_CATALOG: [EmbeddingModelDescriptor; 5] = [
+pub const MODEL_CATALOG: [EmbeddingModelDescriptor; 9] = [
     EmbeddingModelDescriptor {
         id: EmbeddingModelId::MultilingualE5Small,
         repository: E5_REPOSITORY,
@@ -83,6 +83,38 @@ pub const MODEL_CATALOG: [EmbeddingModelDescriptor; 5] = [
         source_url: "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe",
         profile: "экспериментальная · 768 измерений",
         approximate_download_bytes: 1_918_272_448,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::SnowflakeArcticEmbedLV2,
+        repository: "Snowflake/snowflake-arctic-embed-l-v2.0",
+        revision: "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+        source_url: "https://huggingface.co/Snowflake/snowflake-arctic-embed-l-v2.0",
+        profile: "качество · 8192 токена · 1024 измерения",
+        approximate_download_bytes: 2_290_000_000,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::GteMultilingualBase,
+        repository: "onnx-community/gte-multilingual-base",
+        revision: "2edbf5e672aab465f9ed4c154a8b61791c082c69",
+        source_url: "https://huggingface.co/onnx-community/gte-multilingual-base",
+        profile: "быстрая · 8192 токена · 768 измерений",
+        approximate_download_bytes: 1_275_000_000,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::BgeM3,
+        repository: "BAAI/bge-m3",
+        revision: "5617a9f61b028005a4858fdac845db406aefb181",
+        source_url: "https://huggingface.co/BAAI/bge-m3",
+        profile: "гибридная · dense / sparse · 1024 измерения",
+        approximate_download_bytes: 2_290_000_000,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::JinaEmbeddingsV3,
+        repository: "jinaai/jina-embeddings-v3",
+        revision: "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+        source_url: "https://huggingface.co/jinaai/jina-embeddings-v3",
+        profile: "экспериментальная · task-LoRA · некоммерческая лицензия",
+        approximate_download_bytes: 2_310_000_000,
     },
 ];
 
@@ -188,6 +220,114 @@ const NOMIC_ASSETS: &[ModelAsset] = &[
     ModelAsset {
         path: "model.safetensors",
         size: 1_901_187_232,
+    },
+];
+const ARCTIC_ASSETS: &[ModelAsset] = &[
+    ModelAsset {
+        path: "config.json",
+        size: 818,
+    },
+    ModelAsset {
+        path: "tokenizer.json",
+        size: 17_083_074,
+    },
+    ModelAsset {
+        path: "tokenizer_config.json",
+        size: 1_339,
+    },
+    ModelAsset {
+        path: "special_tokens_map.json",
+        size: 964,
+    },
+    ModelAsset {
+        path: "sentencepiece.bpe.model",
+        size: 5_069_051,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx",
+        size: 702_280,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx_data",
+        size: 2_266_886_160,
+    },
+];
+const GTE_ASSETS: &[ModelAsset] = &[
+    ModelAsset {
+        path: "config.json",
+        size: 1_648,
+    },
+    ModelAsset {
+        path: "tokenizer.json",
+        size: 17_082_734,
+    },
+    ModelAsset {
+        path: "tokenizer_config.json",
+        size: 1_149,
+    },
+    ModelAsset {
+        path: "special_tokens_map.json",
+        size: 964,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx",
+        size: 1_255_502_649,
+    },
+];
+const BGE_M3_ASSETS: &[ModelAsset] = &[
+    ModelAsset {
+        path: "config.json",
+        size: 687,
+    },
+    ModelAsset {
+        path: "tokenizer.json",
+        size: 17_098_108,
+    },
+    ModelAsset {
+        path: "tokenizer_config.json",
+        size: 444,
+    },
+    ModelAsset {
+        path: "special_tokens_map.json",
+        size: 964,
+    },
+    ModelAsset {
+        path: "sentencepiece.bpe.model",
+        size: 5_069_051,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx",
+        size: 724_923,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx_data",
+        size: 2_266_820_608,
+    },
+];
+const JINA_ASSETS: &[ModelAsset] = &[
+    ModelAsset {
+        path: "config.json",
+        size: 1_799,
+    },
+    ModelAsset {
+        path: "tokenizer.json",
+        size: 17_082_756,
+    },
+    ModelAsset {
+        path: "tokenizer_config.json",
+        size: 1_148,
+    },
+    ModelAsset {
+        path: "special_tokens_map.json",
+        size: 964,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx",
+        size: 1_513_159,
+    },
+    ModelAsset {
+        path: "onnx/model.onnx_data",
+        size: 2_291_339_168,
     },
 ];
 
@@ -434,6 +574,9 @@ pub(crate) fn model_device_capability(
     model: EmbeddingModelId,
     device: ExecutionDevice,
 ) -> Result<DeviceCapabilityStatus, FastSearchError> {
+    if model == EmbeddingModelId::JinaEmbeddingsV3 {
+        return Ok(DeviceCapabilityStatus::Unavailable);
+    }
     if device == ExecutionDevice::Cpu {
         return Ok(DeviceCapabilityStatus::Ready);
     }
@@ -506,6 +649,17 @@ pub(super) fn download_embedding_model_assets_with_progress(
 pub fn model_runtime_capabilities(
     model: EmbeddingModelId,
 ) -> Result<ModelRuntimeCapabilities, FastSearchError> {
+    if model == EmbeddingModelId::JinaEmbeddingsV3 {
+        return Ok(ModelRuntimeCapabilities {
+            cpu: DeviceCapabilityStatus::Unavailable,
+            gpu: DeviceCapabilityStatus::Unavailable,
+            gpu_backend: None,
+            gpu_detail: Some(
+                "Jina v3 требует task_id-aware ONNX provider; текущий runtime его ещё не включает"
+                    .to_owned(),
+            ),
+        });
+    }
     if matches!(
         model,
         EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe
@@ -605,13 +759,20 @@ fn provision_catalog_assets(
         EmbeddingModelId::MultilingualE5Large => E5_LARGE_ASSETS,
         EmbeddingModelId::Qwen3Embedding06B => QWEN_ASSETS,
         EmbeddingModelId::NomicEmbedTextV2Moe => NOMIC_ASSETS,
+        EmbeddingModelId::SnowflakeArcticEmbedLV2 => ARCTIC_ASSETS,
+        EmbeddingModelId::GteMultilingualBase => GTE_ASSETS,
+        EmbeddingModelId::BgeM3 => BGE_M3_ASSETS,
+        EmbeddingModelId::JinaEmbeddingsV3 => JINA_ASSETS,
     };
     let descriptor = model_descriptor(model);
     let cache_root = match model {
         EmbeddingModelId::MultilingualE5Small => root.to_path_buf(),
-        EmbeddingModelId::MultilingualE5Base | EmbeddingModelId::MultilingualE5Large => {
-            root.to_path_buf()
-        }
+        EmbeddingModelId::MultilingualE5Base
+        | EmbeddingModelId::MultilingualE5Large
+        | EmbeddingModelId::SnowflakeArcticEmbedLV2
+        | EmbeddingModelId::GteMultilingualBase
+        | EmbeddingModelId::BgeM3
+        | EmbeddingModelId::JinaEmbeddingsV3 => root.to_path_buf(),
         EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe => {
             Cache::from_env().path().clone()
         }
@@ -843,6 +1004,19 @@ fn cached_model_artifacts_are_present(model: EmbeddingModelId, root: &Path) -> b
                     .get("model.safetensors"),
             )
         }
+        EmbeddingModelId::SnowflakeArcticEmbedLV2
+        | EmbeddingModelId::GteMultilingualBase
+        | EmbeddingModelId::BgeM3
+        | EmbeddingModelId::JinaEmbeddingsV3 => substantial_file_exists(
+            Cache::new(root.to_path_buf())
+                .model(model_descriptor(model).repository.to_owned())
+                .get("onnx/model.onnx_data")
+                .or_else(|| {
+                    Cache::new(root.to_path_buf())
+                        .model(model_descriptor(model).repository.to_owned())
+                        .get("onnx/model.onnx")
+                }),
+        ),
     }
 }
 
