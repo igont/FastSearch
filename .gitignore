@@ -8,6 +8,12 @@
 /target/
 /spikes/**/target/
 
+# Locally compiled Windows binaries
+/*.exe
+/*.dll
+/*.pdb
+/*.lib
+
 # FastSearch disposable local state
 /.cfknowledge/
 
