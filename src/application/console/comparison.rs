@@ -31,7 +31,7 @@ fn comparison_progress_dashboard() -> ProgressDashboard {
         )],
     )
     .without_bar();
-    let model_tasks = EmbeddingModelId::ALL.into_iter().map(|model| {
+    let model_tasks = EmbeddingModelId::DISPLAY_ORDER.into_iter().map(|model| {
         ProgressTaskSpec::new(
             model.display_name(),
             vec![
@@ -61,7 +61,7 @@ fn report_comparison_progress(port: &ProgressPort, event: ComparisonUpdateProgre
         ComparisonUpdateProgress::SharedCompleted => port.complete(0, "готово"),
         ComparisonUpdateProgress::SharedFailed { message } => port.fail(0, message),
         ComparisonUpdateProgress::Model { model, stage } => {
-            let task = EmbeddingModelId::ALL
+            let task = EmbeddingModelId::DISPLAY_ORDER
                 .iter()
                 .position(|candidate| *candidate == model)
                 .expect("comparison progress uses the static model catalog")
@@ -77,6 +77,9 @@ fn report_comparison_progress(port: &ProgressPort, event: ComparisonUpdateProgre
                     if let Some((completed, total)) = completed_bytes.zip(total_bytes) {
                         port.progress(task, 0, completed, total);
                     }
+                }
+                ComparisonModelStage::QueuedForIndexing => {
+                    port.stage(task, 1, "ожидает векторизацию");
                 }
                 ComparisonModelStage::Validating => {
                     port.stage(task, 0, "проверка runtime");

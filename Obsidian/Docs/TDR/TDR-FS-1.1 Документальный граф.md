@@ -1,13 +1,15 @@
 ---
 tdr_id: "TDR-FS-1.1"
 title: "Документальный граф"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 parent_tdr_id: "TDR-FS-1"
 child_tdr_ids: []
 updated: "2026-08-16"
 ---
 # TDR-FS-1.1 — Документальный граф
+
+Решение передано FastGraph и заменено его TDR-FG-1.2 и этапом FG2. [Карта передачи](<../FastGraph.md>) содержит целевые ссылки. Файл сохраняется как история прежнего проектирования FastSearch.
 
 ## Контекст TDR
 

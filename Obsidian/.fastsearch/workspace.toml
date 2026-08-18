@@ -1,0 +1,30 @@
+schema_version = 1
+id = "workspace-352108d126541bc933ec9099f92f3f057782949fb979c6dc3ff3fc9d12ea3d7a"
+name = "Obsidian"
+embedding_model = "multilingual-e5-small"
+
+[[documentation.roots]]
+id = "documentation-3fbdbac9680ff1dd"
+path = "Docs"
+
+[[documentation.roots]]
+id = "documentation-75528a5968610f9f"
+path = "Paradigms"
+
+[code]
+roots = []
+
+[exclude]
+common = [
+    ".agents",
+    ".fastsearch",
+    ".git",
+    ".obsidian",
+    ".venv",
+    "build",
+    "dist",
+    "generated",
+    "node_modules",
+    "target",
+    "vendor",
+]

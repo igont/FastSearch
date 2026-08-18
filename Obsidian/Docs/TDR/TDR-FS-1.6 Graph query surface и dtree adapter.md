@@ -1,13 +1,15 @@
 ---
 tdr_id: "TDR-FS-1.6"
 title: "Graph query surface и dtree adapter"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 parent_tdr_id: "TDR-FS-1"
 child_tdr_ids: []
 updated: "2026-08-15"
 ---
 # TDR-FS-1.6 — Graph query surface и dtree adapter
+
+Решение передано FastGraph и заменено его TDR-FG-1.5, TDR-FG-1.6 и этапом FG7. Dtree потребляет графовый порт FastGraph, а не FastSearch. [Карта передачи](<../FastGraph.md>) содержит целевые ссылки.
 
 ## Контекст TDR
 

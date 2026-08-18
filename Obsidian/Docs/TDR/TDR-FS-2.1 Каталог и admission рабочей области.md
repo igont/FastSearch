@@ -12,6 +12,7 @@ updated: "2026-08-16"
 ## Контекст TDR
 
 - [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) — parent package.
+- [TDR-FS-3](<TDR-FS-3 Поставщик снимков источников.md>) — публичная передача допущенного снимка FastGraph.
 - [PAR-FS-011](<../../Paradigms/Архитектура/Рабочие области и интерфейс/01 Рабочая область и два контура источников.md>) — product boundary.
 
 ## Входы и результат

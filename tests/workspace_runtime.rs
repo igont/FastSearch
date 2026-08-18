@@ -135,7 +135,7 @@ fn documentation_only_code_only_and_empty_workspaces_open_independently() {
 }
 
 #[test]
-fn generated_traceability_coverage_is_absent_but_ordinary_registry_is_searchable() {
+fn every_tsv_registry_is_absent_from_the_index() {
     let temp = Temp::new();
     let documents = temp.0.join("documents");
     let traceability = documents.join("Traceability");
@@ -181,9 +181,8 @@ fn generated_traceability_coverage_is_absent_but_ordinary_registry_is_searchable
         .unwrap();
 
     assert!(generated.hits().is_empty());
-    assert_eq!(ordinary.hits().len(), 1);
-    assert_eq!(ordinary.hits()[0].record().title(), "TDR-1");
-    assert_eq!(legacy.hits().len(), 1);
+    assert!(ordinary.hits().is_empty());
+    assert!(legacy.hits().is_empty());
 
     fs::write(
         &transitioning,

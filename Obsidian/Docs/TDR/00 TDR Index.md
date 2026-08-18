@@ -11,8 +11,15 @@ updated: "2026-08-16"
 
 ## Пакеты
 
-- [TDR-FS-1 — Graph knowledge plane](<TDR-FS-1 Graph knowledge plane.md>)
 - [TDR-FS-2 — Workspaces и terminal UX](<TDR-FS-2 Workspaces и terminal UX.md>)
+
+## Самостоятельные механизмы
+
+- [TDR-FS-3 - Поставщик снимков источников](<TDR-FS-3 Поставщик снимков источников.md>)
+
+## Заменённый графовый пакет
+
+- [TDR-FS-1 - Graph knowledge plane](<TDR-FS-1 Graph knowledge plane.md>) передан [FastGraph](<../FastGraph.md>).
 
 ## Механизмы
 

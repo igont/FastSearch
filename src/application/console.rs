@@ -364,10 +364,7 @@ fn create_workspace<R: BufRead>(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("Workspace");
-    let model = match prompt_embedding_model(chat, EmbeddingModelId::default())? {
-        Some(model) => model,
-        None => return Ok(None),
-    };
+    let model = EmbeddingModelId::default();
     let profile = match WorkspaceProfile::from_roots(&root, name, documents, code)
         .map(|profile| profile.with_embedding_model(model))
     {

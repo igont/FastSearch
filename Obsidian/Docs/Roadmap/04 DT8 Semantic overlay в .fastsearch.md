@@ -2,10 +2,12 @@
 id: "fastsearch/docs/roadmap/dt8-semantic-overlay"
 title: "DT8. Semantic overlay в .fastsearch"
 type: "roadmap"
-status: "принято"
+status: "заменено"
 updated: "2026-08-16"
 ---
 # DT8. Semantic overlay в `.fastsearch`
+
+Этап заменён FastGraph FG5. Переносимое графовое знание получает собственную границу FastGraph. [Передача графового контура](<../FastGraph.md>) объясняет изменение.
 
 [← Roadmap](<00 Roadmap.md>)
 

@@ -1,13 +1,15 @@
 ---
 tdr_id: "TDR-FS-1"
 title: "Graph knowledge plane"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 parent_tdr_id: ""
 child_tdr_ids: ["TDR-FS-1.1", "TDR-FS-1.2", "TDR-FS-1.3", "TDR-FS-1.4", "TDR-FS-1.5", "TDR-FS-1.6", "TDR-FS-1.7"]
 updated: "2026-08-16"
 ---
 # TDR-FS-1 — Graph knowledge plane
+
+Решение заменено пакетом FastGraph. [Передача графового контура](<../FastGraph.md>) объясняет нового владельца и соответствие документов. Этот файл сохраняется как историческое основание и больше не задаёт развитие FastSearch.
 
 [← TDR](<00 TDR Index.md>)
 

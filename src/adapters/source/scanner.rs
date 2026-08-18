@@ -22,7 +22,6 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ScannedSourceKind {
     Markdown,
-    Tsv,
 }
 
 /// Filesystem-admitted, bounded UTF-8 content for a format parser.
@@ -44,12 +43,10 @@ pub(super) struct DiscoveredSource {
 }
 
 pub(super) fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearchError> {
-    let mut sources = discover_sources(root)?
+    discover_sources(root)?
         .into_iter()
         .map(|source| read_source(source.path, source.locator, source.kind))
-        .collect::<Result<Vec<_>, _>>()?;
-    sources.retain(|source| !is_generated_traceability_coverage_registry(source));
-    Ok(sources)
+        .collect()
 }
 
 pub(super) fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>, FastSearchError> {
@@ -129,40 +126,6 @@ pub(super) fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>, Fas
     Ok(sources)
 }
 
-/// Generated coverage tables flatten text already present in canonical Markdown
-/// sources. They remain on disk for traceability tooling, but admitting them to
-/// the ordinary corpus duplicates content across lexical and vector projections.
-pub(super) fn is_generated_traceability_coverage_registry(source: &ScannedSource) -> bool {
-    if source.kind != ScannedSourceKind::Tsv
-        || !Path::new(&source.locator).components().any(|component| {
-            component
-                .as_os_str()
-                .to_string_lossy()
-                .eq_ignore_ascii_case("traceability")
-        })
-    {
-        return false;
-    }
-
-    let Ok(document) = std::str::from_utf8(&source.bytes) else {
-        return false;
-    };
-    let Some(header) = document.lines().next() else {
-        return false;
-    };
-    let columns = header
-        .split('\t')
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>();
-    let has = |required: &str| columns.iter().any(|column| column == required);
-
-    ["path", "summary", "tdr_refs", "warnings", "errors"]
-        .into_iter()
-        .all(has)
-        && columns.iter().any(|column| column.ends_with("_coverage"))
-}
-
 pub(super) fn read_source(
     path: PathBuf,
     locator: String,
@@ -188,7 +151,6 @@ fn source_kind(path: &Path) -> Option<ScannedSourceKind> {
     }
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("md") => Some(ScannedSourceKind::Markdown),
-        Some("tsv") => Some(ScannedSourceKind::Tsv),
         _ => None,
     }
 }

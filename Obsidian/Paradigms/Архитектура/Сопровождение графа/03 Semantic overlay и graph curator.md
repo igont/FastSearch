@@ -1,13 +1,15 @@
 ---
 id: "PAR-FS-008"
 title: "Semantic overlay и graph curator"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 tdr_refs: ["TDR-FS-1.4"]
 tdr_coverage: "прямое"
 updated: "2026-08-16"
 ---
 # Semantic overlay и graph curator
+
+Парадигма передана FastGraph и заменена его контрактом проверяемой семантики и этапами FG5 и FG8. Dtree сохраняет управление куратором. [Карта передачи](<../../../Docs/FastGraph.md>) содержит целевые источники.
 
 [← Сопровождение графа](<00 Сопровождение графа.md>)
 

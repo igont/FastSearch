@@ -1,13 +1,15 @@
 ---
 tdr_id: "TDR-FS-1.4"
 title: "Semantic overlay в .fastsearch"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 parent_tdr_id: "TDR-FS-1"
 child_tdr_ids: []
 updated: "2026-08-16"
 ---
 # TDR-FS-1.4 — Semantic overlay в `.fastsearch`
+
+Решение передано FastGraph и заменено его TDR-FG-1.4 и этапом FG5. Переносимое графовое знание больше не принадлежит namespace FastSearch. [Карта передачи](<../FastGraph.md>) содержит целевые ссылки.
 
 ## Контекст TDR
 

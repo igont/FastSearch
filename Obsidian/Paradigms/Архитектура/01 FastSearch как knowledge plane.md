@@ -1,13 +1,15 @@
 ---
 id: "PAR-FS-001"
 title: "FastSearch как knowledge plane"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 tdr_refs: ["TDR-FS-1"]
 tdr_coverage: "прямое"
 updated: "2026-08-16"
 ---
 # FastSearch как knowledge plane
+
+Парадигма заменена документом [FastSearch как поисковый контур](<02 FastSearch как поисковый контур.md>). Полный граф передан [FastGraph](<../../Docs/FastGraph.md>). Этот файл сохраняется как история прежней границы.
 
 [← Архитектура](<00 Архитектура.md>)
 

@@ -79,12 +79,12 @@ pub(super) fn workspace(freshness: Option<IndexFreshness>) -> NextStep {
         }
         Some(IndexFreshness::Stale) => NextStep::instruction("Поиск пока недоступен.")
             .with_action(ActionItem::new("/index update", "актуализировать индекс"))
+            .with_action(ActionItem::new(
+                "/compare",
+                "сравнить готовность и выдачу разных моделей",
+            ))
             .with_action(ActionItem::new("/sources", "проверить источники"))
             .with_action(ActionItem::new("/model", "открыть каталог моделей"))
-            .with_action(ActionItem::new(
-                "/model <номер|slug>",
-                "выбрать модель сразу",
-            ))
             .with_action(ActionItem::new("/help", "показать все команды"))
             .with_action(ActionItem::new("/exit", "закрыть FastSearch")),
         Some(IndexFreshness::Degraded) => NextStep::instruction("Индекс повреждён или недоступен.")

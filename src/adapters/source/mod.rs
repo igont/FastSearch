@@ -13,12 +13,12 @@ use crate::ports::SourcePort;
 
 mod markdown;
 mod scanner;
+/// Kept for direct parser-contract tests; scanner admission deliberately never
+/// returns TSV, so these files cannot enter any FastSearch index.
+#[allow(dead_code)]
 mod tsv;
 
-use scanner::{
-    ScannedSourceKind, discover_sources, is_generated_traceability_coverage_registry, read_source,
-    scan_sources,
-};
+use scanner::{ScannedSourceKind, discover_sources, read_source, scan_sources};
 
 /// The changed subset of one source root plus every source key observed during
 /// this scan.  The latter is what makes deletion detection exact.
@@ -63,7 +63,7 @@ impl FilesystemSource {
     }
 
     /// Reads every eligible file once to calculate its canonical file hash,
-    /// but parses Markdown/TSV only if that hash differs from the durable
+    /// but parses Markdown only if that hash differs from the durable
     /// SQLite snapshot. This is deliberately content-hash based rather than
     /// `mtime` based, so copied files and restored timestamps stay correct.
     pub fn snapshots_incremental(
@@ -74,9 +74,6 @@ impl FilesystemSource {
         let mut seen_source_keys = BTreeSet::new();
         for discovered in discover_sources(&self.root)? {
             let source = read_source(discovered.path, discovered.locator, discovered.kind)?;
-            if is_generated_traceability_coverage_registry(&source) {
-                continue;
-            }
             let locator = SourceLocator::whole_file(source.locator.clone())
                 .map_err(|error| source_contract_failure(error.message()))?;
             let key = SourceSnapshot::storage_key_for(self.root_id.as_ref(), &locator);
@@ -173,7 +170,6 @@ fn parse_source(
 ) -> Result<SourceSnapshot, FastSearchError> {
     match kind {
         ScannedSourceKind::Markdown => markdown::parse_with_root(locator, bytes, root_id),
-        ScannedSourceKind::Tsv => tsv::parse_with_root(locator, bytes, root_id),
     }
 }
 
@@ -230,14 +226,11 @@ mod tests {
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
-    fn format_parsers_accept_admitted_content_without_filesystem_discovery() {
+    fn markdown_parser_accepts_admitted_content_without_filesystem_discovery() {
         let markdown = markdown::parse("docs/guide.md", b"# Guide\nbody")
             .expect("bounded Markdown content must parse without a filesystem path");
-        let tsv = tsv::parse("registry.tsv", b"id\tstatus\n2433\tcurrent\n")
-            .expect("bounded TSV content must parse without a filesystem path");
 
         assert_eq!(markdown.locator().path(), "docs/guide.md");
-        assert_eq!(tsv.locator().path(), "registry.tsv");
     }
 
     #[test]
@@ -262,8 +255,8 @@ mod tests {
 
         assert_eq!(
             locators,
-            ["docs/alpha.md", "docs/zeta.md", "registry.tsv"],
-            "scanner must exclude ignored/build/unsupported files and sort lexically"
+            ["docs/alpha.md", "docs/zeta.md"],
+            "scanner must admit Markdown only and sort it lexically"
         );
         assert!(
             scanned
@@ -272,16 +265,12 @@ mod tests {
         );
         assert_eq!(
             scanned.iter().map(|source| source.kind).collect::<Vec<_>>(),
-            [
-                ScannedSourceKind::Markdown,
-                ScannedSourceKind::Markdown,
-                ScannedSourceKind::Tsv
-            ]
+            [ScannedSourceKind::Markdown, ScannedSourceKind::Markdown]
         );
     }
 
     #[test]
-    fn scanner_excludes_generated_coverage_registry_but_keeps_ordinary_tsv() {
+    fn scanner_excludes_all_tsv_files() {
         let fixture = Fixture::new();
         let generated_header = "id\tpath\tsummary\ttdr_coverage\ttdr_refs\twarnings\terrors";
         fixture.write(
@@ -305,13 +294,7 @@ mod tests {
             .map(|source| source.locator.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            locators,
-            [
-                "Reports/Manual Coverage Registry.tsv",
-                "Traceability/Alignment Evidence Registry.tsv"
-            ]
-        );
+        assert!(locators.is_empty());
     }
 
     #[test]
@@ -343,7 +326,7 @@ mod tests {
     fn scanner_rejects_non_utf8_allowed_source_without_partial_result() {
         let fixture = Fixture::new();
         fixture.write("allowed.md", "valid");
-        fs::write(fixture.path().join("invalid.tsv"), [0xff, 0xfe]).expect("invalid UTF-8 fixture");
+        fs::write(fixture.path().join("invalid.md"), [0xff, 0xfe]).expect("invalid UTF-8 fixture");
 
         let error =
             scan_sources(fixture.path()).expect_err("invalid source must reject complete scan");
@@ -358,7 +341,7 @@ mod tests {
         fixture.write("drop.md", "ignored by glob");
         fixture.write("keep.md", "restored by negation");
         fixture.write("nested/drop.tsv", "ignored nested path");
-        fixture.write("registry.tsv", "id\ttitle\n2433\tkept");
+        fixture.write("registry.tsv", "id\ttitle\n2433\tignored");
         fixture.write(".gitignore", "*.md\n!keep.md\nnested/**\n");
 
         let scanned = scan_sources(fixture.path()).expect("standard gitignore rules must work");
@@ -367,7 +350,7 @@ mod tests {
             .map(|source| source.locator.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(locators, ["keep.md", "registry.tsv"]);
+        assert_eq!(locators, ["keep.md"]);
     }
 
     #[test]
@@ -511,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_source_returns_deterministic_markdown_and_tsv_records() {
+    fn filesystem_source_excludes_tsv_records() {
         let fixture = Fixture::new();
         fixture.write("docs/guide.md", "# Guide\nMarkdown body");
         fixture.write(
@@ -520,59 +503,22 @@ mod tests {
         );
 
         let source = FilesystemSource::new(fixture.path());
-        let snapshots = source.snapshot().expect("combined fixture must parse");
-        let records = source.records().expect("combined records must parse");
+        let snapshots = source.snapshot().expect("Markdown fixture must parse");
+        let records = source.records().expect("Markdown records must parse");
 
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[1].locator().path(), "registry.tsv");
-        assert_eq!(
-            snapshots[1].file_hash().as_str(),
-            "sha256:v1:66d7796440424a405e8d426be285e89753d3066510fb477071cc124bea11ce32"
-        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].locator().path(), "docs/guide.md");
         assert_eq!(
             records
                 .iter()
                 .map(|record| record.id().as_str())
                 .collect::<Vec<_>>(),
-            [
-                "markdown:docs/guide.md#Guide",
-                "registry:registry.tsv#row=2"
-            ]
-        );
-        let registry = &records[1];
-        assert_eq!(registry.kind(), RecordKind::RegistryRow);
-        assert_eq!(registry.title(), "2433");
-        assert_eq!(
-            registry.searchable_content(),
-            "2433\tTechnical entry\tcurrent"
-        );
-        assert_eq!(
-            registry.metadata().get("format").map(String::as_str),
-            Some("tsv")
-        );
-        assert_eq!(
-            registry.metadata().get("title").map(String::as_str),
-            Some("Technical entry")
-        );
-        assert_eq!(
-            registry.metadata().get("status").map(String::as_str),
-            Some("current")
-        );
-        assert_eq!(registry.relations(), []);
-        assert_eq!(
-            registry.locator().selector(),
-            &SourceSelector::RegistryRow {
-                row: 2.try_into().expect("non-zero row")
-            }
-        );
-        assert_eq!(
-            registry.content_hash().as_str(),
-            "sha256:v1:acbf4ea95bff0fc3e7641c553cbc19e8237c95c83a0043902e90348f235d819a"
+            ["markdown:docs/guide.md#Guide"]
         );
     }
 
     #[test]
-    fn filesystem_source_rejects_malformed_tsv_without_partial_result() {
+    fn tsv_parser_rejects_malformed_input_without_partial_result() {
         for (name, registry, expected_message) in [
             (
                 "blank-header",
@@ -600,13 +546,7 @@ mod tests {
                 "title must not be blank",
             ),
         ] {
-            let fixture = Fixture::new();
-            fixture.write("valid.md", "# Valid\ntext");
-            fixture.write("registry.tsv", registry);
-
-            let error = FilesystemSource::new(fixture.path())
-                .records()
-                .expect_err(name);
+            let error = tsv::parse("registry.tsv", registry.as_bytes()).expect_err(name);
 
             assert_eq!(error.kind(), &ErrorKind::SourceFailure);
             assert!(error.message().contains(expected_message));

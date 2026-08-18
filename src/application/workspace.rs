@@ -1,7 +1,7 @@
 //! Persistent FastSearch workspaces, source discovery and the machine-local catalog.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     fs::OpenOptions,
     io::Write,
@@ -195,20 +195,26 @@ impl DiscoveryReport {
         let root = canonical_directory(workspace_root, "workspace root")?;
         let mut directories = Vec::new();
         collect_directories(&root, &root, 0, &mut directories)?;
+        let mut facts_by_directory = BTreeMap::new();
         let mut document_candidates = BTreeSet::new();
         let mut code_candidates = BTreeSet::new();
-        for directory in directories {
+        for directory in &directories {
             let facts = inspect_directory(&directory)?;
-            if facts.document_marker || facts.document_files > 0 {
-                document_candidates.insert(directory.clone());
-            }
             if facts.code_marker || facts.code_files > 0 {
-                code_candidates.insert(directory);
+                code_candidates.insert(directory.clone());
+            }
+            facts_by_directory.insert(directory.clone(), facts);
+        }
+        let document_inventories =
+            aggregate_document_inventories(&directories, &facts_by_directory);
+        for (directory, inventory) in document_inventories {
+            if inventory.is_markdown_dominant() {
+                document_candidates.insert(directory);
             }
         }
         Ok(Self {
-            documentation: collapse_candidates(&root, document_candidates, CandidateKind::Document),
-            code: collapse_candidates(&root, code_candidates, CandidateKind::Code),
+            documentation: collapse_candidates(&root, document_candidates),
+            code: collapse_candidates(&root, code_candidates),
         })
     }
 
@@ -623,29 +629,18 @@ fn validate_relative_root(path: &str) -> Result<(), FastSearchError> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum CandidateKind {
-    Document,
-    Code,
-}
-
-fn collapse_candidates(
-    workspace_root: &Path,
-    candidates: BTreeSet<PathBuf>,
-    kind: CandidateKind,
-) -> Vec<PathBuf> {
+fn collapse_candidates(workspace_root: &Path, candidates: BTreeSet<PathBuf>) -> Vec<PathBuf> {
     let mut ordered = candidates.into_iter().collect::<Vec<_>>();
     ordered.sort_by_key(|path| path.components().count());
     let root_is_candidate = ordered.iter().any(|path| path == workspace_root);
     if root_is_candidate {
-        let preferred_children = ordered
+        let nested_candidates = ordered
             .iter()
             .filter(|path| *path != workspace_root)
-            .filter(|path| preferred_directory(path, kind))
             .cloned()
             .collect::<Vec<_>>();
-        if !preferred_children.is_empty() {
-            return remove_nested(preferred_children);
+        if !nested_candidates.is_empty() {
+            return remove_nested(nested_candidates);
         }
         return vec![workspace_root.to_path_buf()];
     }
@@ -662,35 +657,29 @@ fn remove_nested(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
     selected
 }
 
-fn preferred_directory(path: &Path, kind: CandidateKind) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match kind {
-        CandidateKind::Document => {
-            matches!(
-                name.as_str(),
-                "docs" | "doc" | "documentation" | "specifications" | "architecture" | "obsidian"
-            ) || path.join(".obsidian").is_dir()
-        }
-        CandidateKind::Code => path.join(".git").is_dir() || has_code_manifest(path),
-    }
-}
-
 #[derive(Default)]
 struct DirectoryFacts {
-    document_marker: bool,
     code_marker: bool,
-    document_files: usize,
+    total_files: usize,
+    markdown_files: usize,
     code_files: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DocumentInventory {
+    total_files: usize,
+    markdown_files: usize,
+}
+
+impl DocumentInventory {
+    fn is_markdown_dominant(self) -> bool {
+        self.markdown_files > 0
+            && self.markdown_files.saturating_mul(5) > self.total_files.saturating_mul(4)
+    }
 }
 
 fn inspect_directory(path: &Path) -> Result<DirectoryFacts, FastSearchError> {
     let mut facts = DirectoryFacts {
-        document_marker: path.join(".obsidian").is_dir()
-            || preferred_directory(path, CandidateKind::Document),
         code_marker: path.join(".git").is_dir() || has_code_manifest(path),
         ..DirectoryFacts::default()
     };
@@ -716,13 +705,14 @@ fn inspect_directory(path: &Path) -> Result<DirectoryFacts, FastSearchError> {
             continue;
         }
         let path = entry.path();
+        facts.total_files += 1;
         let extension = path
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        if matches!(extension.as_str(), "md" | "tsv") {
-            facts.document_files += 1;
+        if extension == "md" {
+            facts.markdown_files += 1;
         }
         if matches!(
             extension.as_str(),
@@ -732,6 +722,39 @@ fn inspect_directory(path: &Path) -> Result<DirectoryFacts, FastSearchError> {
         }
     }
     Ok(facts)
+}
+
+fn aggregate_document_inventories(
+    directories: &[PathBuf],
+    facts_by_directory: &BTreeMap<PathBuf, DirectoryFacts>,
+) -> BTreeMap<PathBuf, DocumentInventory> {
+    let mut inventories = facts_by_directory
+        .iter()
+        .map(|(directory, facts)| {
+            (
+                directory.clone(),
+                DocumentInventory {
+                    total_files: facts.total_files,
+                    markdown_files: facts.markdown_files,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut deepest_first = directories.to_vec();
+    deepest_first.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for directory in deepest_first {
+        let Some(inventory) = inventories.get(&directory).copied() else {
+            continue;
+        };
+        let Some(parent) = directory.parent() else {
+            continue;
+        };
+        if let Some(parent_inventory) = inventories.get_mut(parent) {
+            parent_inventory.total_files += inventory.total_files;
+            parent_inventory.markdown_files += inventory.markdown_files;
+        }
+    }
+    inventories
 }
 
 fn has_code_manifest(path: &Path) -> bool {
@@ -808,9 +831,10 @@ fn collect_directories(
 }
 
 fn excluded_name(name: &std::ffi::OsStr) -> bool {
-    DEFAULT_EXCLUSIONS
-        .iter()
-        .any(|excluded| name == std::ffi::OsStr::new(excluded))
+    name.to_string_lossy().eq_ignore_ascii_case("governance")
+        || DEFAULT_EXCLUSIONS
+            .iter()
+            .any(|excluded| name == std::ffi::OsStr::new(excluded))
 }
 
 fn workspace_id(root: &Path) -> String {
@@ -1112,6 +1136,61 @@ mod tests {
         assert_eq!(
             report.code_roots(),
             [temp.0.join("backend").canonicalize().unwrap()]
+        );
+    }
+
+    #[test]
+    fn discovery_keeps_all_independent_markdown_dominant_roots() {
+        let temp = Temp::new();
+        fs::create_dir_all(temp.0.join(".obsidian")).unwrap();
+        for directory in ["Docs", "Paradigms"] {
+            fs::create_dir_all(temp.0.join(directory).join("Architecture")).unwrap();
+            for number in 0..5 {
+                fs::write(
+                    temp.0
+                        .join(directory)
+                        .join("Architecture")
+                        .join(format!("{number}.md")),
+                    "# Document\n",
+                )
+                .unwrap();
+            }
+            fs::write(temp.0.join(directory).join("note.txt"), "note").unwrap();
+        }
+        fs::create_dir_all(temp.0.join("Mixed")).unwrap();
+        for number in 0..4 {
+            fs::write(
+                temp.0.join("Mixed").join(format!("{number}.md")),
+                "# Draft\n",
+            )
+            .unwrap();
+        }
+        fs::write(temp.0.join("Mixed/readme.txt"), "note").unwrap();
+
+        let report = DiscoveryReport::scan(&temp.0).unwrap();
+
+        assert_eq!(
+            report.documentation_roots(),
+            [
+                temp.0.join("Docs").canonicalize().unwrap(),
+                temp.0.join("Paradigms").canonicalize().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn discovery_never_scans_governance() {
+        let temp = Temp::new();
+        fs::create_dir_all(temp.0.join("Docs")).unwrap();
+        fs::create_dir_all(temp.0.join("Governance")).unwrap();
+        fs::write(temp.0.join("Docs/guide.md"), "# Guide\n").unwrap();
+        fs::write(temp.0.join("Governance/policy.md"), "# Policy\n").unwrap();
+
+        let report = DiscoveryReport::scan(&temp.0).unwrap();
+
+        assert_eq!(
+            report.documentation_roots(),
+            [temp.0.join("Docs").canonicalize().unwrap()]
         );
     }
 

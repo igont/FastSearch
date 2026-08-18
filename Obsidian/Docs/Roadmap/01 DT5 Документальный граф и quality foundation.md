@@ -2,10 +2,12 @@
 id: "fastsearch/docs/roadmap/dt5-document-graph"
 title: "DT5. Документальный граф и quality foundation"
 type: "roadmap"
-status: "принято"
+status: "заменено"
 updated: "2026-08-15"
 ---
 # DT5. Документальный граф и quality foundation
+
+Этап заменён FastGraph FG2. [Передача графового контура](<../FastGraph.md>) объясняет новую последовательность. DT5 сохраняется как исторический паспорт и не является следующим этапом FastSearch.
 
 [← Roadmap](<00 Roadmap.md>)
 

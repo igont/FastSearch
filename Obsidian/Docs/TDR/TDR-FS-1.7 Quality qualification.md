@@ -1,13 +1,15 @@
 ---
 tdr_id: "TDR-FS-1.7"
 title: "Quality qualification"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 parent_tdr_id: "TDR-FS-1"
 child_tdr_ids: []
 updated: "2026-08-15"
 ---
 # TDR-FS-1.7 — Quality qualification
+
+Графовая часть решения передана FastGraph и заменена его TDR-FG-1.7. Квалификация поисковых моделей остаётся в действующих TDR-FS-2.4 и TDR-FS-2.5. [Карта передачи](<../FastGraph.md>) разделяет эти ответственности.
 
 ## Контекст TDR
 

@@ -2,10 +2,12 @@
 id: "fastsearch/docs/roadmap/dt11-curator-operation"
 title: "DT11. Continuous curator и quality operation"
 type: "roadmap"
-status: "принято"
+status: "заменено"
 updated: "2026-08-15"
 ---
 # DT11. Continuous curator и quality operation
+
+Этап заменён FastGraph FG8 и управляющим контуром dtree. [Передача графового контура](<../FastGraph.md>) объясняет владельцев результатов.
 
 [← Roadmap](<00 Roadmap.md>)
 

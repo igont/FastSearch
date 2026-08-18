@@ -36,6 +36,9 @@ pub(super) enum ComparisonModelStage {
         completed_bytes: Option<u64>,
         total_bytes: Option<u64>,
     },
+    /// Weights are available; one shared lane will validate and index this
+    /// model after the model currently being materialized.
+    QueuedForIndexing,
     Validating,
     Indexing {
         completed_records: u64,
@@ -75,6 +78,19 @@ enum DownloadMessage {
     Finished {
         model: EmbeddingModelId,
         result: Result<(), FastSearchError>,
+    },
+}
+
+enum PipelineMessage {
+    Download(DownloadMessage),
+    Indexing {
+        model: EmbeddingModelId,
+        stage: ComparisonModelStage,
+    },
+    Indexed {
+        model: EmbeddingModelId,
+        status: LifecycleStatus,
+        error: Option<String>,
     },
 }
 
@@ -186,7 +202,7 @@ impl<'a> ComparisonCoordinator<'a> {
     }
 
     pub fn readiness(&self) -> Result<Vec<ComparisonReadiness>, FastSearchError> {
-        EmbeddingModelId::ALL
+        EmbeddingModelId::DISPLAY_ORDER
             .into_iter()
             .map(|model| {
                 let cache = embedding_model_cache_status(model)?;
@@ -226,9 +242,9 @@ impl<'a> ComparisonCoordinator<'a> {
             return Err(error);
         }
         progress(ComparisonUpdateProgress::SharedCompleted);
-        let mut outcomes = Vec::with_capacity(EmbeddingModelId::ALL.len());
+        let mut outcomes = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
         let mut pending = Vec::new();
-        for model in EmbeddingModelId::ALL {
+        for model in EmbeddingModelId::DISPLAY_ORDER {
             progress(ComparisonUpdateProgress::Model {
                 model,
                 stage: ComparisonModelStage::Checking,
@@ -277,10 +293,10 @@ impl<'a> ComparisonCoordinator<'a> {
             &mut outcomes,
         );
         outcomes.sort_by_key(|outcome| {
-            EmbeddingModelId::ALL
+            EmbeddingModelId::DISPLAY_ORDER
                 .iter()
                 .position(|model| *model == outcome.model)
-                .unwrap_or(EmbeddingModelId::ALL.len())
+                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
         });
         Ok(outcomes)
     }
@@ -301,8 +317,8 @@ impl<'a> ComparisonCoordinator<'a> {
             .take(top_k)
             .cloned()
             .collect();
-        let mut models = Vec::with_capacity(EmbeddingModelId::ALL.len());
-        for model in EmbeddingModelId::ALL {
+        let mut models = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
+        for model in EmbeddingModelId::DISPLAY_ORDER {
             let started = Instant::now();
             let cache = embedding_model_cache_status(model)?;
             let partition = self.runtime.model_partition_status(model);
@@ -355,40 +371,27 @@ fn provision_and_index_pipeline(
     progress: &mut impl FnMut(ComparisonUpdateProgress),
     outcomes: &mut Vec<ComparisonUpdateOutcome>,
 ) {
+    if models.is_empty() {
+        return;
+    }
     let (sender, receiver) = mpsc::channel();
+    let (index_sender, index_receiver) = mpsc::channel();
     thread::scope(|scope| {
-        for model in models.iter().copied() {
-            let sender = sender.clone();
-            scope.spawn(move || {
-                let result = download_embedding_model_assets_with_progress(model, |event| {
-                    let _ = sender.send(DownloadMessage::Progress { model, event });
+        let index_events = sender.clone();
+        scope.spawn(move || {
+            for model in index_receiver {
+                let _ = index_events.send(PipelineMessage::Indexing {
+                    model,
+                    stage: ComparisonModelStage::Validating,
                 });
-                let _ = sender.send(DownloadMessage::Finished { model, result });
-            });
-        }
-        drop(sender);
-        for message in receiver {
-            match message {
-                DownloadMessage::Progress { model, event } => {
-                    progress(ComparisonUpdateProgress::Model {
-                        model,
-                        stage: ComparisonModelStage::Downloading {
-                            asset: Some(event.asset().to_owned()),
-                            completed_bytes: Some(event.completed_bytes()),
-                            total_bytes: Some(event.total_bytes()),
-                        },
-                    });
-                }
-                DownloadMessage::Finished { model, result } => {
-                    let result = result.and_then(|()| {
-                        progress(ComparisonUpdateProgress::Model {
-                            model,
-                            stage: ComparisonModelStage::Validating,
-                        });
-                        ensure_embedding_model_with_progress(model, show_download_progress, |_| {})
-                    });
-                    let result = result.and_then(|availability| {
-                        progress(ComparisonUpdateProgress::Model {
+                let result =
+                    ensure_embedding_model_with_progress(model, show_download_progress, |event| {
+                        let _ = index_events.send(PipelineMessage::Download(
+                            DownloadMessage::Progress { model, event },
+                        ));
+                    })
+                    .and_then(|availability| {
+                        let _ = index_events.send(PipelineMessage::Indexing {
                             model,
                             stage: ComparisonModelStage::Indexing {
                                 completed_records: 0,
@@ -409,36 +412,113 @@ fn provision_and_index_pipeline(
                                     },
                                     VectorBuildProgress::Saving => ComparisonModelStage::Saving,
                                 };
-                                progress(ComparisonUpdateProgress::Model { model, stage });
+                                let _ =
+                                    index_events.send(PipelineMessage::Indexing { model, stage });
                             },
                         )
                     });
-                    match result {
-                        Ok(status) => {
-                            progress(ComparisonUpdateProgress::Model {
-                                model,
-                                stage: ComparisonModelStage::Completed { reused: false },
-                            });
-                            outcomes.push(ComparisonUpdateOutcome {
-                                model,
-                                status,
-                                error: None,
-                            });
+                let (status, error) = match result {
+                    Ok(status) => (status, None),
+                    Err(error) => (
+                        runtime.model_partition_status(model),
+                        Some(error.message().to_owned()),
+                    ),
+                };
+                let _ = index_events.send(PipelineMessage::Indexed {
+                    model,
+                    status,
+                    error,
+                });
+            }
+        });
+        for model in models.iter().copied() {
+            let sender = sender.clone();
+            scope.spawn(move || {
+                let result = download_embedding_model_assets_with_progress(model, |event| {
+                    let _ = sender.send(PipelineMessage::Download(DownloadMessage::Progress {
+                        model,
+                        event,
+                    }));
+                });
+                let _ = sender.send(PipelineMessage::Download(DownloadMessage::Finished {
+                    model,
+                    result,
+                }));
+            });
+        }
+        drop(sender);
+        let mut index_sender = Some(index_sender);
+        let mut completed = 0;
+        let mut downloads_finished = 0;
+        while completed < models.len() {
+            let message = receiver
+                .recv()
+                .expect("comparison workers must report every requested model");
+            match message {
+                PipelineMessage::Download(DownloadMessage::Progress { model, event }) => {
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::Downloading {
+                            asset: Some(event.asset().to_owned()),
+                            completed_bytes: Some(event.completed_bytes()),
+                            total_bytes: Some(event.total_bytes()),
+                        },
+                    });
+                }
+                PipelineMessage::Download(DownloadMessage::Finished { model, result }) => {
+                    downloads_finished += 1;
+                    if let Err(error) = result {
+                        progress(ComparisonUpdateProgress::Model {
+                            model,
+                            stage: ComparisonModelStage::Failed {
+                                message: error.message().to_owned(),
+                            },
+                        });
+                        outcomes.push(ComparisonUpdateOutcome {
+                            model,
+                            status: LifecycleStatus::not_configured(error.message()),
+                            error: Some(error.message().to_owned()),
+                        });
+                        completed += 1;
+                        if downloads_finished == models.len() {
+                            index_sender.take();
                         }
-                        Err(error) => {
-                            progress(ComparisonUpdateProgress::Model {
-                                model,
-                                stage: ComparisonModelStage::Failed {
-                                    message: error.message().to_owned(),
-                                },
-                            });
-                            outcomes.push(ComparisonUpdateOutcome {
-                                model,
-                                status: runtime.model_partition_status(model),
-                                error: Some(error.message().to_owned()),
-                            });
-                        }
+                        continue;
                     }
+                    progress(ComparisonUpdateProgress::Model {
+                        model,
+                        stage: ComparisonModelStage::QueuedForIndexing,
+                    });
+                    index_sender
+                        .as_ref()
+                        .expect("index lane stays open until all downloads finish")
+                        .send(model)
+                        .expect("comparison index worker remains available");
+                    if downloads_finished == models.len() {
+                        index_sender.take();
+                    }
+                }
+                PipelineMessage::Indexing { model, stage } => {
+                    progress(ComparisonUpdateProgress::Model { model, stage });
+                }
+                PipelineMessage::Indexed {
+                    model,
+                    status,
+                    error,
+                } => {
+                    let stage = match &error {
+                        Some(message) => ComparisonModelStage::Failed {
+                            message: message.clone(),
+                        },
+                        None => ComparisonModelStage::Completed { reused: false },
+                    };
+                    progress(ComparisonUpdateProgress::Model { model, stage });
+                    outcomes.push(ComparisonUpdateOutcome {
+                        model,
+                        status,
+                        error,
+                    });
+                    completed += 1;
                 }
             }
         }

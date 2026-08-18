@@ -13,7 +13,7 @@ updated: "2026-08-16"
 
 - [PAR-FS-010](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) — evidence-first qualification и model provenance.
 - [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) — один executable, общий machine-local state и отсутствие технических path prompts.
-- [TDR-FS-1.7](<TDR-FS-1.7 Quality qualification.md>) — будущие расширенные quality gates и смена default model.
+- [Evidence-first выбор моделей](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) - поисковые критерии смены модели по умолчанию.
 
 ## Входы и результат
 

@@ -1,13 +1,15 @@
 ---
 tdr_id: "TDR-FS-1.3"
 title: "Ревизии и причинная актуальность графа"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 parent_tdr_id: "TDR-FS-1"
 child_tdr_ids: []
 updated: "2026-08-15"
 ---
 # TDR-FS-1.3 — Ревизии и причинная актуальность графа
+
+Решение передано FastGraph и заменено его TDR-FG-1.3 и этапом FG4. [Карта передачи](<../FastGraph.md>) содержит целевые ссылки. Файл сохраняется как история прежнего проектирования FastSearch.
 
 ## Контекст TDR
 

@@ -30,6 +30,20 @@ impl EmbeddingModelId {
         Self::JinaEmbeddingsV3,
     ];
 
+    /// Presentation and experiment order: declared retrieval capability first,
+    /// then lower-cost baselines. The unavailable Jina runtime stays last.
+    pub const DISPLAY_ORDER: [Self; 9] = [
+        Self::BgeM3,
+        Self::SnowflakeArcticEmbedLV2,
+        Self::Qwen3Embedding06B,
+        Self::MultilingualE5Large,
+        Self::NomicEmbedTextV2Moe,
+        Self::GteMultilingualBase,
+        Self::MultilingualE5Base,
+        Self::MultilingualE5Small,
+        Self::JinaEmbeddingsV3,
+    ];
+
     #[must_use]
     pub const fn slug(self) -> &'static str {
         match self {
@@ -104,5 +118,14 @@ mod tests {
         for model in EmbeddingModelId::ALL {
             assert_eq!(EmbeddingModelId::parse(model.slug()), Some(model));
         }
+    }
+
+    #[test]
+    fn display_order_contains_every_stable_model_once() {
+        let mut models = EmbeddingModelId::DISPLAY_ORDER.to_vec();
+        models.sort_by_key(|model| model.slug());
+        let mut all = EmbeddingModelId::ALL.to_vec();
+        all.sort_by_key(|model| model.slug());
+        assert_eq!(models, all);
     }
 }

@@ -3,7 +3,7 @@ id: "PAR-FS-010"
 title: "Evidence-first выбор моделей"
 status: "принято"
 implementation_stage: "текущее"
-tdr_refs: ["TDR-FS-1.7", "TDR-FS-2.4", "TDR-FS-2.5"]
+tdr_refs: ["TDR-FS-2.4", "TDR-FS-2.5"]
 tdr_coverage: "прямое"
 updated: "2026-08-15"
 ---
@@ -13,29 +13,27 @@ updated: "2026-08-15"
 
 ## Статус
 
-Принят обязательный experimental selection. Возможность получить полезное описание считается обеспеченной fallback до Codex; evidence выбирает стоимость, latency, routing threshold и допустимый local scope.
+Принят обязательный экспериментальный выбор поисковых моделей. Доказательства определяют качество, задержку и допустимый профиль обычного поиска и режима сравнения. Квалификация графовых анализаторов и описаний передана FastGraph.
 
 ## Контекст
 
-Качество embeddings и summaries нельзя назначить по названию модели. Нужны заранее исследованные repositories, verified queries/links и controlled code changes, чтобы сравнить индекс с обычным чтением и измерить ложные graph impacts.
+Качество векторного поиска нельзя назначить по названию модели. Нужны заранее исследованные корпуса, проверенные запросы и ожидаемые результаты, чтобы сравнить индекс с обычным чтением и измерить ложные и пропущенные находки.
 
 ## Парадигма
 
-FastSearch сопровождается versioned benchmark corpus. Для document retrieval сравниваются exact/FTS/embedding modes с ручным expected set. Для code graph выполняется серия контролируемых изменений: formatting, move within scope, rename, body-only algorithm change, signature change, added/removed call, documentation/TDR change и dynamic dispatch.
+FastSearch сопровождается версионированным эталонным корпусом. Для поиска по документам и коду сравниваются точный, полнотекстовый и векторный режимы с независимо подготовленным ожидаемым набором. Графовые контролируемые изменения и рёбра проверяются в FastGraph.
 
 ## Измерения
 
 - retrieval precision/recall и ranking по Russian + English terminology;
-- summary factuality, responsibility coverage, inputs/outputs/side effects и hallucination rate;
-- stable identity после non-semantic changes;
-- edge add/remove accuracy и unresolved coverage;
-- false/ missed stale propagation;
-- quality cross-graph candidate links;
-- curator workload, latency и cost per accepted node.
+- сохранение точных идентификаторов в выдаче;
+- устойчивость порядка и полноты результатов;
+- задержка и потребление ресурсов каждого режима;
+- качество выбора активной поисковой модели.
 
 ## Model ladder
 
-Простая local model → более мощная local model → Codex → ручная проверка исключений. Ни одна ступень не объявляется default до прохождения quality contract. Если local models не достигают threshold, routing сразу использует Codex для соответствующего node class.
+Ни одна модель не объявляется вариантом по умолчанию до прохождения поискового контракта качества. Недостаточное качество не компенсируется красивым одиночным примером или молчаливым снижением порога.
 
 ## Два режима использования
 
@@ -56,10 +54,9 @@ FastSearch сопровождается versioned benchmark corpus. Для docum
 
 ## Связи
 
-- [TDR-FS-1.7](<../../../Docs/TDR/TDR-FS-1.7 Quality qualification.md>) — datasets, metrics и gates.
 - [TDR-FS-2.4](<../../../Docs/TDR/TDR-FS-2.4 Automatic model provisioning.md>) — воспроизводимое получение и admission retrieval model.
 - [TDR-FS-2.5](<../../../Docs/TDR/TDR-FS-2.5 Режим сравнения embedding-моделей.md>) — model-specific indexes, comparison state machine и presentation contract.
-- [Semantic overlay](<03 Semantic overlay и graph curator.md>) — routing consumer.
+- [Передача FastGraph](<../../../Docs/FastGraph.md>) - квалификация графовых возможностей и семантического слоя.
 
 ## Связь с реализацией
 

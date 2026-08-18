@@ -12,7 +12,7 @@ updated: "2026-08-16"
 ## Контекст TDR
 
 - [PAR-FS-010](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) — evidence-first model selection и разделение обычного/экспериментального режимов.
-- [TDR-FS-1.7](<TDR-FS-1.7 Quality qualification.md>) — datasets, metrics и default-model gate.
+- [Evidence-first выбор моделей](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) - корпуса, метрики и критерии модели по умолчанию.
 - [TDR-FS-2.2](<TDR-FS-2.2 Namespace .fastsearch и migration.md>) — shared workspace state и local model partitions.
 - [TDR-FS-2.3](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>) — state machine и rendering boundary.
 - [TDR-FS-2.4](<TDR-FS-2.4 Automatic model provisioning.md>) — catalog identities, weights и runtime readiness.
@@ -45,7 +45,7 @@ Workspace хранит одну active embedding-модель в `workspace.toml
 
 ## Model-specific indexes
 
-Shared SQLite state, source graph и lexical projection не дублируются. Каждая vector projection хранится отдельно:
+Общее состояние SQLite, исходные записи и полнотекстовая проекция не дублируются. Каждая векторная проекция хранится отдельно:
 
 ```text
 .fastsearch/local/index/vector/<model-slug>/<model-revision>/

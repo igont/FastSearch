@@ -2,9 +2,9 @@
 
 ## Назначение
 
-FastSearch создаётся как один локальный инструмент с общим ядром, CLI и агентским интерфейсом. Первый product contour проходит через DT1–DT4; последующий graph knowledge contour разложен на DT5–DT11. Каждый этап принимает самостоятельный наблюдаемый результат и оставляет следующему проверенный baseline.
+FastSearch создаётся как один локальный инструмент с общим ядром, CLI и агентским интерфейсом. Основной продуктовый контур проходит через DT1-DT4. Полный граф выделен в FastGraph, а следующим отдельным результатом FastSearch становится поставщик снимков DT12.
 
-Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Подробные паспорта DT5–DT11 находятся в [Obsidian/Docs/Roadmap](Obsidian/Docs/Roadmap/00%20Roadmap.md); executable branches, leaves, commands и ownership определяются только перед запуском соответствующего дерева по фактическому состоянию репозитория.
+Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Прежние паспорта DT5-DT11 сохранены как заменённая история, а действующий следующий паспорт DT12 находится в [Obsidian/Docs/Roadmap](Obsidian/Docs/Roadmap/00%20Roadmap.md).
 
 ## Фактическое состояние на 16.08.2026
 
@@ -222,7 +222,7 @@ TODO блокирует закрытие текущего дерева, если
 - test-only `BackendKind::Mock` и `ReferenceFixture` сохранены как oracle, но production mock route отсутствует;
 - compiler-resolved references, дополнительные языки, Linux qualification и MCP transport не заявлены результатом DT3.
 
-Целевой graph contour не переписывает acceptance DT3 задним числом. `.cfmap.md` и basic symbols остаются честно принятым результатом DT3, но в DT8 рассматриваются как migration/compatibility predecessor для hierarchy, semantic overlay и `.fastsearch/knowledge/curated`, а не как обязательный конечный authoring format.
+Выделение FastGraph не переписывает acceptance DT3 задним числом. `.cfmap.md` и базовые symbols остаются честно принятым результатом DT3 и поддерживаемой узкой навигацией FastSearch, но не определяют целевую модель FastGraph.
 
 ## Дерево 4 — Агентский доступ и готовый инструмент
 
@@ -292,31 +292,15 @@ TODO блокирует закрытие текущего дерева, если
 5. измерить core/actor в A4 и modern+legacy production stdio в D3; только D3 назначает release numeric limits и закрывает `G-LIMITS`, это не блокирует B/C/D1/D2;
 6. A4 вызывает текущий automatic provisioning contract TDR-FS-2.4 и фиксирует полученную immutable E5 revision в evidence; ручная доставка cache больше не является prerequisite. Недоступность сети/cache оставляет vector acceptance `NOT_READY`, но не делает E5 обязательным условием lexical/code navigation.
 
-## Будущий graph knowledge contour
+## Передача полного графа и следующий этап
 
-DT5–DT11 не входят в materialized DT4 и не изменяют его scope. Их подробные паспорта фиксируют принятый target, producer dependencies, exclusions и exit evidence, но каждый stage перед реализацией получает новый dynamic-tree plan на exact accepted baseline.
+Прежние DT5-DT11 переданы [FastGraph](Obsidian/Docs/FastGraph.md) и сохранены только как заменённая история. Их идентификаторы не переиспользуются. FastSearch больше не планирует полный документальный и кодовый граф, графовые ревизии, переносимый семантический слой и интеграцию GraphProvider.
 
-| Этап | Producer | Наблюдаемый результат | Подробный паспорт |
-|---|---|---|---|
-| DT5. Документальный граф и quality foundation | Принятый DT4 либо bounded offline spike | Typed document hierarchy/authority и воспроизводимый Russian+English retrieval benchmark | [DT5](Obsidian/Docs/Roadmap/01%20DT5%20Документальный%20граф%20и%20quality%20foundation.md) |
-| DT6. Иерархический граф кода | Graph foundation DT5 и symbols DT3 | Repository/module/class/function hierarchy, language relations и stable identity без byte offsets | [DT6](Obsidian/Docs/Roadmap/02%20DT6%20Иерархический%20граф%20кода.md) |
-| DT7. Ревизии и причинная актуальность | Document/code graphs DT5–DT6 | Observed/accepted revisions, edge deltas, root causes и controlled propagation без ложных cascades | [DT7](Obsidian/Docs/Roadmap/03%20DT7%20Ревизии%20и%20причинная%20актуальность.md) |
-| DT8. Semantic overlay в `.fastsearch` | Stable nodes/review commit DT6–DT7 и TDR-FS-2.2 storage | Multi-level descriptions, local/Codex candidate boundary и portable accepted semantics | [DT8](Obsidian/Docs/Roadmap/04%20DT8%20Semantic%20overlay%20в%20.fastsearch.md) |
-| DT9. Межграфовая трассируемость | Document graph DT5 и semantic code graph DT8 | Verified/candidate documentation↔code links и explained impact paths | [DT9](Obsidian/Docs/Roadmap/05%20DT9%20Межграфовая%20трассируемость.md) |
-| DT10. Graph query surface и dtree integration | Complete graph contracts DT5–DT9 и DT4 surface | Full graph revision через bounded neighbors/calls/path/impact/docs/source queries | [DT10](Obsidian/Docs/Roadmap/06%20DT10%20Graph%20query%20surface%20и%20dtree%20integration.md) |
-| DT11. Continuous curator и quality operation | FastSearch DT7–DT10 и dtree managed agent lifecycle | Root-cause curator queue, validated review commits и continuous model/graph quality | [DT11](Obsidian/Docs/Roadmap/07%20DT11%20Continuous%20curator%20и%20quality%20operation.md) |
+| Этап | Производящая зависимость | Наблюдаемый результат | Состояние | Подробный паспорт |
+|---|---|---|---|---|
+| DT12. Поставщик снимков для FastGraph | Принятая среда рабочих областей и граница FastGraph FG0 | Независимый клиент получает точный ограниченный снимок допущенных исходных единиц | предстоит | [DT12](Obsidian/Docs/Roadmap/08%20DT12%20Поставщик%20снимков%20для%20FastGraph.md) |
 
-### Сквозные правила graph contour
-
-- Structural graph, embeddings, model candidates и current `.cfmap` AUTO content являются возобновляемыми.
-- Accepted node descriptions и verified document↔code links переносятся с repository в `.fastsearch/knowledge/curated`; `.fastsearch/local` остаётся вне Git.
-- Function identity не зависит от whitespace, formatting, byte position и declaration order внутри неизменившегося scope.
-- Automatic cross-module function move tracking не требуется: old node удаляется, new node рассчитывается заново.
-- Directed edge хранится один раз; incoming/outgoing indexes обеспечивают навигацию в обе стороны.
-- `updated` не равно `stale`: implementation-only change не создаёт downstream cascade при сохранённом contract.
-- Agent получает bounded initial subgraph, но может расширять depth/direction по всему exact graph revision.
-- FastSearch не запускает Codex: dtree создаёт GraphCurator assignment и передаёт validated result обратно.
-- Каждая стадия добавляет regression/quality evidence на заранее исследованных repositories и controlled changes.
+DT12 сохраняет FastSearch владельцем допуска путей и чтения источников, но не владельцем графа. FastGraph FG1 является первым реальным потребителем результата DT12. Dtree продолжает получать поисковые кандидаты от FastSearch, а графовое расширение подключает к FastGraph на собственном этапе R6.
 
 ## Переходы между деревьями
 

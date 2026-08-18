@@ -45,68 +45,68 @@ pub struct EmbeddingModelDescriptor {
 
 pub const MODEL_CATALOG: [EmbeddingModelDescriptor; 9] = [
     EmbeddingModelDescriptor {
-        id: EmbeddingModelId::MultilingualE5Small,
-        repository: E5_REPOSITORY,
-        revision: E5_REVISION,
-        source_url: "https://huggingface.co/intfloat/multilingual-e5-small",
-        profile: "быстрая · 384 измерения",
-        approximate_download_bytes: 487_352_503,
-    },
-    EmbeddingModelDescriptor {
-        id: EmbeddingModelId::MultilingualE5Base,
-        repository: "intfloat/multilingual-e5-base",
-        revision: "d128750597153bb5987e10b1c3493a34e5a4502a",
-        source_url: "https://huggingface.co/intfloat/multilingual-e5-base",
-        profile: "сбалансированная · 768 измерений",
-        approximate_download_bytes: 1_127_143_128,
-    },
-    EmbeddingModelDescriptor {
-        id: EmbeddingModelId::MultilingualE5Large,
-        repository: "Qdrant/multilingual-e5-large-onnx",
-        revision: "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
-        source_url: "https://huggingface.co/Qdrant/multilingual-e5-large-onnx",
-        profile: "качество · 1024 измерения",
-        approximate_download_bytes: 2_253_012_762,
-    },
-    EmbeddingModelDescriptor {
-        id: EmbeddingModelId::Qwen3Embedding06B,
-        repository: "Qwen/Qwen3-Embedding-0.6B",
-        revision: "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
-        source_url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
-        profile: "современная · русский и код · 1024 измерения",
-        approximate_download_bytes: 1_203_010_121,
-    },
-    EmbeddingModelDescriptor {
-        id: EmbeddingModelId::NomicEmbedTextV2Moe,
-        repository: "nomic-ai/nomic-embed-text-v2-moe",
-        revision: "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
-        source_url: "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe",
-        profile: "экспериментальная · 768 измерений",
-        approximate_download_bytes: 1_918_272_448,
+        id: EmbeddingModelId::BgeM3,
+        repository: "BAAI/bge-m3",
+        revision: "5617a9f61b028005a4858fdac845db406aefb181",
+        source_url: "https://huggingface.co/BAAI/bge-m3",
+        profile: "лидер · гибридная dense / sparse · 8192 токена · 1024 измерения",
+        approximate_download_bytes: 2_290_000_000,
     },
     EmbeddingModelDescriptor {
         id: EmbeddingModelId::SnowflakeArcticEmbedLV2,
         repository: "Snowflake/snowflake-arctic-embed-l-v2.0",
         revision: "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
         source_url: "https://huggingface.co/Snowflake/snowflake-arctic-embed-l-v2.0",
-        profile: "качество · 8192 токена · 1024 измерения",
+        profile: "лидер · качество · 8192 токена · 1024 измерения",
         approximate_download_bytes: 2_290_000_000,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::Qwen3Embedding06B,
+        repository: "Qwen/Qwen3-Embedding-0.6B",
+        revision: "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        source_url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+        profile: "сильная · русский и код · 1024 измерения",
+        approximate_download_bytes: 1_203_010_121,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::MultilingualE5Large,
+        repository: "Qdrant/multilingual-e5-large-onnx",
+        revision: "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+        source_url: "https://huggingface.co/Qdrant/multilingual-e5-large-onnx",
+        profile: "сильная · зрелая multilingual · 1024 измерения",
+        approximate_download_bytes: 2_253_012_762,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::NomicEmbedTextV2Moe,
+        repository: "nomic-ai/nomic-embed-text-v2-moe",
+        revision: "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+        source_url: "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe",
+        profile: "сильная · MoE · 768 измерений",
+        approximate_download_bytes: 1_918_272_448,
     },
     EmbeddingModelDescriptor {
         id: EmbeddingModelId::GteMultilingualBase,
         repository: "onnx-community/gte-multilingual-base",
         revision: "2edbf5e672aab465f9ed4c154a8b61791c082c69",
         source_url: "https://huggingface.co/onnx-community/gte-multilingual-base",
-        profile: "быстрая · 8192 токена · 768 измерений",
+        profile: "сбалансированная · 8192 токена · 768 измерений",
         approximate_download_bytes: 1_275_000_000,
     },
     EmbeddingModelDescriptor {
-        id: EmbeddingModelId::BgeM3,
-        repository: "BAAI/bge-m3",
-        revision: "5617a9f61b028005a4858fdac845db406aefb181",
-        source_url: "https://huggingface.co/BAAI/bge-m3",
-        profile: "гибридная · dense / sparse · 1024 измерения",
-        approximate_download_bytes: 2_290_000_000,
+        id: EmbeddingModelId::MultilingualE5Base,
+        repository: "intfloat/multilingual-e5-base",
+        revision: "d128750597153bb5987e10b1c3493a34e5a4502a",
+        source_url: "https://huggingface.co/intfloat/multilingual-e5-base",
+        profile: "базовая · 768 измерений",
+        approximate_download_bytes: 1_127_143_128,
+    },
+    EmbeddingModelDescriptor {
+        id: EmbeddingModelId::MultilingualE5Small,
+        repository: E5_REPOSITORY,
+        revision: E5_REVISION,
+        source_url: "https://huggingface.co/intfloat/multilingual-e5-small",
+        profile: "экономичная · 384 измерения",
+        approximate_download_bytes: 487_352_503,
     },
     EmbeddingModelDescriptor {
         id: EmbeddingModelId::JinaEmbeddingsV3,
@@ -1136,6 +1136,10 @@ mod tests {
     #[test]
     fn catalog_is_complete_unique_and_dimensioned() {
         assert_eq!(MODEL_CATALOG.len(), EmbeddingModelId::ALL.len());
+        assert_eq!(
+            MODEL_CATALOG.map(|descriptor| descriptor.id),
+            EmbeddingModelId::DISPLAY_ORDER
+        );
         for model in EmbeddingModelId::ALL {
             let descriptor = model_descriptor(model);
             assert_eq!(descriptor.id, model);

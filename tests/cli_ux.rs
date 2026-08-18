@@ -155,7 +155,7 @@ fn run_workspace_input_from(
 }
 
 fn create_workspace_then(commands: &str) -> String {
-    format!("n\n\n\n\n{commands}")
+    format!("n\n\n\n{commands}")
 }
 
 fn stdout(output: &Output) -> String {
@@ -429,9 +429,9 @@ fn workspace_console_keeps_context_and_recovers_after_an_unknown_command() {
 }
 
 #[test]
-fn workspace_creation_and_model_command_use_the_selectable_catalog() {
+fn workspace_creation_uses_default_model_and_model_command_remains_selectable() {
     let fixture = Fixture::new();
-    let input = "n\n\n\n4\n/model\n/model info 1\n/status\n/exit\n";
+    let input = "n\n\n\n/model qwen\n/model\n/model info e5-small\n/status\n/exit\n";
     let output = run_workspace_input(&fixture, input, true);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
@@ -464,10 +464,10 @@ fn model_catalog_accepts_plain_number_as_the_next_selection() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
-    assert!(text.contains("МОДЕЛЬ: E5 Base"), "{text}");
-    assert!(text.contains("Модель: E5 Base"), "{text}");
+    assert!(text.contains("МОДЕЛЬ: Arctic Embed L v2"), "{text}");
+    assert!(text.contains("Модель: Arctic Embed L v2"), "{text}");
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
-    assert!(profile.contains("multilingual-e5-base"), "{profile}");
+    assert!(profile.contains("arctic-embed-l-v2"), "{profile}");
 }
 
 #[test]
@@ -479,9 +479,9 @@ fn model_command_accepts_a_number_without_opening_the_catalog_first() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
-    assert!(text.contains("МОДЕЛЬ: E5 Base"), "{text}");
+    assert!(text.contains("МОДЕЛЬ: Arctic Embed L v2"), "{text}");
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
-    assert!(profile.contains("multilingual-e5-base"), "{profile}");
+    assert!(profile.contains("arctic-embed-l-v2"), "{profile}");
 }
 
 #[test]
@@ -516,7 +516,7 @@ fn index_rebuild_shows_progress_for_the_active_model() {
 #[test]
 fn index_clear_removes_all_or_one_model_partition() {
     let fixture = Fixture::new();
-    let created = run_workspace_input(&fixture, "n\n\n\n1\n/exit\n", true);
+    let created = run_workspace_input(&fixture, "n\n\n\n\n/exit\n", true);
     assert!(created.status.success(), "{}", stderr(&created));
 
     let vector_root = fixture.root().join(".fastsearch/local/index/vector");
@@ -527,7 +527,7 @@ fn index_clear_removes_all_or_one_model_partition() {
     fs::write(selected.join("vectors.bin"), "selected").unwrap();
     fs::write(retained.join("vectors.bin"), "retained").unwrap();
 
-    let one = run_workspace_input(&fixture, "1\n/index clear 1\n/exit\n", true);
+    let one = run_workspace_input(&fixture, "1\n/index clear e5-small\n/exit\n", true);
     assert!(one.status.success(), "{}", stderr(&one));
     assert!(!selected.exists());
     assert!(retained.exists());
@@ -555,7 +555,7 @@ fn model_device_assignment_is_applied_and_survives_a_restart() {
 
     let first = run_workspace_input(
         &fixture,
-        "n\n\n\n1\n/model device 1 gpu\n/index rebuild\n/model\n/exit\n",
+        "n\n\n\n\n/model device e5-small gpu\n/index rebuild\n/model\n/exit\n",
         true,
     );
     assert!(first.status.success(), "{}", stderr(&first));
@@ -576,7 +576,7 @@ fn model_device_assignment_is_applied_and_survives_a_restart() {
     );
     assert!(preferences.contains("gpu"), "{preferences}");
 
-    let restarted = run_workspace_input(&fixture, "1\n/model info 1\n/exit\n", true);
+    let restarted = run_workspace_input(&fixture, "1\n/model info e5-small\n/exit\n", true);
     assert!(restarted.status.success(), "{}", stderr(&restarted));
     let restarted_text = stdout(&restarted);
     assert!(
@@ -613,13 +613,13 @@ fn search_results_can_be_repeated_and_opened_by_stable_number() {
         "open did not render a record: {text}"
     );
     assert!(text.contains("КОНТЕКСТ ПОИСКА"), "{text}");
-    assert!(text.contains("№  СОВПАДЕНИЕ"), "{text}");
+    assert!(text.contains("№  ТОЧН"), "{text}");
     assert!(text.contains("1  100%"), "{text}");
-    assert!(text.contains("Файл: guide.md"), "{text}");
-    assert!(!text.contains("Путь: guide.md"), "{text}");
+    assert!(text.contains("guide.md"), "{text}");
+    assert!(text.contains("Удобный интерактивный поиск."), "{text}");
     assert!(
-        text.contains("Триггер: “Удобный интерактивный поиск.”"),
-        "{text}"
+        text.contains("1  100%  guide.md\n           Удобный интерактивный поиск."),
+        "result card must keep source and excerpt aligned without labels: {text}"
     );
 }
 
@@ -759,9 +759,9 @@ fn opening_a_workspace_never_updates_the_index_implicitly() {
     assert!(text.contains("/index update"), "{text}");
     for action in [
         "/index update",
+        "/compare",
         "/sources",
         "/model",
-        "/model <номер|slug>",
         "/help",
         "/exit",
     ] {

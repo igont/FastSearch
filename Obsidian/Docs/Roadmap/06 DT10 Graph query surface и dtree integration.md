@@ -2,10 +2,12 @@
 id: "fastsearch/docs/roadmap/dt10-query-surface"
 title: "DT10. Graph query surface и dtree integration"
 type: "roadmap"
-status: "принято"
+status: "заменено"
 updated: "2026-08-15"
 ---
 # DT10. Graph query surface и dtree integration
+
+Этап заменён FastGraph FG7 и последующей интеграцией dtree R6. [Передача графового контура](<../FastGraph.md>) объясняет владельцев результатов.
 
 [← Roadmap](<00 Roadmap.md>)
 

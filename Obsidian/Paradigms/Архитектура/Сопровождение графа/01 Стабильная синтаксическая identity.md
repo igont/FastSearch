@@ -1,13 +1,15 @@
 ---
 id: "PAR-FS-006"
 title: "Стабильная синтаксическая identity"
-status: "принято"
-implementation_stage: "будущее"
+status: "заменено"
+implementation_stage: "заменено"
 tdr_refs: ["TDR-FS-1.2"]
 tdr_coverage: "прямое"
 updated: "2026-08-15"
 ---
 # Стабильная синтаксическая identity
+
+Парадигма передана FastGraph и заменена его TDR-FG-1.2 и этапом FG3. [Карта передачи](<../../../Docs/FastGraph.md>) содержит целевые источники.
 
 [← Сопровождение графа](<00 Сопровождение графа.md>)
 
