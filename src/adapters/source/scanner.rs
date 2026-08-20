@@ -50,6 +50,17 @@ pub(super) fn scan_sources(root: &Path) -> Result<Vec<ScannedSource>, FastSearch
 }
 
 pub(super) fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>, FastSearchError> {
+    let exclusions = EXCLUDED_DIRECTORIES
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    discover_sources_with_exclusions(root, &exclusions)
+}
+
+pub(super) fn discover_sources_with_exclusions(
+    root: &Path,
+    exclusions: &[String],
+) -> Result<Vec<DiscoveredSource>, FastSearchError> {
     let root = root
         .canonicalize()
         .map_err(|error| source_failure("canonicalize source root", error))?;
@@ -61,6 +72,7 @@ pub(super) fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>, Fas
     }
 
     let mut sources = Vec::new();
+    let exclusions = exclusions.to_vec();
     let mut builder = WalkBuilder::new(&root);
     builder
         .hidden(false)
@@ -72,11 +84,11 @@ pub(super) fn discover_sources(root: &Path) -> Result<Vec<DiscoveredSource>, Fas
         .require_git(false)
         .follow_links(false);
     for entry in builder
-        .filter_entry(|entry| {
+        .filter_entry(move |entry| {
             !entry
                 .file_type()
                 .is_some_and(|file_type| file_type.is_dir())
-                || !EXCLUDED_DIRECTORIES
+                || !exclusions
                     .iter()
                     .any(|excluded| entry.file_name() == OsStr::new(excluded))
         })

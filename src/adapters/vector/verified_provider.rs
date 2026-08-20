@@ -42,10 +42,13 @@ use crate::domain::{
     CanonicalRecord, Capability, EmbeddingModelId, ErrorKind, ExecutionDevice, FastSearchError,
 };
 
+use super::jina::{JinaOnnxRuntime, JinaTask};
+
 enum ProviderRuntime {
     Onnx(TextEmbedding),
     Qwen(Qwen3TextEmbedding),
     Nomic(NomicV2MoeTextEmbedding),
+    Jina(JinaOnnxRuntime),
 }
 
 // CPU real-corpus benchmark on 16.08.2026: batch 1 reached 40.78 docs/s.
@@ -209,9 +212,7 @@ impl VerifiedProvider {
                 Pooling::Cls,
             )?),
             EmbeddingModelId::JinaEmbeddingsV3 => {
-                return Err(provider_error(
-                    "Jina Embeddings v3 requires task_id-aware ONNX inference; the dedicated provider is not bundled yet",
-                ));
+                ProviderRuntime::Jina(JinaOnnxRuntime::open(root, device)?)
             }
         };
         let manifest = format!(
@@ -264,26 +265,21 @@ impl VerifiedProvider {
         let texts = records
             .iter()
             .map(|record| {
-                let text = format!("{}\n{}", record.title(), record.searchable_content());
-                match self.model_id {
-                    EmbeddingModelId::MultilingualE5Small
-                    | EmbeddingModelId::MultilingualE5Base
-                    | EmbeddingModelId::MultilingualE5Large => format!("passage: {text}"),
-                    EmbeddingModelId::Qwen3Embedding06B => text,
-                    EmbeddingModelId::NomicEmbedTextV2Moe => {
-                        format!("search_document: {text}")
-                    }
-                    EmbeddingModelId::SnowflakeArcticEmbedLV2
-                    | EmbeddingModelId::GteMultilingualBase
-                    | EmbeddingModelId::BgeM3
-                    | EmbeddingModelId::JinaEmbeddingsV3 => text,
-                }
+                let lexical = crate::application::chunking::lexical_input(record);
+                crate::application::chunking::embedding_input(self.model_id, &lexical)
             })
             .collect::<Vec<_>>();
         self.embed_formatted(&texts, None)
     }
 
     pub(super) fn embed_query(&mut self, query: &str) -> Result<Vec<f32>, FastSearchError> {
+        if let ProviderRuntime::Jina(runtime) = &mut self.runtime {
+            return runtime
+                .embed(&[query.to_owned()], JinaTask::Query, 1)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| provider_error("Jina returned no query vector"));
+        }
         let query = match self.model_id {
             EmbeddingModelId::MultilingualE5Small
             | EmbeddingModelId::MultilingualE5Base
@@ -301,6 +297,20 @@ impl VerifiedProvider {
             .into_iter()
             .next()
             .ok_or_else(|| provider_error("embedding model returned no query vector"))
+    }
+
+    pub(super) fn embed_passage_probe(
+        &mut self,
+        passage: &str,
+    ) -> Result<Vec<f32>, FastSearchError> {
+        if let ProviderRuntime::Jina(runtime) = &mut self.runtime {
+            return runtime
+                .embed(&[passage.to_owned()], JinaTask::Passage, 1)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| provider_error("Jina returned no passage vector"));
+        }
+        self.embed_query(passage)
     }
 
     /// Resident strict providers keep verified handles pinned. Rechecking the
@@ -353,6 +363,9 @@ impl VerifiedProvider {
                 .map_err(provider_error)?,
             ProviderRuntime::Qwen(runtime) => runtime.embed(texts).map_err(provider_error)?,
             ProviderRuntime::Nomic(runtime) => runtime.embed(texts).map_err(provider_error)?,
+            ProviderRuntime::Jina(runtime) => runtime
+                .embed(texts, JinaTask::Passage, 1)
+                .map_err(provider_error)?,
         };
         if vectors.len() != texts.len()
             || vectors

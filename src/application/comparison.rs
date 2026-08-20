@@ -202,7 +202,7 @@ impl<'a> ComparisonCoordinator<'a> {
     }
 
     pub fn readiness(&self) -> Result<Vec<ComparisonReadiness>, FastSearchError> {
-        EmbeddingModelId::DISPLAY_ORDER
+        EmbeddingModelId::COMPARISON_ORDER
             .into_iter()
             .map(|model| {
                 let cache = embedding_model_cache_status(model)?;
@@ -242,9 +242,9 @@ impl<'a> ComparisonCoordinator<'a> {
             return Err(error);
         }
         progress(ComparisonUpdateProgress::SharedCompleted);
-        let mut outcomes = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
+        let mut outcomes = Vec::with_capacity(EmbeddingModelId::COMPARISON_ORDER.len());
         let mut pending = Vec::new();
-        for model in EmbeddingModelId::DISPLAY_ORDER {
+        for model in EmbeddingModelId::COMPARISON_ORDER {
             progress(ComparisonUpdateProgress::Model {
                 model,
                 stage: ComparisonModelStage::Checking,
@@ -292,12 +292,7 @@ impl<'a> ComparisonCoordinator<'a> {
             &mut progress,
             &mut outcomes,
         );
-        outcomes.sort_by_key(|outcome| {
-            EmbeddingModelId::DISPLAY_ORDER
-                .iter()
-                .position(|model| *model == outcome.model)
-                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
-        });
+        outcomes.sort_by_key(|outcome| outcome.model.comparison_priority());
         Ok(outcomes)
     }
 
@@ -317,9 +312,9 @@ impl<'a> ComparisonCoordinator<'a> {
             .take(top_k)
             .cloned()
             .collect();
-        let mut models = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
-        let mut ready = Vec::with_capacity(EmbeddingModelId::DISPLAY_ORDER.len());
-        for model in EmbeddingModelId::DISPLAY_ORDER {
+        let mut models = Vec::with_capacity(EmbeddingModelId::COMPARISON_ORDER.len());
+        let mut ready = Vec::with_capacity(EmbeddingModelId::COMPARISON_ORDER.len());
+        for model in EmbeddingModelId::COMPARISON_ORDER {
             let started = Instant::now();
             let cache = embedding_model_cache_status(model)?;
             if !cache.ready() {
@@ -363,12 +358,7 @@ impl<'a> ComparisonCoordinator<'a> {
                 }),
             }
         }
-        models.sort_by_key(|result| {
-            EmbeddingModelId::DISPLAY_ORDER
-                .iter()
-                .position(|model| *model == result.model)
-                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
-        });
+        models.sort_by_key(|result| result.model.comparison_priority());
         Ok(ComparisonRun {
             lexical_hits,
             models,
@@ -377,8 +367,8 @@ impl<'a> ComparisonCoordinator<'a> {
 }
 
 /// Keeps network transfers parallel while consuming successful downloads in
-/// arrival order with exactly one validation/indexing lane. This deliberately
-/// never opens two model runtimes at once, avoiding RAM/VRAM contention.
+/// weakest-first order whenever more than one is ready. Exactly one validation/
+/// indexing lane avoids RAM/VRAM contention.
 fn provision_and_index_pipeline(
     runtime: &mut ProductionRuntime,
     models: &[EmbeddingModelId],
@@ -465,6 +455,8 @@ fn provision_and_index_pipeline(
         let mut index_sender = Some(index_sender);
         let mut completed = 0;
         let mut downloads_finished = 0;
+        let mut ready_for_indexing = Vec::new();
+        let mut indexing = false;
         while completed < models.len() {
             let message = receiver
                 .recv()
@@ -495,22 +487,12 @@ fn provision_and_index_pipeline(
                             error: Some(error.message().to_owned()),
                         });
                         completed += 1;
-                        if downloads_finished == models.len() {
-                            index_sender.take();
-                        }
-                        continue;
-                    }
-                    progress(ComparisonUpdateProgress::Model {
-                        model,
-                        stage: ComparisonModelStage::QueuedForIndexing,
-                    });
-                    index_sender
-                        .as_ref()
-                        .expect("index lane stays open until all downloads finish")
-                        .send(model)
-                        .expect("comparison index worker remains available");
-                    if downloads_finished == models.len() {
-                        index_sender.take();
+                    } else {
+                        progress(ComparisonUpdateProgress::Model {
+                            model,
+                            stage: ComparisonModelStage::QueuedForIndexing,
+                        });
+                        ready_for_indexing.push(model);
                     }
                 }
                 PipelineMessage::Indexing { model, stage } => {
@@ -534,10 +516,33 @@ fn provision_and_index_pipeline(
                         error,
                     });
                     completed += 1;
+                    indexing = false;
                 }
+            }
+            if !indexing && !ready_for_indexing.is_empty() {
+                let model = pop_next_index_model(&mut ready_for_indexing)
+                    .expect("non-empty indexing queue has a next model");
+                index_sender
+                    .as_ref()
+                    .expect("index lane stays open while a model is ready")
+                    .send(model)
+                    .expect("comparison index worker remains available");
+                indexing = true;
+            }
+            if downloads_finished == models.len() && ready_for_indexing.is_empty() && !indexing {
+                index_sender.take();
             }
         }
     });
+}
+
+fn pop_next_index_model(models: &mut Vec<EmbeddingModelId>) -> Option<EmbeddingModelId> {
+    let next = models
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, model)| model.comparison_priority())
+        .map(|(index, _)| index)?;
+    Some(models.swap_remove(next))
 }
 
 #[cfg(test)]
@@ -643,5 +648,28 @@ mod tests {
                 .all(|(_, result)| result.as_ref().is_some_and(Result::is_ok))
         );
         assert!(maximum.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[test]
+    fn comparison_priority_selects_the_weakest_ready_model() {
+        let mut ready = vec![
+            EmbeddingModelId::BgeM3,
+            EmbeddingModelId::MultilingualE5Large,
+            EmbeddingModelId::MultilingualE5Base,
+        ];
+
+        assert_eq!(
+            pop_next_index_model(&mut ready),
+            Some(EmbeddingModelId::MultilingualE5Base)
+        );
+        assert_eq!(
+            pop_next_index_model(&mut ready),
+            Some(EmbeddingModelId::MultilingualE5Large)
+        );
+        assert_eq!(
+            pop_next_index_model(&mut ready),
+            Some(EmbeddingModelId::BgeM3)
+        );
+        assert_eq!(pop_next_index_model(&mut ready), None);
     }
 }

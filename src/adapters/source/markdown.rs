@@ -25,7 +25,8 @@ pub(super) fn parse_with_root(
     let mut headings = Vec::new();
     let mut current: Option<MarkdownSection> = None;
 
-    for line in frontmatter.markdown.lines() {
+    for (line_index, line) in frontmatter.markdown.lines().enumerate() {
+        let line_number = frontmatter.markdown_start_line + line_index;
         if let Some((level, heading)) = heading(line)? {
             if let Some(section) = current.take() {
                 sections.push(section);
@@ -36,6 +37,7 @@ pub(super) fn parse_with_root(
                 headings: headings.clone(),
                 title: heading,
                 body: Vec::new(),
+                body_start_line: line_number + 1,
             });
         } else if let Some(section) = &mut current {
             section.body.push(line.to_owned());
@@ -62,7 +64,7 @@ pub(super) fn parse_with_root(
         .collect();
     let snapshot_locator = SourceLocator::whole_file(locator)
         .map_err(|error| source_contract_failure(error.message()))?;
-    let file_hash = FileHash::parse(versioned_hash("file", [document.as_str()]))
+    let file_hash = FileHash::parse(versioned_hash("file:markdown-v2", [document.as_str()]))
         .map_err(|error| source_contract_failure(error.message()))?;
     Ok(match root_id {
         Some(root_id) => {
@@ -77,6 +79,7 @@ struct MarkdownSection {
     headings: Vec<String>,
     title: String,
     body: Vec<String>,
+    body_start_line: usize,
 }
 
 #[derive(Debug)]
@@ -84,6 +87,7 @@ struct MarkdownFrontmatter {
     metadata: BTreeMap<String, String>,
     relations: Vec<StableId>,
     markdown: String,
+    markdown_start_line: usize,
 }
 
 fn canonical_record(
@@ -93,6 +97,16 @@ fn canonical_record(
     section: MarkdownSection,
     root_id: Option<&LogicalRootId>,
 ) -> Result<Option<CanonicalRecord>, FastSearchError> {
+    let first_content_line = section
+        .body
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(0);
+    let last_content_line = section
+        .body
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first_content_line);
     let content = section.body.join("\n").trim().to_owned();
     if content.is_empty() {
         return Ok(None);
@@ -105,12 +119,28 @@ fn canonical_record(
         None => StableId::parse(format!("markdown:{path}#{heading_path}"))
             .map_err(|error| source_contract_failure(error.message()))?,
     };
+    let mut searchable_metadata = metadata.clone();
+    searchable_metadata.remove("Индексация");
+    searchable_metadata.insert(
+        "_fastsearch_source_start_line".to_owned(),
+        (section.body_start_line + first_content_line).to_string(),
+    );
+    searchable_metadata.insert(
+        "_fastsearch_source_end_line".to_owned(),
+        (section.body_start_line + last_content_line).to_string(),
+    );
+    if let Some(root_id) = root_id {
+        searchable_metadata.insert(
+            "_fastsearch_root_id".to_owned(),
+            root_id.as_str().to_owned(),
+        );
+    }
     let content_hash = ContentHash::parse(record_hash(
         path,
         &section.headings,
         &section.title,
         &content,
-        metadata,
+        &searchable_metadata,
         relations,
     ))
     .map_err(|error| source_contract_failure(error.message()))?;
@@ -120,7 +150,7 @@ fn canonical_record(
         locator,
         section.title,
         content,
-        metadata.clone(),
+        searchable_metadata,
         relations.to_vec(),
         content_hash,
     )
@@ -134,6 +164,7 @@ fn parse_frontmatter(document: &str) -> Result<MarkdownFrontmatter, FastSearchEr
             metadata: BTreeMap::new(),
             relations: Vec::new(),
             markdown: document.to_owned(),
+            markdown_start_line: 1,
         });
     };
     let (frontmatter, markdown) = after_open
@@ -201,11 +232,38 @@ fn parse_frontmatter(document: &str) -> Result<MarkdownFrontmatter, FastSearchEr
             ));
         }
     }
+    let markdown_start_line = document
+        .len()
+        .checked_sub(markdown.len())
+        .map(|offset| {
+            document[..offset]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                + 1
+        })
+        .unwrap_or(1);
     Ok(MarkdownFrontmatter {
         metadata,
         relations,
         markdown: markdown.to_owned(),
+        markdown_start_line,
     })
+}
+
+pub(super) fn admission_value(
+    bytes: &[u8],
+    property: &str,
+    expected_value: &str,
+) -> Result<bool, FastSearchError> {
+    let document = std::str::from_utf8(bytes)
+        .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
+    let document = normalize_document(document);
+    let frontmatter = parse_frontmatter(&document)?;
+    Ok(frontmatter.metadata.iter().any(|(key, value)| {
+        key.eq_ignore_ascii_case(property)
+            && value.trim().eq_ignore_ascii_case(expected_value.trim())
+    }))
 }
 
 fn is_supported_frontmatter_value(value: &str) -> bool {

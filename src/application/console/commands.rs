@@ -2,7 +2,7 @@ use terminal_dialogue::{CommandCatalog, CommandSpec};
 
 #[must_use]
 pub fn help_text() -> &'static str {
-    "FastSearch — локальный поиск по документации и исходному коду.\n\nЗапуск:\n  fastsearch                       рабочие области и интерактивный поиск\n  fastsearch chat                  то же самое явно\n  fastsearch [--json] <команда>    compatibility CLI для scripts/CI\n  fastsearch --help                эта справка\n  fastsearch --version             версия программы\n\nПоиск:\n  обычный текст                    выполнить поиск\n  /search <запрос>                 выполнить поиск явно\n  /related <номер>                 связанные материалы результата\n\nИсточники и индекс:\n  /workspace                       выбрать или создать область\n  /sources [discover|set]          показать, найти или изменить roots\n  /status                          состояние области и providers\n  /index [status|update|rebuild]   обслуживание индекса\n\nМодели и сравнение:\n  /model [номер|slug]              показать каталог или выбрать модель сразу\n  /model set <номер|slug>          выбрать модель поиска\n  /model info <номер|slug>         сведения о модели\n  /model device <номер|slug> [cpu|gpu] назначить либо переключить устройство\n  /compare                         сравнить выдачу готовых моделей\n  /experiment record <оценка>      записать оценку поиска\n\nНавигация:\n  /open <номер>                    открыть результат\n  /next | /prev | /page <номер>   навигация по выдаче\n  /repeat                          повторить текущую выдачу\n\nПриложение:\n  /help                            контекстная справка\n  /version                         версия программы\n  /exit                            выход\n\nCompatibility-команды сохраняют прежние arguments documents/code/service до отдельного machine-CLI cutover."
+    "FastSearch — локальный поиск по документации и исходному коду.\n\nЗапуск:\n  fastsearch                       рабочие области и интерактивный поиск\n  fastsearch chat                  то же самое явно\n  fastsearch [--json] <команда>    compatibility CLI для scripts/CI\n  fastsearch --help                эта справка\n  fastsearch --version             версия программы\n\nПоиск:\n  обычный текст                    выполнить поиск\n  /search <запрос>                 выполнить поиск явно\n  /related <номер>                 связанные материалы результата\n\nИсточники и индекс:\n  /workspace                       выбрать или создать область\n  /sources [discover|set]          показать, найти или изменить roots\n  /status                          состояние области и providers\n  /index [status|update|rebuild]   обслуживание индекса\n  /index inspect                   выгрузить фактические входы индекса\n\nМодели и сравнение:\n  /model [номер|slug]              показать каталог или выбрать модель сразу\n  /model set <номер|slug>          выбрать модель поиска\n  /model info <номер|slug>         сведения о модели\n  /model device <номер|slug> [cpu|gpu] назначить либо переключить устройство\n  /compare                         сравнить выдачу готовых моделей\n  /experiment record <оценка>      записать оценку поиска\n\nНавигация:\n  /open <номер>                    открыть результат\n  /next | /prev | /page <номер>   навигация по выдаче\n  /repeat                          повторить текущую выдачу\n\nПриложение:\n  /help                            контекстная справка\n  /version                         версия программы\n  /exit                            выход\n\nCompatibility-команды сохраняют прежние arguments documents/code/service до отдельного machine-CLI cutover."
 }
 
 pub(super) fn workspace_catalog() -> CommandCatalog {
@@ -72,6 +72,12 @@ pub(super) fn workspace_catalog() -> CommandCatalog {
             "записать оценку последнего поиска",
             "/experiment record <оценка>",
             "ПОИСК",
+        ),
+        grouped(
+            "index inspect",
+            "выгрузить входы лексического и векторного индексов",
+            "/index inspect [папка]",
+            "ИСТОЧНИКИ И ИНДЕКС",
         ),
         grouped(
             "index rebuild",

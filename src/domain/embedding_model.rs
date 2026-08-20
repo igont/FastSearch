@@ -44,6 +44,29 @@ impl EmbeddingModelId {
         Self::JinaEmbeddingsV3,
     ];
 
+    /// Comparison preparation order: lower-cost baselines first, then models
+    /// with stronger declared retrieval capability. The unavailable Jina
+    /// runtime stays last instead of taking indexing priority.
+    pub const COMPARISON_ORDER: [Self; 9] = [
+        Self::MultilingualE5Small,
+        Self::MultilingualE5Base,
+        Self::GteMultilingualBase,
+        Self::NomicEmbedTextV2Moe,
+        Self::MultilingualE5Large,
+        Self::Qwen3Embedding06B,
+        Self::SnowflakeArcticEmbedLV2,
+        Self::BgeM3,
+        Self::JinaEmbeddingsV3,
+    ];
+
+    #[must_use]
+    pub fn comparison_priority(self) -> usize {
+        Self::COMPARISON_ORDER
+            .iter()
+            .position(|candidate| *candidate == self)
+            .expect("comparison order covers every stable model ID")
+    }
+
     #[must_use]
     pub const fn slug(self) -> &'static str {
         match self {
@@ -127,5 +150,27 @@ mod tests {
         let mut all = EmbeddingModelId::ALL.to_vec();
         all.sort_by_key(|model| model.slug());
         assert_eq!(models, all);
+    }
+
+    #[test]
+    fn comparison_order_prioritizes_weaker_models_and_keeps_jina_last() {
+        assert_eq!(
+            EmbeddingModelId::COMPARISON_ORDER,
+            [
+                EmbeddingModelId::MultilingualE5Small,
+                EmbeddingModelId::MultilingualE5Base,
+                EmbeddingModelId::GteMultilingualBase,
+                EmbeddingModelId::NomicEmbedTextV2Moe,
+                EmbeddingModelId::MultilingualE5Large,
+                EmbeddingModelId::Qwen3Embedding06B,
+                EmbeddingModelId::SnowflakeArcticEmbedLV2,
+                EmbeddingModelId::BgeM3,
+                EmbeddingModelId::JinaEmbeddingsV3,
+            ]
+        );
+        assert_eq!(
+            EmbeddingModelId::COMPARISON_ORDER.map(EmbeddingModelId::comparison_priority),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8]
+        );
     }
 }

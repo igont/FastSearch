@@ -480,8 +480,38 @@ fn model_command_accepts_a_number_without_opening_the_catalog_first() {
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
     assert!(text.contains("МОДЕЛЬ: Arctic Embed L v2"), "{text}");
+    assert_eq!(
+        text.matches("МОДЕЛЬ ПОИСКА").count(),
+        2,
+        "workspace open and one model selection must render one catalog each: {text}"
+    );
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
     assert!(profile.contains("arctic-embed-l-v2"), "{profile}");
+}
+
+#[test]
+fn index_status_and_inspection_offer_actions_and_hide_internal_windows_prefixes() {
+    let fixture = Fixture::new();
+    let input = create_workspace_then("/index update\n/index\n/index inspect\n/exit\n");
+    let output = run_workspace_input(&fixture, &input, true);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let after_status = text
+        .split_once("СОСТОЯНИЕ ИНДЕКСА")
+        .map(|(_, tail)| tail)
+        .expect("index status is rendered");
+    for action in ["/index update", "/index rebuild", "/index inspect"] {
+        assert!(after_status.contains(action), "missing {action}: {text}");
+    }
+    let after_export = text
+        .rsplit_once("Выгрузка создана:")
+        .map(|(_, tail)| tail)
+        .expect("inspection report is rendered");
+    for action in ["/index inspect", "/index", "/index update"] {
+        assert!(after_export.contains(action), "missing {action}: {text}");
+    }
+    assert!(!after_export.contains(r"\\?\"), "{text}");
 }
 
 #[test]

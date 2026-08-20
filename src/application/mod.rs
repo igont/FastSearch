@@ -1,12 +1,15 @@
 //! Application coordination and production compositions for FastSearch.
 
+pub(crate) mod chunking;
 mod cli;
 mod comparison;
 mod compatibility;
 mod console;
 pub mod fusion;
+mod inspection;
 mod model_cache;
 mod production;
+mod retrieval_projection;
 mod workspace;
 
 pub use cli::{CliError, OutputFormat, execute_cli, execute_cli_formatted};
@@ -16,6 +19,7 @@ pub use comparison::{
 };
 pub use compatibility::RealRuntime;
 pub use console::{help_text, run_interactive, version_text};
+pub use inspection::InspectionReport;
 pub use model_cache::{
     E5ModelAvailability, EmbeddingModelAvailability, EmbeddingModelCacheStatus,
     EmbeddingModelDescriptor, MODEL_CATALOG, ModelProvisionProgress, ModelRuntimeCapabilities,

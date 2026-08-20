@@ -15,7 +15,10 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::{EmbeddingModelId, ErrorKind, FastSearchError};
 
-use super::production::ProductionConfig;
+use super::{
+    inspection::{self, InspectionReport},
+    production::ProductionConfig,
+};
 
 const WORKSPACE_SCHEMA: u32 = 1;
 const CATALOG_SCHEMA: u32 = 1;
@@ -82,6 +85,14 @@ impl SourceRoot {
 struct SourceContour {
     #[serde(default)]
     roots: Vec<SourceRoot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    required_property: Option<String>,
+    #[serde(default = "default_required_value")]
+    required_value: String,
+}
+
+fn default_required_value() -> String {
+    "true".to_owned()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -135,8 +146,14 @@ impl WorkspaceProfile {
             name,
             documentation: SourceContour {
                 roots: documentation,
+                required_property: None,
+                required_value: default_required_value(),
             },
-            code: SourceContour { roots: code },
+            code: SourceContour {
+                roots: code,
+                required_property: None,
+                required_value: default_required_value(),
+            },
             embedding_model: EmbeddingModelId::default(),
             exclude: Exclusions::default(),
         })
@@ -182,6 +199,34 @@ impl WorkspaceProfile {
     pub fn exclusions(&self) -> &[String] {
         &self.exclude.common
     }
+
+    #[must_use]
+    pub fn markdown_admission(&self) -> Option<(&str, &str)> {
+        self.documentation
+            .required_property
+            .as_deref()
+            .map(|property| (property, self.documentation.required_value.as_str()))
+    }
+
+    #[must_use]
+    pub fn with_markdown_admission(
+        mut self,
+        property: impl Into<String>,
+        expected_value: impl Into<String>,
+    ) -> Self {
+        self.documentation.required_property = Some(property.into());
+        self.documentation.required_value = expected_value.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_indexing_settings_from(mut self, source: &Self) -> Self {
+        self.embedding_model = source.embedding_model;
+        self.documentation.required_property = source.documentation.required_property.clone();
+        self.documentation.required_value = source.documentation.required_value.clone();
+        self.exclude = source.exclude.clone();
+        self
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -199,7 +244,7 @@ impl DiscoveryReport {
         let mut document_candidates = BTreeSet::new();
         let mut code_candidates = BTreeSet::new();
         for directory in &directories {
-            let facts = inspect_directory(&directory)?;
+            let facts = inspect_directory(directory)?;
             if facts.code_marker || facts.code_files > 0 {
                 code_candidates.insert(directory.clone());
             }
@@ -441,7 +486,7 @@ impl WorkspaceStore {
 
     #[must_use]
     pub fn production_config(&self) -> ProductionConfig {
-        ProductionConfig::for_workspace(
+        let mut config = ProductionConfig::for_workspace(
             self.root.clone(),
             self.profile
                 .documentation_roots()
@@ -454,7 +499,20 @@ impl WorkspaceStore {
                 .map(|source| (source.id().to_owned(), source.resolve(&self.root)))
                 .collect(),
             self.local_root(),
-        )
+        );
+        if let Some((property, value)) = self.profile.markdown_admission() {
+            config = config.with_markdown_admission(property, value);
+        }
+        config.with_exclusions(self.profile.exclusions().to_vec())
+    }
+
+    /// Exports the exact chunk manifest from the last successful publication
+    /// without opening SQLite, lexical indexes or embedding providers.
+    pub fn inspect_chunks(
+        &self,
+        output: Option<&Path>,
+    ) -> Result<InspectionReport, FastSearchError> {
+        inspection::inspect_published(&self.local_root(), output)
     }
 
     /// Removes only disposable vector projections for one model or the whole
@@ -585,6 +643,18 @@ fn validate_profile(root: &Path, profile: &WorkspaceProfile) -> Result<(), FastS
         return Err(FastSearchError::new(
             ErrorKind::InvalidContent,
             "workspace identity and name must not be blank",
+        ));
+    }
+    if profile
+        .documentation
+        .required_property
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+        || profile.documentation.required_value.trim().is_empty()
+    {
+        return Err(FastSearchError::new(
+            ErrorKind::InvalidContent,
+            "documentation admission property and value must not be blank",
         ));
     }
     let mut ids = BTreeSet::new();
@@ -1085,6 +1155,28 @@ mod tests {
         );
         assert!(temp.0.join(".fastsearch/knowledge/curated").is_dir());
         assert!(temp.0.join(".fastsearch/local/index/documents").is_dir());
+    }
+
+    #[test]
+    fn published_inspection_does_not_open_or_create_sqlite_state() {
+        let temp = Temp::new();
+        let profile = WorkspaceProfile::from_roots(&temp.0, "Inspection", [], []).unwrap();
+        let store = WorkspaceStore::create(&temp.0, profile).unwrap();
+        let manifest = inspection::InspectionManifest::published(
+            1,
+            EmbeddingModelId::MultilingualE5Small,
+            Vec::new(),
+            Vec::new(),
+        );
+        inspection::save_published(&store.local_root(), &manifest).unwrap();
+        let output = temp.0.join("inspection-export");
+
+        let report = store.inspect_chunks(Some(&output)).unwrap();
+
+        assert_eq!(report.included_files(), 0);
+        assert!(!store.local_root().join("state.sqlite").exists());
+        assert!(output.join("indexing-inputs.md").is_file());
+        assert!(output.join("technical/chunks.jsonl").is_file());
     }
 
     #[test]

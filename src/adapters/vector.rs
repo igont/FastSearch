@@ -19,9 +19,12 @@ use std::{
 #[cfg(test)]
 use std::{fs, fs::File, io::Read};
 
+mod checkpoint_pipeline;
+mod jina;
 mod partition;
 mod verified_provider;
 
+use checkpoint_pipeline::run_with_checkpoint_pipeline;
 use verified_provider::{DURABLE_CHECKPOINT_CHUNK_SIZE, VerifiedProvider};
 
 use crate::{
@@ -42,19 +45,17 @@ pub fn prepare_embedding_model(
 ) -> Result<(), FastSearchError> {
     let mut provider =
         VerifiedProvider::acquire(cache_root, model_id, show_download_progress, true)?;
-    let vector = provider.embed_query("FastSearch model readiness probe")?;
-    if vector.len() != model_id.dimension() {
-        return Err(FastSearchError::new(
-            ErrorKind::CapabilityUnavailable {
-                capability: Capability::VectorRetrieval,
-            },
-            format!(
-                "embedding model {} returned {} dimensions instead of {}",
-                model_id.slug(),
-                vector.len(),
-                model_id.dimension()
-            ),
-        ));
+    validate_probe_vector(
+        model_id,
+        "query",
+        &provider.embed_query("FastSearch model readiness query probe")?,
+    )?;
+    if model_id == EmbeddingModelId::JinaEmbeddingsV3 {
+        validate_probe_vector(
+            model_id,
+            "passage",
+            &provider.embed_passage_probe("FastSearch model readiness passage probe")?,
+        )?;
     }
     Ok(())
 }
@@ -67,18 +68,44 @@ pub fn probe_embedding_model_device(
 ) -> Result<(), FastSearchError> {
     let mut provider =
         VerifiedProvider::acquire_on_device(cache_root, model_id, false, true, device)?;
-    let vector = provider.embed_query("FastSearch execution device probe")?;
+    validate_probe_vector(
+        model_id,
+        &format!("{} query", device.label()),
+        &provider.embed_query("FastSearch execution device query probe")?,
+    )?;
+    if model_id == EmbeddingModelId::JinaEmbeddingsV3 {
+        validate_probe_vector(
+            model_id,
+            &format!("{} passage", device.label()),
+            &provider.embed_passage_probe("FastSearch execution device passage probe")?,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_probe_vector(
+    model_id: EmbeddingModelId,
+    probe: &str,
+    vector: &[f32],
+) -> Result<(), FastSearchError> {
     if vector.len() != model_id.dimension() {
         return Err(FastSearchError::new(
             ErrorKind::CapabilityUnavailable {
                 capability: Capability::VectorRetrieval,
             },
             format!(
-                "{} probe returned {} dimensions instead of {}",
-                device.label(),
+                "{probe} probe returned {} dimensions instead of {}",
                 vector.len(),
                 model_id.dimension()
             ),
+        ));
+    }
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err(FastSearchError::new(
+            ErrorKind::CapabilityUnavailable {
+                capability: Capability::VectorRetrieval,
+            },
+            format!("{probe} probe returned a non-finite embedding"),
         ));
     }
     Ok(())
@@ -576,70 +603,64 @@ impl LocalE5Vector {
                 total_records: total,
             });
             Vec::new()
-        } else if let Some(worker_count) = candle_worker_count(model_id, device) {
-            drop(verified);
-            embed_candle_records_in_parallel(
-                CandleParallelJob {
-                    root: &root,
-                    model_id,
-                    allow_catalog_download,
-                    records: if checkpoint_enabled {
-                        records
-                    } else {
-                        &records_to_embed
-                    },
-                    completed_records,
-                    worker_count,
-                },
-                &mut |completed, total| {
-                    progress(VectorBuildProgress::Embedding {
-                        completed_records: (reused_count + completed) as u64,
-                        total_records: (reused_count + total) as u64,
-                    });
-                },
-                &mut |completed_before, chunk| {
-                    if checkpoint_enabled && let Some(partition_root) = &partition_root {
+        } else {
+            let records_for_inference = if checkpoint_enabled {
+                records
+            } else {
+                &records_to_embed
+            };
+            let run_embedding = |checkpoint: &mut VectorCheckpointCallback<'_>| {
+                if let Some(worker_count) = candle_worker_count(model_id, device) {
+                    drop(verified);
+                    embed_candle_records_in_parallel(
+                        CandleParallelJob {
+                            root: &root,
+                            model_id,
+                            allow_catalog_download,
+                            records: records_for_inference,
+                            completed_records,
+                            worker_count,
+                        },
+                        &mut |completed, total| {
+                            progress(VectorBuildProgress::Embedding {
+                                completed_records: (reused_count + completed) as u64,
+                                total_records: (reused_count + total) as u64,
+                            });
+                        },
+                        checkpoint,
+                    )
+                } else {
+                    verified.embed_records_from_with_progress(
+                        records_for_inference,
+                        completed_records,
+                        &mut |completed, total| {
+                            progress(VectorBuildProgress::Embedding {
+                                completed_records: (reused_count + completed) as u64,
+                                total_records: (reused_count + total) as u64,
+                            });
+                        },
+                        checkpoint,
+                    )
+                }
+            };
+            let outcome = if checkpoint_enabled {
+                if let Some(partition_root) = &partition_root {
+                    run_with_checkpoint_pipeline(run_embedding, |completed_before, chunk| {
                         partition::append_checkpoint(
                             partition_root,
                             &partition_manifest,
                             records,
                             completed_before,
                             chunk,
-                        )?;
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(|error| self.provider_failed(state_generation, error))?
-        } else {
-            verified
-                .embed_records_from_with_progress(
-                    if checkpoint_enabled {
-                        records
-                    } else {
-                        &records_to_embed
-                    },
-                    completed_records,
-                    &mut |completed, total| {
-                        progress(VectorBuildProgress::Embedding {
-                            completed_records: (reused_count + completed) as u64,
-                            total_records: (reused_count + total) as u64,
-                        });
-                    },
-                    &mut |completed_before, chunk| {
-                        if checkpoint_enabled && let Some(partition_root) = &partition_root {
-                            partition::append_checkpoint(
-                                partition_root,
-                                &partition_manifest,
-                                records,
-                                completed_before,
-                                chunk,
-                            )?;
-                        }
-                        Ok(())
-                    },
-                )
-                .map_err(|error| self.provider_failed(state_generation, error))?
+                        )
+                    })
+                } else {
+                    run_embedding(&mut |_, _| Ok(()))
+                }
+            } else {
+                run_embedding(&mut |_, _| Ok(()))
+            };
+            outcome.map_err(|error| self.provider_failed(state_generation, error))?
         };
         vectors.extend(additional);
         let embedded_records = if checkpoint_enabled {

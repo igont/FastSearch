@@ -491,6 +491,19 @@ pub(super) enum HumanOutcomeDocument {
     Result(ResultDocument),
 }
 
+impl HumanOutcomeDocument {
+    pub(super) fn with_next_step(self, next_step: NextStep) -> Self {
+        match self {
+            Self::Empty(mut document) => {
+                document.next_step = next_step;
+                Self::Empty(document)
+            }
+            Self::Report(document) => Self::Report(document.with_next_step(next_step)),
+            Self::Result(document) => Self::Result(document.with_next_step(next_step)),
+        }
+    }
+}
+
 impl TerminalDocument for HumanOutcomeDocument {
     fn to_dialogue_document(&self, language: &LanguagePack) -> terminal_dialogue::DialogueDocument {
         match self {

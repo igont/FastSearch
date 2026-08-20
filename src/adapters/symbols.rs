@@ -75,14 +75,32 @@ impl SymbolSource {
             .parse(text, None)
             .ok_or_else(|| invalid("parser produced no tree"))?;
         if tree.root_node().has_error() {
-            return Err(invalid("parse error publishes no partial symbols"));
+            let mut pending = vec![tree.root_node()];
+            let mut location = None;
+            while let Some(node) = pending.pop() {
+                if node.is_error() || node.is_missing() {
+                    let point = node.start_position();
+                    location = Some(format!("{}:{}", point.row + 1, point.column + 1));
+                    break;
+                }
+                let mut cursor = node.walk();
+                pending.extend(node.children(&mut cursor));
+            }
+            return Err(invalid(format!(
+                "parse error in {locator}{} publishes no partial symbols",
+                location
+                    .map(|value| format!(" at {value}"))
+                    .unwrap_or_default()
+            )));
         }
         let mut stack = vec![tree.root_node()];
         let mut visited = 0;
         while let Some(node) = stack.pop() {
             visited += 1;
             if visited > MAX_NODES {
-                return Err(invalid("parse tree exceeds configured node limit"));
+                return Err(invalid(format!(
+                    "parse tree for {locator} exceeds configured node limit"
+                )));
             }
             let mut cursor = node.walk();
             stack.extend(node.children(&mut cursor));

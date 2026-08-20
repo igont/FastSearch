@@ -7,7 +7,7 @@ mod model;
 use commands::{workspace_catalog, workspace_help_catalog};
 use comparison::{ComparisonTransition, run_comparison};
 use guidance as ui_guidance;
-use index::run_index;
+use index::{run_index, run_index_inspect};
 use model::provision_model_with_ui;
 
 use std::{
@@ -38,7 +38,8 @@ use super::model_cache::{
     configured_model_device, model_device_capability, set_configured_model_device,
 };
 use super::{
-    ComparisonCoordinator, ComparisonReadiness, ComparisonRun, MODEL_CATALOG, ProductionRuntime,
+    ComparisonCoordinator, ComparisonReadiness, ComparisonRun, EmbeddingModelAvailability,
+    MODEL_CATALOG, ProductionRuntime,
     cli::{CommandOutcome, human_outcome_document, presenters::human_freshness},
     embedding_model_cache_status, model_descriptor, model_runtime_capabilities,
     workspace::{DiscoveryReport, WorkspaceCatalog, WorkspaceProfile, WorkspaceStore},
@@ -819,6 +820,7 @@ fn run_workspace<R: BufRead>(
                 run_index(chat, runtime.as_mut(), false)?;
                 last_search = None;
             }
+            "index inspect" => run_index_inspect(chat, runtime.as_ref(), &arguments)?,
             "index rebuild" => {
                 if let Some(runtime) = runtime.as_mut() {
                     run_index(chat, Some(runtime), true)?;
@@ -1008,7 +1010,7 @@ fn handle_source_discovery<R: BufRead>(
         discovery.documentation_roots().to_vec(),
         discovery.code_roots().to_vec(),
     )
-    .map(|profile| profile.with_embedding_model(store.profile().embedding_model()))
+    .map(|profile| profile.with_indexing_settings_from(store.profile()))
     .and_then(|profile| WorkspaceStore::create(store.root(), profile));
     apply_source_update(
         chat,
@@ -1046,7 +1048,7 @@ fn handle_source_edit<R: BufRead>(
     let (documents, code) = edit_source_roots(chat, store.root(), &documents, &code)?;
     let updated =
         WorkspaceProfile::from_roots(store.root(), store.profile().name(), documents, code)
-            .map(|profile| profile.with_embedding_model(store.profile().embedding_model()))
+            .map(|profile| profile.with_indexing_settings_from(store.profile()))
             .and_then(|profile| WorkspaceStore::create(store.root(), profile));
     apply_source_update(
         chat,
@@ -1169,15 +1171,19 @@ fn handle_model_selection<R: BufRead>(
             "Введите /model и используйте номер, slug или краткое имя.",
         );
     };
-    if !(cfg!(debug_assertions)
-        && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some())
-        && provision_model_with_ui(chat, selected)?.is_none()
+    let provisioned = if cfg!(debug_assertions)
+        && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some()
     {
-        return show_notice(
-            chat,
-            "Прежняя активная модель сохранена: новая модель не прошла подготовку.",
-        );
-    }
+        None
+    } else {
+        let Some(model) = provision_model_with_ui(chat, selected)? else {
+            return show_notice(
+                chat,
+                "Прежняя активная модель сохранена: новая модель не прошла подготовку.",
+            );
+        };
+        Some(model)
+    };
     match store.set_embedding_model(selected) {
         Ok(changed) => {
             if changed {
@@ -1186,7 +1192,7 @@ fn handle_model_selection<R: BufRead>(
                     "Модель изменена. Существующие векторы больше не используются; индексирование не запущено.",
                 )?;
             }
-            *runtime = open_workspace_runtime(chat, store)?;
+            *runtime = compose_workspace_runtime(chat, store, provisioned.as_ref())?;
             *last_search = None;
             show_embedding_models(chat, selected, runtime.as_ref())?;
             *model_number_expected = true;
@@ -1216,6 +1222,20 @@ fn open_workspace_runtime<R: BufRead>(
     } else {
         provision_model_with_ui(chat, selected)?
     };
+    let runtime = compose_workspace_runtime(chat, store, model.as_ref())?;
+    show_embedding_models(chat, selected, runtime.as_ref())?;
+    Ok(runtime)
+}
+
+fn compose_workspace_runtime<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    store: &WorkspaceStore,
+    model: Option<&EmbeddingModelAvailability>,
+) -> io::Result<Option<ProductionRuntime>> {
+    if store.profile().contour_count() == 0 {
+        return Ok(None);
+    }
+    let selected = store.profile().embedding_model();
     let execution_device = match configured_model_device(selected) {
         Ok(device) => device,
         Err(error) => {
@@ -1249,7 +1269,6 @@ fn open_workspace_runtime<R: BufRead>(
             return Ok(None);
         }
     };
-    show_embedding_models(chat, selected, Some(&runtime))?;
     Ok(Some(runtime))
 }
 
@@ -1468,10 +1487,15 @@ fn show_index_status<R: BufRead>(
     let Some(runtime) = runtime else {
         return show_no_sources(chat);
     };
-    chat.show_typed(&human_outcome_document(&CommandOutcome::Status {
-        status: runtime.index_status(),
-        capabilities: runtime.status(),
-    }))
+    let status = runtime.index_status();
+    let freshness = status.freshness();
+    chat.show_typed(
+        &human_outcome_document(&CommandOutcome::Status {
+            status,
+            capabilities: runtime.status(),
+        })
+        .with_next_step(ui_guidance::index_status(freshness)),
+    )
 }
 
 fn show_no_sources<R: BufRead>(chat: &mut ChatSession<'_, R>) -> io::Result<()> {
@@ -1655,122 +1679,4 @@ fn is_exit(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        contour_summary, device_assignment_cell, display_path, display_relative_path, full_trigger,
-        help_text, relative_match_percent, ui_guidance, workspace_catalog, workspace_help_catalog,
-    };
-    use crate::domain::{DeviceCapabilityStatus, ExecutionDevice};
-    use std::path::Path;
-    use terminal_dialogue::{CommandResolution, LanguagePack, TerminalDocument, TextStyle};
-
-    #[test]
-    fn model_device_cells_mark_only_the_assignment_and_reject_unavailable_devices() {
-        assert_eq!(
-            device_assignment_cell(
-                ExecutionDevice::Cpu,
-                ExecutionDevice::Cpu,
-                DeviceCapabilityStatus::Ready,
-            ),
-            ("✓", TextStyle::Success)
-        );
-        assert_eq!(
-            device_assignment_cell(
-                ExecutionDevice::Cpu,
-                ExecutionDevice::GpuDirectMl,
-                DeviceCapabilityStatus::Ready,
-            ),
-            ("", TextStyle::Body)
-        );
-        assert_eq!(
-            device_assignment_cell(
-                ExecutionDevice::Cpu,
-                ExecutionDevice::GpuDirectMl,
-                DeviceCapabilityStatus::Unavailable,
-            ),
-            ("✗", TextStyle::Error)
-        );
-    }
-
-    #[test]
-    fn root_help_omits_navigation_and_model_device_uses_the_longest_command_match() {
-        let catalog = workspace_catalog();
-        assert!(matches!(
-            catalog.resolve("/model device 2 gpu"),
-            CommandResolution::Match { arguments, .. } if arguments == "2 gpu"
-        ));
-        assert!(matches!(
-            catalog.resolve("/index clear 2"),
-            CommandResolution::Match { arguments, .. } if arguments == "2"
-        ));
-        let help = workspace_help_catalog()
-            .welcome_document("Команды", "Сводка")
-            .to_dialogue_document(&LanguagePack::russian())
-            .render(false);
-        for heading in [
-            "ПОИСК",
-            "ИСТОЧНИКИ И ИНДЕКС",
-            "МОДЕЛИ И СРАВНЕНИЕ",
-            "ПРИЛОЖЕНИЕ",
-        ] {
-            assert!(help.contains(heading), "{help}");
-        }
-        assert!(!help.contains("НАВИГАЦИЯ"), "{help}");
-        assert!(!help.contains("/open <номер>"), "{help}");
-
-        let commands = [
-            ui_guidance::model_catalog(),
-            ui_guidance::model_detail(),
-            ui_guidance::result_detail(),
-            ui_guidance::search_results(),
-        ]
-        .into_iter()
-        .flat_map(|next_step| next_step.actions)
-        .map(|action| action.command)
-        .chain(help_text().lines().map(str::to_owned))
-        .collect::<Vec<_>>();
-        assert!(
-            commands.iter().all(|command| !command.contains(" N")),
-            "ambiguous numeric placeholder: {commands:?}"
-        );
-    }
-
-    #[test]
-    fn result_percent_is_relative_and_bounded() {
-        assert_eq!(relative_match_percent(0.0156, 0.0156), 100);
-        assert_eq!(relative_match_percent(0.0153, 0.0156), 98);
-        assert_eq!(relative_match_percent(-1.0, 0.0156), 0);
-        assert_eq!(relative_match_percent(f64::NAN, 0.0156), 0);
-    }
-
-    #[test]
-    fn full_trigger_keeps_every_word_in_a_single_terminal_row() {
-        let trigger = full_trigger("Первый абзац.\n\nВторой абзац.");
-        assert_eq!(trigger, "Первый абзац. Второй абзац.");
-    }
-
-    #[test]
-    fn contour_summary_counts_types_not_roots() {
-        assert_eq!(contour_summary(0, 0), "не настроены");
-        assert_eq!(contour_summary(3, 0), "документация · 3 корней");
-        assert_eq!(contour_summary(3, 2), "документация · код · 3 + 2 корней");
-    }
-
-    #[test]
-    fn source_paths_use_platform_separators_consistently() {
-        let separator = std::path::MAIN_SEPARATOR;
-        assert_eq!(
-            display_relative_path("Governance/01-Decisions\\Scripts"),
-            format!("Governance{separator}01-Decisions{separator}Scripts")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn extended_windows_prefix_is_never_shown_to_the_user() {
-        assert_eq!(
-            display_path(Path::new(r"\\?\C:\Obsidian\Docs")),
-            r"C:\Obsidian\Docs"
-        );
-    }
-}
+mod tests;

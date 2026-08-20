@@ -89,7 +89,7 @@ impl TantivyLexical {
                 }
                 document.add_text(
                     fields.russian_text,
-                    format!("{}\n{}", record.title(), record.searchable_content()),
+                    crate::application::chunking::lexical_input(record),
                 );
                 document.add_text(fields.payload, encode_record(record));
                 writer.add_document(document).map_err(projection_error)?;
@@ -301,6 +301,7 @@ fn technical_identifiers(record: &CanonicalRecord) -> Vec<String> {
         record
             .metadata()
             .iter()
+            .filter(|(key, _)| !key.starts_with("_fastsearch_"))
             .flat_map(|(key, value)| [key.as_str(), value.as_str()]),
     );
     values.extend(record.relations().iter().map(StableId::as_str));

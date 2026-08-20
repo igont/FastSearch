@@ -4,7 +4,7 @@ use std::{
 };
 
 use terminal_dialogue::{
-    ChatSession, ProgressDashboard, ProgressPhase, ProgressTaskSpec, ProgressUnit,
+    ChatSession, NoticeDocument, ProgressDashboard, ProgressPhase, ProgressTaskSpec, ProgressUnit,
     run_progress_dashboard,
 };
 
@@ -12,7 +12,49 @@ use super::super::{
     ProductionRuntime,
     production::{IndexingProgress, IndexingStage, IndexingWorkStage},
 };
-use super::{show_error, show_no_sources};
+use super::{show_error, show_no_sources, ui_guidance};
+
+pub(super) fn run_index_inspect<R: BufRead>(
+    chat: &mut ChatSession<'_, R>,
+    runtime: Option<&ProductionRuntime>,
+    arguments: &str,
+) -> io::Result<()> {
+    let Some(runtime) = runtime else {
+        return show_no_sources(chat);
+    };
+    let output = if arguments.trim().is_empty() {
+        None
+    } else {
+        let value = arguments.trim().trim_matches('"');
+        if matches!(value, "current" | "preview") {
+            return show_error(
+                chat,
+                "INDEX_INSPECT_ARGUMENT",
+                "Режимы current и preview больше не используются.",
+                "Запустите /index inspect без режима.",
+            );
+        }
+        Some(std::path::PathBuf::from(value))
+    };
+    match runtime.inspect_chunks(output.as_deref()) {
+        Ok(report) => chat.show_typed(
+            &NoticeDocument::new(format!(
+                "Выгрузка создана: {}. Файлов включено: {}, исключено: {}, чанков: {}.",
+                report.display_inputs_path(),
+                report.included_files(),
+                report.excluded_files(),
+                report.chunks()
+            ))
+            .with_next_step(ui_guidance::index_inspection()),
+        ),
+        Err(error) => show_error(
+            chat,
+            "INDEX_INSPECT_FAILED",
+            error.message(),
+            "Проверьте путь и наличие опубликованного индекса.",
+        ),
+    }
+}
 
 pub(super) fn run_index<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
@@ -81,7 +123,7 @@ pub(super) fn run_index<R: BufRead>(
         result
     })?;
     match result {
-        Ok(_) => Ok(()),
+        Ok(_) => super::show_index_status(chat, Some(runtime)),
         Err(error) => show_error(
             chat,
             "INDEX_FAILED",

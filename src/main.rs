@@ -4,7 +4,8 @@ use std::{
 };
 
 use fastsearch::application::{
-    CliError, OutputFormat, execute_cli_formatted, help_text, run_interactive, version_text,
+    CliError, OutputFormat, WorkspaceStore, execute_cli_formatted, help_text, run_interactive,
+    version_text,
 };
 use terminal_dialogue::write_line;
 
@@ -27,6 +28,11 @@ fn main() -> ExitCode {
     }
     if arguments.len() == 1 && matches!(arguments[0].as_str(), "version" | "--version" | "-V") {
         return emit_stdout(&version_text());
+    }
+    if arguments.first().is_some_and(|value| value == "index")
+        && arguments.get(1).is_some_and(|value| value == "inspect")
+    {
+        return run_direct_inspection(&arguments[2..]);
     }
     let (arguments, json) = parse_global_format(arguments);
     let format = if json {
@@ -56,6 +62,44 @@ fn main() -> ExitCode {
             ExitCode::from(error.exit_code())
         }
     }
+}
+
+fn run_direct_inspection(arguments: &[String]) -> ExitCode {
+    let output = match arguments {
+        [] => None,
+        [output] if !matches!(output.as_str(), "current" | "preview") => {
+            Some(std::path::Path::new(output))
+        }
+        _ => return inspection_usage(),
+    };
+    let result = std::env::current_dir()
+        .map_err(|error| error.to_string())
+        .and_then(|directory| {
+            WorkspaceStore::open(&directory).map_err(|error| error.message().to_owned())
+        })
+        .and_then(|workspace| {
+            workspace
+                .inspect_chunks(output)
+                .map_err(|error| error.message().to_owned())
+        });
+    match result {
+        Ok(report) => emit_stdout(&format!(
+            "Выгрузка создана: {}. Файлов включено: {}, исключено: {}, чанков: {}.",
+            report.display_inputs_path(),
+            report.included_files(),
+            report.excluded_files(),
+            report.chunks()
+        )),
+        Err(error) => {
+            emit_stderr(&format!("fastsearch failed: {error}"));
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn inspection_usage() -> ExitCode {
+    emit_stderr("Использование: fastsearch index inspect [папка]");
+    ExitCode::from(2)
 }
 
 /// Makes a directly launched Windows console wide enough for the search-result columns.

@@ -574,9 +574,6 @@ pub(crate) fn model_device_capability(
     model: EmbeddingModelId,
     device: ExecutionDevice,
 ) -> Result<DeviceCapabilityStatus, FastSearchError> {
-    if model == EmbeddingModelId::JinaEmbeddingsV3 {
-        return Ok(DeviceCapabilityStatus::Unavailable);
-    }
     if device == ExecutionDevice::Cpu {
         return Ok(DeviceCapabilityStatus::Ready);
     }
@@ -649,17 +646,6 @@ pub(super) fn download_embedding_model_assets_with_progress(
 pub fn model_runtime_capabilities(
     model: EmbeddingModelId,
 ) -> Result<ModelRuntimeCapabilities, FastSearchError> {
-    if model == EmbeddingModelId::JinaEmbeddingsV3 {
-        return Ok(ModelRuntimeCapabilities {
-            cpu: DeviceCapabilityStatus::Unavailable,
-            gpu: DeviceCapabilityStatus::Unavailable,
-            gpu_backend: None,
-            gpu_detail: Some(
-                "Jina v3 требует task_id-aware ONNX provider; текущий runtime его ещё не включает"
-                    .to_owned(),
-            ),
-        });
-    }
     if matches!(
         model,
         EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe

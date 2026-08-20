@@ -150,6 +150,41 @@ pub(super) fn sources() -> NextStep {
         .with_action(ActionItem::new("/exit", "закрыть FastSearch"))
 }
 
+pub(super) fn index_status(freshness: IndexFreshness) -> NextStep {
+    let instruction = match freshness {
+        IndexFreshness::Current => "Индекс готов. Выберите следующее действие:",
+        IndexFreshness::Stale => "Индекс требует обновления. Выберите действие:",
+        IndexFreshness::Degraded => "Индекс требует восстановления. Выберите действие:",
+        IndexFreshness::NotConfigured => "Индекс ещё не настроен. Выберите действие:",
+    };
+    NextStep::instruction(instruction)
+        .with_action(ActionItem::new(
+            "/index update",
+            "применить изменения источников",
+        ))
+        .with_action(ActionItem::new(
+            "/index rebuild",
+            "полностью перестроить индекс",
+        ))
+        .with_action(ActionItem::new(
+            "/index inspect",
+            "выгрузить опубликованный чанкинг",
+        ))
+        .with_action(ActionItem::new("/sources", "проверить источники"))
+        .with_action(ActionItem::new("/help", "показать все команды"))
+}
+
+pub(super) fn index_inspection() -> NextStep {
+    NextStep::instruction("Изучите выгрузку или выберите следующее действие:")
+        .with_action(ActionItem::new(
+            "/index inspect",
+            "повторить выгрузку опубликованного чанкинга",
+        ))
+        .with_action(ActionItem::new("/index", "проверить состояние индекса"))
+        .with_action(ActionItem::new("/index update", "актуализировать индекс"))
+        .with_action(ActionItem::new("/help", "показать все команды"))
+}
+
 pub(super) fn search_results() -> NextStep {
     NextStep::instruction("Введите новый запрос обычным текстом или выберите действие:")
         .with_action(ActionItem::new("/open <номер>", "открыть результат"))

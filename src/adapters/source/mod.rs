@@ -10,6 +10,7 @@ use crate::domain::{
     SourceSnapshot,
 };
 use crate::ports::SourcePort;
+use serde::{Deserialize, Serialize};
 
 mod markdown;
 mod scanner;
@@ -18,13 +19,49 @@ mod scanner;
 #[allow(dead_code)]
 mod tsv;
 
-use scanner::{ScannedSourceKind, discover_sources, read_source, scan_sources};
+use scanner::{ScannedSourceKind, discover_sources_with_exclusions, read_source, scan_sources};
 
 /// The changed subset of one source root plus every source key observed during
 /// this scan.  The latter is what makes deletion detection exact.
 pub struct IncrementalSnapshots {
     pub snapshots: Vec<SourceSnapshot>,
     pub seen_source_keys: BTreeSet<String>,
+    pub decisions: Vec<SourceDecision>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarkdownAdmissionRule {
+    property: String,
+    expected_value: String,
+}
+
+impl MarkdownAdmissionRule {
+    pub fn new(
+        property: impl Into<String>,
+        expected_value: impl Into<String>,
+    ) -> Result<Self, FastSearchError> {
+        let property = property.into();
+        let expected_value = expected_value.into();
+        if property.trim().is_empty() || expected_value.trim().is_empty() {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "Markdown admission requires a nonblank property and value",
+            ));
+        }
+        Ok(Self {
+            property,
+            expected_value,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceDecision {
+    pub root_id: Option<String>,
+    pub path: String,
+    pub included: bool,
+    pub reason: String,
+    pub source_hash: String,
 }
 
 /// Reads canonical Markdown snapshots from the verified source root.
@@ -37,6 +74,8 @@ pub fn markdown_snapshots(root: &Path) -> Result<Vec<SourceSnapshot>, FastSearch
 pub struct FilesystemSource {
     root: PathBuf,
     root_id: Option<LogicalRootId>,
+    admission: Option<MarkdownAdmissionRule>,
+    exclusions: Option<Vec<String>>,
 }
 
 impl FilesystemSource {
@@ -45,6 +84,8 @@ impl FilesystemSource {
         Self {
             root: root.into(),
             root_id: None,
+            admission: None,
+            exclusions: None,
         }
     }
 
@@ -53,11 +94,25 @@ impl FilesystemSource {
         Self {
             root: root.into(),
             root_id: Some(root_id),
+            admission: None,
+            exclusions: None,
         }
     }
 
+    #[must_use]
+    pub fn with_markdown_admission(mut self, admission: Option<MarkdownAdmissionRule>) -> Self {
+        self.admission = admission;
+        self
+    }
+
+    #[must_use]
+    pub fn with_exclusions(mut self, exclusions: Option<Vec<String>>) -> Self {
+        self.exclusions = exclusions;
+        self
+    }
+
     fn snapshots(&self) -> Result<Vec<SourceSnapshot>, FastSearchError> {
-        let snapshots = collect_snapshots(&self.root, None, self.root_id.as_ref())?;
+        let snapshots = self.snapshots_incremental(&BTreeMap::new())?.snapshots;
         ensure_unique_snapshot_ids(&snapshots)?;
         Ok(snapshots)
     }
@@ -72,13 +127,60 @@ impl FilesystemSource {
     ) -> Result<IncrementalSnapshots, FastSearchError> {
         let mut snapshots = Vec::new();
         let mut seen_source_keys = BTreeSet::new();
-        for discovered in discover_sources(&self.root)? {
+        let mut decisions = Vec::new();
+        let discovered = match self.exclusions.as_deref() {
+            Some(exclusions) => discover_sources_with_exclusions(&self.root, exclusions)?,
+            None => scanner::discover_sources(&self.root)?,
+        };
+        for discovered in discovered {
             let source = read_source(discovered.path, discovered.locator, discovered.kind)?;
             let locator = SourceLocator::whole_file(source.locator.clone())
                 .map_err(|error| source_contract_failure(error.message()))?;
             let key = SourceSnapshot::storage_key_for(self.root_id.as_ref(), &locator);
-            seen_source_keys.insert(key.clone());
             let file_hash = normalized_file_hash(&source.bytes)?;
+            let admission = self
+                .admission
+                .as_ref()
+                .map(|rule| {
+                    markdown::admission_value(&source.bytes, &rule.property, &rule.expected_value)
+                })
+                .transpose()
+                .map_err(|error| {
+                    FastSearchError::new(
+                        error.kind().clone(),
+                        format!("{}: {}", source.locator, error.message()),
+                    )
+                })?;
+            let (included, reason) = match admission {
+                Some(true) => (
+                    true,
+                    format!(
+                        "property {}={}",
+                        self.admission.as_ref().unwrap().property,
+                        self.admission.as_ref().unwrap().expected_value
+                    ),
+                ),
+                Some(false) => (
+                    false,
+                    format!(
+                        "property {} is missing or does not equal {}",
+                        self.admission.as_ref().unwrap().property,
+                        self.admission.as_ref().unwrap().expected_value
+                    ),
+                ),
+                None => (true, "no admission property configured".to_owned()),
+            };
+            decisions.push(SourceDecision {
+                root_id: self.root_id.as_ref().map(|root| root.as_str().to_owned()),
+                path: source.locator.clone(),
+                included,
+                reason,
+                source_hash: file_hash.as_str().to_owned(),
+            });
+            if !included {
+                continue;
+            }
+            seen_source_keys.insert(key.clone());
             if known_hashes.get(&key) == Some(&file_hash.as_str().to_owned()) {
                 continue;
             }
@@ -106,6 +208,7 @@ impl FilesystemSource {
         Ok(IncrementalSnapshots {
             snapshots,
             seen_source_keys,
+            decisions,
         })
     }
 }
@@ -185,7 +288,7 @@ pub(super) fn normalized_file_hash(bytes: &[u8]) -> Result<FileHash, FastSearchE
     let document = std::str::from_utf8(bytes)
         .map_err(|_| FastSearchError::new(ErrorKind::SourceFailure, "source file is not UTF-8"))?;
     FileHash::parse(versioned_hash(
-        "file",
+        "file:markdown-v2",
         [normalize_document(document).as_str()],
     ))
     .map_err(|error| source_contract_failure(error.message()))
@@ -212,6 +315,7 @@ pub(super) fn source_contract_failure(message: &str) -> FastSearchError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -220,7 +324,8 @@ mod tests {
     use crate::ports::SourcePort;
 
     use super::{
-        FilesystemSource, ScannedSourceKind, markdown, markdown_snapshots, scan_sources, tsv,
+        FilesystemSource, MarkdownAdmissionRule, ScannedSourceKind, markdown, markdown_snapshots,
+        scan_sources, tsv,
     };
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
@@ -323,6 +428,42 @@ mod tests {
     }
 
     #[test]
+    fn configured_frontmatter_property_is_a_fail_closed_admission_rule() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "included.md",
+            "---\nИндексация: true\n---\n# Включён\nТекст",
+        );
+        fixture.write(
+            "disabled.md",
+            "---\nИндексация: false\n---\n# Исключён\nТекст",
+        );
+        fixture.write("missing.md", "# Без свойства\nТекст");
+        let source = FilesystemSource::new(fixture.path()).with_markdown_admission(Some(
+            MarkdownAdmissionRule::new("Индексация", "true").unwrap(),
+        ));
+
+        let scan = source.snapshots_incremental(&BTreeMap::new()).unwrap();
+
+        assert_eq!(scan.snapshots.len(), 1);
+        assert_eq!(scan.snapshots[0].locator().path(), "included.md");
+        assert_eq!(
+            scan.decisions.iter().filter(|item| item.included).count(),
+            1
+        );
+        assert_eq!(
+            scan.decisions.iter().filter(|item| !item.included).count(),
+            2
+        );
+        assert!(
+            !scan.snapshots[0].records()[0]
+                .metadata()
+                .contains_key("Индексация"),
+            "control-plane admission metadata must not enter searchable records"
+        );
+    }
+
+    #[test]
     fn scanner_rejects_non_utf8_allowed_source_without_partial_result() {
         let fixture = Fixture::new();
         fixture.write("allowed.md", "valid");
@@ -387,7 +528,7 @@ mod tests {
         assert_eq!(snapshot.locator().path(), "docs/guide.md");
         assert_eq!(
             snapshot.file_hash().as_str(),
-            "sha256:v1:bdcc47be2c980e49e83cccb883eff460c897cd609a431e64a5e2b53104aa68b4"
+            "sha256:v1:ae7ca6e4e3aebf9dd07e7927a5e74cd834419bcf8dbf9dc8f896bab299b192b6"
         );
         assert_eq!(
             snapshot.records().len(),
@@ -432,7 +573,7 @@ mod tests {
         );
         assert_eq!(
             current.content_hash().as_str(),
-            "sha256:v1:8b738824dd3ea8368d6b4c59a797322d393145830d95262512149f29324bd153"
+            "sha256:v1:78af24b5131bcee7cb7fe7751b171e0ff044fbd3c9c62819b42d12308be06580"
         );
         assert_eq!(
             current.locator().selector(),
@@ -449,7 +590,7 @@ mod tests {
         assert_eq!(details.searchable_content(), "Только детали.");
         assert_eq!(
             details.content_hash().as_str(),
-            "sha256:v1:b62d58c21bf327c9786dd14461e558264182023cb8b810dcf616d47f80085c9b"
+            "sha256:v1:0f3b21c0228c6c23c232a0f5f86fad079762353bf02162eb14e547b4c7c3afce"
         );
     }
 

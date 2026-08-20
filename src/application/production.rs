@@ -12,12 +12,17 @@ use crate::{
     adapters::{
         lexical::TantivyLexical,
         maps::{CodeMapRelated, CodeMapSource},
-        source::FilesystemSource,
+        source::{FilesystemSource, MarkdownAdmissionRule},
         state::SqliteStateStore,
         symbols::SymbolSource,
         vector::{LocalE5Vector, VectorBuildProgress},
     },
-    application::fusion::{ChannelCandidates, FusionCoordinator},
+    application::{
+        chunking::project_records,
+        fusion::{ChannelCandidates, FusionCoordinator},
+        inspection::{self, InspectionManifest, InspectionReport},
+        retrieval_projection::canonicalize_projection_hits,
+    },
     domain::{
         BackendKind, CanonicalRecord, Capability, CapabilityStatus, EmbeddingModelId, ErrorKind,
         ExecutionDevice, FastSearchError, IndexFreshness, LifecycleStatus, LogicalRootId,
@@ -34,6 +39,8 @@ pub(super) type ModelPartitionSearchOutcome = (
     u128,
     Result<SearchResponse, FastSearchError>,
 );
+
+mod model_partitions;
 
 mod security {
     use std::{
@@ -634,6 +641,8 @@ pub struct ProductionConfig {
     e5_root: Option<PathBuf>,
     embedding_model: EmbeddingModelId,
     execution_device: ExecutionDevice,
+    markdown_admission: Option<MarkdownAdmissionRule>,
+    exclusions: Option<Vec<String>>,
     workspace_root: Option<PathBuf>,
     workspace_layout: bool,
 }
@@ -664,6 +673,8 @@ impl ProductionConfig {
             e5_root: None,
             embedding_model: EmbeddingModelId::MultilingualE5Small,
             execution_device: ExecutionDevice::Cpu,
+            markdown_admission: None,
+            exclusions: None,
             workspace_root: None,
             workspace_layout: false,
         }
@@ -688,6 +699,8 @@ impl ProductionConfig {
             e5_root: None,
             embedding_model: EmbeddingModelId::MultilingualE5Small,
             execution_device: ExecutionDevice::Cpu,
+            markdown_admission: None,
+            exclusions: None,
             workspace_root: Some(workspace_root.into()),
             workspace_layout: true,
         }
@@ -714,6 +727,21 @@ impl ProductionConfig {
     #[must_use]
     pub fn with_execution_device(mut self, device: ExecutionDevice) -> Self {
         self.execution_device = device;
+        self
+    }
+
+    pub fn with_markdown_admission(
+        mut self,
+        property: impl Into<String>,
+        expected_value: impl Into<String>,
+    ) -> Self {
+        self.markdown_admission = MarkdownAdmissionRule::new(property, expected_value).ok();
+        self
+    }
+
+    #[must_use]
+    pub fn with_exclusions(mut self, exclusions: Vec<String>) -> Self {
+        self.exclusions = Some(exclusions);
         self
     }
 }
@@ -783,6 +811,8 @@ struct IndexingCoordinator<'a> {
     lexical: &'a TantivyLexical,
     vector: &'a LocalE5Vector,
     vector_configured: bool,
+    embedding_model: EmbeddingModelId,
+    service_root: &'a Path,
 }
 
 impl IndexingCoordinator<'_> {
@@ -812,6 +842,7 @@ impl IndexingCoordinator<'_> {
         });
         let known_hashes = self.state.source_hashes()?;
         let mut snapshots = Vec::new();
+        let mut source_decisions = Vec::new();
         let mut seen_source_keys = std::collections::BTreeSet::new();
         // AUTO maps derive their metadata from the current document set, so a
         // byte-identical map may still change from CURRENT to STALE.
@@ -820,6 +851,7 @@ impl IndexingCoordinator<'_> {
             let delta = source.snapshots_incremental(&known_hashes)?;
             snapshots.extend(delta.snapshots);
             seen_source_keys.extend(delta.seen_source_keys);
+            source_decisions.extend(delta.decisions);
         }
         for source in self.maps {
             let source_snapshots = source.snapshot()?;
@@ -852,6 +884,7 @@ impl IndexingCoordinator<'_> {
             self.state
                 .reconcile_incremental(&snapshots, &seen_source_keys, &force_source_keys)?;
         let records = self.state.all_records()?;
+        let projected = project_records(&records, self.embedding_model)?;
         progress(IndexingProgress {
             completed: 2,
             total,
@@ -862,7 +895,7 @@ impl IndexingCoordinator<'_> {
         });
         let lexical = if rebuild {
             self.lexical
-                .rebuild(&records, changes.durable_generation())?
+                .rebuild(&projected.records, changes.durable_generation())?
         } else {
             let current = self.lexical.lifecycle_status();
             let unchanged = changes
@@ -876,7 +909,7 @@ impl IndexingCoordinator<'_> {
                 current
             } else {
                 self.lexical
-                    .apply_projection(&records, changes.durable_generation())?
+                    .apply_projection(&projected.records, changes.durable_generation())?
             }
         };
         if vector_enabled {
@@ -885,11 +918,11 @@ impl IndexingCoordinator<'_> {
                 total,
                 stage: IndexingStage::Vector,
                 work_completed: Some(0),
-                work_total: Some(records.len() as u64),
+                work_total: Some(projected.records.len() as u64),
                 work_stage: Some(IndexingWorkStage::Vectorizing),
             });
             self.vector.apply_with_progress(
-                &records,
+                &projected.records,
                 changes.durable_generation(),
                 &mut |event| {
                     let (work_completed, work_total, work_stage) = match event {
@@ -914,6 +947,15 @@ impl IndexingCoordinator<'_> {
                 },
             )?;
         }
+        inspection::save_published(
+            self.service_root,
+            &InspectionManifest::published(
+                changes.durable_generation(),
+                self.embedding_model,
+                source_decisions,
+                projected.chunks,
+            ),
+        )?;
         Ok(lexical)
     }
 
@@ -953,6 +995,7 @@ struct SearchCoordinator<'a> {
     vector_configured: bool,
     maps: &'a [CodeMapSource],
     symbols: &'a [SymbolSource],
+    state: &'a SqliteStateStore,
 }
 
 impl SearchCoordinator<'_> {
@@ -961,7 +1004,7 @@ impl SearchCoordinator<'_> {
         query: &SearchQuery,
         status: Vec<CapabilityStatus>,
     ) -> Result<SearchResponse, FastSearchError> {
-        let lexical = self.lexical.search(query)?;
+        let lexical = canonicalize_projection_hits(self.state, self.lexical.search(query)?)?;
         let mut grouped = BTreeMap::<u8, (RetrievalChannel, Vec<SearchHit>)>::new();
         for hit in lexical.hits() {
             let channel = hit.channel();
@@ -977,7 +1020,7 @@ impl SearchCoordinator<'_> {
             .collect::<Result<Vec<_>, _>>()?;
 
         if self.vector_configured {
-            let vector = self.vector.search(query)?;
+            let vector = canonicalize_projection_hits(self.state, self.vector.search(query)?)?;
             candidates.push(ChannelCandidates::new(
                 RetrievalChannel::Vector,
                 vector.hits().to_vec(),
@@ -1040,6 +1083,8 @@ impl ProductionRuntime {
         let workspace_layout = config.workspace_layout;
         let embedding_model = config.embedding_model;
         let execution_device = config.execution_device;
+        let markdown_admission = config.markdown_admission.clone();
+        let exclusions = config.exclusions.clone();
         let document_roots = canonical_roots(&config.document_roots, "document root")?;
         let code_roots = canonical_roots(&config.code_roots, "code root")?;
         let source_paths = document_roots
@@ -1090,8 +1135,12 @@ impl ProductionRuntime {
         let documents = document_roots
             .iter()
             .map(|(id, path)| match id {
-                Some(id) => Ok(FilesystemSource::new_named(id.clone(), path.clone())),
-                None => Ok(FilesystemSource::new(path.clone())),
+                Some(id) => Ok(FilesystemSource::new_named(id.clone(), path.clone())
+                    .with_markdown_admission(markdown_admission.clone())
+                    .with_exclusions(exclusions.clone())),
+                None => Ok(FilesystemSource::new(path.clone())
+                    .with_markdown_admission(markdown_admission.clone())
+                    .with_exclusions(exclusions.clone())),
             })
             .collect::<Result<Vec<_>, FastSearchError>>()?;
         let maps = document_roots
@@ -1136,7 +1185,9 @@ impl ProductionRuntime {
             )
         };
         if workspace_layout && vector_configured {
-            vector.restore(&state.all_records()?, state.durable_generation()?)?;
+            let records = state.all_records()?;
+            let projected = project_records(&records, embedding_model)?;
+            vector.restore(&projected.records, state.durable_generation()?)?;
         }
 
         Ok(Self {
@@ -1172,6 +1223,13 @@ impl ProductionRuntime {
         self.indexing().project(true, true)
     }
 
+    pub fn inspect_chunks(
+        &self,
+        output: Option<&Path>,
+    ) -> Result<InspectionReport, FastSearchError> {
+        inspection::inspect_published(self.service.service_root(), output)
+    }
+
     pub(super) fn index_with_progress(
         &mut self,
         mut progress: impl FnMut(IndexingProgress),
@@ -1196,144 +1254,6 @@ impl ProductionRuntime {
             .project_with_progress(false, false, &mut progress)
     }
 
-    /// Read-only readiness of one model partition against the current shared
-    /// canonical state. This never opens or downloads model weights.
-    pub fn model_partition_status(&self, model: EmbeddingModelId) -> LifecycleStatus {
-        let records = match self.state.all_records() {
-            Ok(records) => records,
-            Err(error) => {
-                return LifecycleStatus::new(IndexFreshness::Degraded, 0, None, error.message());
-            }
-        };
-        let generation = match self.state.durable_generation() {
-            Ok(generation) => generation,
-            Err(error) => {
-                return LifecycleStatus::new(IndexFreshness::Degraded, 0, None, error.message());
-            }
-        };
-        LocalE5Vector::persistent_status(
-            &model_partition_root(self.service.service_root(), model),
-            model,
-            &super::model_cache::model_identity(model),
-            &records,
-            generation,
-        )
-    }
-
-    /// Stored measurements for the committed files of one model partition.
-    /// This is read-only and never opens model weights.
-    pub fn model_partition_metrics(
-        &self,
-        model: EmbeddingModelId,
-    ) -> Result<Option<ModelPartitionMetrics>, FastSearchError> {
-        Ok(LocalE5Vector::persistent_metrics(&model_partition_root(
-            self.service.service_root(),
-            model,
-        ))?
-        .map(|metrics| ModelPartitionMetrics {
-            size_bytes: metrics.size_bytes(),
-            build_duration_ms: metrics.build_duration_ms(),
-        }))
-    }
-
-    /// Builds exactly one model-specific vector partition from the current
-    /// shared canonical state without rescanning sources or rebuilding lexical.
-    pub fn build_model_partition(
-        &self,
-        model: EmbeddingModelId,
-        model_root: &Path,
-    ) -> Result<LifecycleStatus, FastSearchError> {
-        self.build_model_partition_with_progress(model, model_root, |_| {})
-    }
-
-    pub(super) fn build_model_partition_with_progress(
-        &self,
-        model: EmbeddingModelId,
-        model_root: &Path,
-        mut progress: impl FnMut(VectorBuildProgress),
-    ) -> Result<LifecycleStatus, FastSearchError> {
-        if !self.workspace_layout {
-            return Err(FastSearchError::new(
-                ErrorKind::InvalidContent,
-                "model partitions require a workspace layout",
-            ));
-        }
-        let records = self.state.all_records()?;
-        let generation = self.state.durable_generation()?;
-        let vector = LocalE5Vector::open_persistent_with_model_on_device(
-            model_root,
-            super::model_cache::model_identity(model),
-            model,
-            model_partition_root(self.service.service_root(), model),
-            super::model_cache::configured_model_device(model)?,
-        );
-        vector.restore(&records, generation)?;
-        vector.apply_with_progress(&records, generation, &mut progress)
-    }
-
-    /// Executes vector-only retrieval for one already admitted model
-    /// partition. Shared lexical results are requested separately once.
-    pub fn search_model_partition(
-        &self,
-        model: EmbeddingModelId,
-        model_root: &Path,
-        query: &SearchQuery,
-    ) -> Result<SearchResponse, FastSearchError> {
-        let records = self.state.all_records()?;
-        let generation = self.state.durable_generation()?;
-        let vector = LocalE5Vector::open_persistent_with_model_on_device(
-            model_root,
-            super::model_cache::model_identity(model),
-            model,
-            model_partition_root(self.service.service_root(), model),
-            super::model_cache::configured_model_device(model)?,
-        );
-        vector.restore(&records, generation)?;
-        vector.search(query)
-    }
-
-    /// Executes every requested model partition in its own worker. The SQLite
-    /// authority is read once on the caller thread; workers receive only the
-    /// immutable canonical snapshot and construct independent model runtimes.
-    pub(super) fn search_model_partitions_parallel(
-        &self,
-        requests: &[(EmbeddingModelId, PathBuf)],
-        query: &SearchQuery,
-    ) -> Result<Vec<ModelPartitionSearchOutcome>, FastSearchError> {
-        let records = self.state.all_records()?;
-        let generation = self.state.durable_generation()?;
-        let service_root = self.service.service_root().to_path_buf();
-        let attempts = run_jobs_resilient(requests, |(model, model_root)| {
-            super::model_cache::configured_model_device(*model).and_then(|device| {
-                let vector = LocalE5Vector::open_persistent_with_model_on_device(
-                    model_root,
-                    super::model_cache::model_identity(*model),
-                    *model,
-                    model_partition_root(&service_root, *model),
-                    device,
-                );
-                vector.restore(&records, generation)?;
-                vector.search(query)
-            })
-        });
-        let mut outcomes = requests
-            .iter()
-            .zip(attempts)
-            .map(|((model, _), (latency_ms, response))| (*model, latency_ms, response))
-            .collect::<Vec<_>>();
-        outcomes.sort_by_key(|(model, _, _)| {
-            EmbeddingModelId::DISPLAY_ORDER
-                .iter()
-                .position(|candidate| candidate == model)
-                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
-        });
-        Ok(outcomes)
-    }
-
-    pub fn lexical_baseline(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
-        self.lexical.search(query)
-    }
-
     /// Creates an exact run-owned directory used by acceptance jobs and batch callers.
     pub fn record_run_marker(&self, marker: &str) -> Result<PathBuf, FastSearchError> {
         self.service.record_run_marker(marker)
@@ -1353,6 +1273,8 @@ impl ProductionRuntime {
             lexical: &self.lexical,
             vector: &self.vector,
             vector_configured: self.vector_configured,
+            embedding_model: self.embedding_model,
+            service_root: self.service.service_root(),
         }
     }
 
@@ -1363,6 +1285,7 @@ impl ProductionRuntime {
             vector_configured: self.vector_configured,
             maps: &self.maps,
             symbols: &self.symbols,
+            state: &self.state,
         }
     }
 
