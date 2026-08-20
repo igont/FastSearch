@@ -40,6 +40,7 @@ pub(super) enum ComparisonModelStage {
     /// model after the model currently being materialized.
     QueuedForIndexing,
     Validating,
+    PreparingForIndexing,
     Indexing {
         completed_records: u64,
         total_records: u64,
@@ -398,10 +399,7 @@ fn provision_and_index_pipeline(
                     .and_then(|availability| {
                         let _ = index_events.send(PipelineMessage::Indexing {
                             model,
-                            stage: ComparisonModelStage::Indexing {
-                                completed_records: 0,
-                                total_records: 0,
-                            },
+                            stage: ComparisonModelStage::PreparingForIndexing,
                         });
                         runtime.build_model_partition_with_progress(
                             model,

@@ -85,6 +85,9 @@ fn report_comparison_progress(port: &ProgressPort, event: ComparisonUpdateProgre
                     port.stage(task, 0, "проверка runtime");
                     port.progress(task, 0, 1, 1);
                 }
+                ComparisonModelStage::PreparingForIndexing => {
+                    port.stage(task, 1, "подготовка векторизации");
+                }
                 ComparisonModelStage::Indexing {
                     completed_records,
                     total_records,
@@ -594,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn downloaded_model_enters_the_single_indexing_lane_immediately() {
+    fn indexing_preparation_does_not_fabricate_a_one_record_total() {
         let mut input = Cursor::new(Vec::<u8>::new());
         let mut output = Vec::new();
         let config = SessionConfig::for_terminal(false, false);
@@ -617,10 +620,7 @@ mod tests {
                 &port,
                 ComparisonUpdateProgress::Model {
                     model,
-                    stage: ComparisonModelStage::Indexing {
-                        completed_records: 0,
-                        total_records: 0,
-                    },
+                    stage: ComparisonModelStage::PreparingForIndexing,
                 },
             );
             Ok::<_, ()>(())
@@ -630,7 +630,11 @@ mod tests {
         assert_eq!(result, Ok(()));
         let transcript = String::from_utf8(output).unwrap();
         assert!(transcript.contains("2/3"), "{transcript}");
-        assert!(transcript.contains("векторизация"), "{transcript}");
+        assert!(
+            transcript.contains("подготовка векторизации"),
+            "{transcript}"
+        );
         assert!(transcript.contains("0%"), "{transcript}");
+        assert!(!transcript.contains("0 / 1 записей"), "{transcript}");
     }
 }

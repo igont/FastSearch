@@ -6,10 +6,10 @@ use crate::domain::{
     StableId,
 };
 
-pub(crate) const CHUNKER_VERSION: &str = "markdown-structure-v3";
-const MAX_LIST_CHARS: usize = 1_200;
+pub(crate) const CHUNKER_VERSION: &str = "markdown-structure-v4";
 pub(crate) const PARENT_ID_METADATA: &str = "_fastsearch_parent_id";
 const CHUNK_KIND_METADATA: &str = "_fastsearch_chunk_kind";
+const SOURCE_PATH_METADATA: &str = "_fastsearch_source_path";
 const SOURCE_START_METADATA: &str = "_fastsearch_source_start_line";
 const SOURCE_END_METADATA: &str = "_fastsearch_source_end_line";
 
@@ -94,7 +94,8 @@ pub(crate) fn project_records(
             let embedding_input = embedding_input(model, &lexical_input);
             let source_start = base_line.map(|line| line + block.start_line);
             let source_end = base_line.map(|line| line + block.end_line);
-            let mut metadata = record.metadata().clone();
+            let source_root_id = record.metadata().get("_fastsearch_root_id").cloned();
+            let mut metadata = std::collections::BTreeMap::new();
             metadata.insert(
                 PARENT_ID_METADATA.to_owned(),
                 record.id().as_str().to_owned(),
@@ -102,6 +103,10 @@ pub(crate) fn project_records(
             metadata.insert(
                 CHUNK_KIND_METADATA.to_owned(),
                 block.kind.as_str().to_owned(),
+            );
+            metadata.insert(
+                SOURCE_PATH_METADATA.to_owned(),
+                record.locator().path().to_owned(),
             );
             if let Some(line) = source_start {
                 metadata.insert(SOURCE_START_METADATA.to_owned(), line.to_string());
@@ -117,14 +122,14 @@ pub(crate) fn project_records(
                 context.clone(),
                 visible_text,
                 metadata,
-                record.relations().to_vec(),
+                Vec::new(),
                 ContentHash::parse(hash)?,
             )?;
             envelopes.push(ChunkEnvelope {
                 chunker_version: CHUNKER_VERSION.to_owned(),
                 chunk_id: projected_id,
                 record_id: record.id().as_str().to_owned(),
-                source_root_id: record.metadata().get("_fastsearch_root_id").cloned(),
+                source_root_id,
                 source_path: record.locator().path().to_owned(),
                 source_hash: record.content_hash().as_str().to_owned(),
                 heading_path: heading_path(record),
@@ -229,12 +234,19 @@ fn visible_markdown_text(input: &str) -> String {
 fn visible_block_text(kind: ChunkKind, input: &str) -> String {
     let visible = visible_markdown_text(input);
     match kind {
-        ChunkKind::UnorderedList | ChunkKind::OrderedList => semantic_list_text(&visible),
+        ChunkKind::Paragraph => visible
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        ChunkKind::UnorderedList => semantic_list_text(&visible, false),
+        ChunkKind::OrderedList => semantic_list_text(&visible, true),
         _ => visible,
     }
 }
 
-fn semantic_list_text(input: &str) -> String {
+fn semantic_list_text(input: &str, preserve_order: bool) -> String {
     let item_indents = input
         .lines()
         .filter(|line| unordered_item(line).is_some() || ordered_item(line).is_some())
@@ -244,7 +256,8 @@ fn semantic_list_text(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
 
     for line in input.lines().filter(|line| !line.trim().is_empty()) {
-        let item = unordered_item(line).or_else(|| ordered_item(line));
+        let ordered = ordered_item_with_marker(line);
+        let item = unordered_item(line).or_else(|| ordered.map(|(_, item)| item));
         if let Some(item) = item {
             if !output.is_empty() {
                 if leading_spaces(line) == base_indent {
@@ -258,6 +271,12 @@ fn semantic_list_text(input: &str) -> String {
                 } else {
                     output.push_str(" — ");
                 }
+            }
+            if preserve_order && leading_spaces(line) == base_indent {
+                let marker = ordered.map_or("?", |(marker, _)| marker);
+                output.push_str("Шаг ");
+                output.push_str(marker);
+                output.push_str(": ");
             }
             output.push_str(item.trim());
         } else {
@@ -359,18 +378,23 @@ fn split_blocks(content: &str) -> Vec<Block> {
             continue;
         }
         let start = index;
-        index += 1;
-        while index < lines.len()
-            && !lines[index].trim().is_empty()
-            && !is_thematic_break(lines[index])
-            && unordered_item(lines[index]).is_none()
-            && ordered_item(lines[index]).is_none()
-            && table_at(&lines, index).is_none()
-            && !lines[index].trim_start().starts_with("```")
-        {
-            index += 1;
+        let mut end;
+        loop {
+            while index < lines.len() && !lines[index].trim().is_empty() {
+                if is_structural_block(&lines, index) {
+                    break;
+                }
+                index += 1;
+            }
+            end = index;
+            while index < lines.len() && lines[index].trim().is_empty() {
+                index += 1;
+            }
+            if index >= lines.len() || is_structural_block(&lines, index) {
+                break;
+            }
         }
-        blocks.push(block(ChunkKind::Paragraph, &lines, start, index));
+        blocks.push(block(ChunkKind::Paragraph, &lines, start, end));
     }
     if blocks.is_empty() && !content.trim().is_empty() {
         blocks.push(Block {
@@ -384,69 +408,41 @@ fn split_blocks(content: &str) -> Vec<Block> {
 }
 
 fn unordered_list(lines: &[&str], start: usize) -> (Vec<Block>, usize) {
-    let mut starts = Vec::new();
     let mut index = start;
     let base_indent = leading_spaces(lines[start]);
     while index < lines.len() && !lines[index].trim().is_empty() {
-        if unordered_item(lines[index]).is_some() && leading_spaces(lines[index]) == base_indent {
-            starts.push(index);
-        } else if !is_indented(lines[index]) {
+        if unordered_item(lines[index]).is_none() && leading_spaces(lines[index]) <= base_indent {
             break;
         }
         index += 1;
     }
-    let mut blocks = Vec::new();
-    for (item_start, item_end) in bounded_item_windows(lines, &starts, index, MAX_LIST_CHARS) {
-        blocks.push(block(ChunkKind::UnorderedList, lines, item_start, item_end));
-    }
-    (blocks, index)
+    (
+        vec![block(ChunkKind::UnorderedList, lines, start, index)],
+        index,
+    )
 }
 
 fn ordered_list(lines: &[&str], start: usize) -> (Vec<Block>, usize) {
-    let mut starts = Vec::new();
     let mut index = start;
     let base_indent = leading_spaces(lines[start]);
     while index < lines.len() && !lines[index].trim().is_empty() {
-        if ordered_item(lines[index]).is_some() && leading_spaces(lines[index]) == base_indent {
-            starts.push(index);
-        } else if !is_indented(lines[index]) {
+        if ordered_item(lines[index]).is_none() && leading_spaces(lines[index]) <= base_indent {
             break;
         }
         index += 1;
     }
-    let blocks = bounded_item_windows(lines, &starts, index, MAX_LIST_CHARS)
-        .into_iter()
-        .map(|(item_start, item_end)| block(ChunkKind::OrderedList, lines, item_start, item_end))
-        .collect();
-    (blocks, index)
+    (
+        vec![block(ChunkKind::OrderedList, lines, start, index)],
+        index,
+    )
 }
 
-fn bounded_item_windows(
-    lines: &[&str],
-    starts: &[usize],
-    end: usize,
-    max_chars: usize,
-) -> Vec<(usize, usize)> {
-    let mut windows = Vec::new();
-    let mut window_start = starts[0];
-    let mut window_chars = 0;
-
-    for (position, item_start) in starts.iter().copied().enumerate() {
-        let item_end = starts.get(position + 1).copied().unwrap_or(end);
-        let item_chars = lines[item_start..item_end]
-            .iter()
-            .map(|line| line.len() + 1)
-            .sum::<usize>();
-        if window_chars > 0 && window_chars + item_chars > max_chars {
-            windows.push((window_start, item_start));
-            window_start = item_start;
-            window_chars = 0;
-        }
-        window_chars += item_chars;
-    }
-
-    windows.push((window_start, end));
-    windows
+fn is_structural_block(lines: &[&str], index: usize) -> bool {
+    is_thematic_break(lines[index])
+        || unordered_item(lines[index]).is_some()
+        || ordered_item(lines[index]).is_some()
+        || table_at(lines, index).is_some()
+        || lines[index].trim_start().starts_with("```")
 }
 
 fn table_at(lines: &[&str], start: usize) -> Option<(Vec<Block>, usize)> {
@@ -518,16 +514,17 @@ fn unordered_item(line: &str) -> Option<&str> {
 }
 
 fn ordered_item(line: &str) -> Option<&str> {
+    ordered_item_with_marker(line).map(|(_, item)| item)
+}
+
+fn ordered_item_with_marker(line: &str) -> Option<(&str, &str)> {
     let trimmed = line.trim_start();
     let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
     if digits == 0 {
         return None;
     }
-    trimmed.get(digits..)?.strip_prefix(". ")
-}
-
-fn is_indented(line: &str) -> bool {
-    leading_spaces(line) > 0
+    let item = trimmed.get(digits..)?.strip_prefix(". ")?;
+    Some((&trimmed[..digits], item))
 }
 
 fn leading_spaces(line: &str) -> usize {
@@ -595,10 +592,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(corpus.records.len(), 2);
+        assert_eq!(corpus.records.len(), 1);
         assert_eq!(
             corpus.chunks[0].lexical_input,
-            "Руководство > Правила проектирования: Нужно делать так-то"
+            "Руководство > Правила проектирования: Нужно делать так-то Нельзя делать так-то"
         );
         assert_eq!(corpus.chunks[0].source_line_start, Some(10));
         assert!(corpus.chunks[0].embedding_input.starts_with("passage: "));
@@ -628,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn long_unordered_lists_split_only_between_complete_items() {
+    fn long_cyrillic_list_remains_one_semantic_unit() {
         let first = format!("- {}", "а".repeat(700));
         let second = format!("- {}\n  - вложенная деталь", "б".repeat(700));
         let content = format!("{first}\n{second}");
@@ -636,11 +633,10 @@ mod tests {
         let corpus =
             project_records(&[record(&content)], EmbeddingModelId::Qwen3Embedding06B).unwrap();
 
-        assert_eq!(corpus.chunks.len(), 2);
+        assert_eq!(corpus.chunks.len(), 1);
         assert_eq!(corpus.chunks[0].kind, ChunkKind::UnorderedList);
-        assert_eq!(corpus.chunks[1].kind, ChunkKind::UnorderedList);
         assert!(
-            corpus.chunks[1]
+            corpus.chunks[0]
                 .lexical_input
                 .ends_with(" — вложенная деталь")
         );
@@ -649,13 +645,78 @@ mod tests {
     #[test]
     fn complete_list_sentences_do_not_receive_an_extra_semicolon() {
         assert_eq!(
-            semantic_list_text("- Первое правило.\n- Второе правило."),
+            semantic_list_text("- Первое правило.\n- Второе правило.", false),
             "Первое правило. Второе правило."
         );
         assert_eq!(
-            semantic_list_text("- Родитель:\n  - Деталь"),
+            semantic_list_text("- Родитель:\n  - Деталь", false),
             "Родитель: Деталь"
         );
+    }
+
+    #[test]
+    fn ordered_list_preserves_step_numbers() {
+        let corpus = project_records(
+            &[record("1. Подготовить снимок.\n2. Опубликовать индекс.")],
+            EmbeddingModelId::Qwen3Embedding06B,
+        )
+        .unwrap();
+
+        assert_eq!(corpus.chunks.len(), 1);
+        assert!(
+            corpus.chunks[0]
+                .lexical_input
+                .ends_with("Шаг 1: Подготовить снимок. Шаг 2: Опубликовать индекс.")
+        );
+    }
+
+    #[test]
+    fn adjacent_paragraphs_are_joined_until_a_structural_block() {
+        let corpus = project_records(
+            &[record("Основания перечислены выше.\n\nЭти документы задают границу.\n\n- Первое правило\n- Второе правило")],
+            EmbeddingModelId::Qwen3Embedding06B,
+        )
+        .unwrap();
+
+        assert_eq!(corpus.chunks.len(), 2);
+        assert_eq!(corpus.chunks[0].kind, ChunkKind::Paragraph);
+        assert_eq!(
+            corpus.chunks[0].lexical_input,
+            "Руководство > Правила проектирования: Основания перечислены выше. Эти документы задают границу."
+        );
+        assert_eq!(corpus.chunks[0].source_line_start, Some(10));
+        assert_eq!(corpus.chunks[0].source_line_end, Some(12));
+    }
+
+    #[test]
+    fn chunk_projection_keeps_only_source_linkage_not_frontmatter_or_relations() {
+        let source = record("Текст");
+        let mut metadata = source.metadata().clone();
+        metadata.insert("TDR".to_owned(), "TDR-FG-1.4; TDR-FG-1.7".to_owned());
+        let source = CanonicalRecord::new(
+            source.id().clone(),
+            source.kind(),
+            source.locator().clone(),
+            source.title(),
+            source.searchable_content(),
+            metadata,
+            vec![StableId::parse("TDR-FG-1.4").unwrap()],
+            source.content_hash().clone(),
+        )
+        .unwrap();
+
+        let corpus = project_records(&[source], EmbeddingModelId::Qwen3Embedding06B).unwrap();
+        let chunk = &corpus.records[0];
+
+        assert_eq!(
+            chunk
+                .metadata()
+                .get(SOURCE_PATH_METADATA)
+                .map(String::as_str),
+            Some("guide.md")
+        );
+        assert!(!chunk.metadata().contains_key("TDR"));
+        assert!(chunk.relations().is_empty());
     }
 
     #[test]

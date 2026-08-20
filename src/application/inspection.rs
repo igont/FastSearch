@@ -225,7 +225,7 @@ fn write_indexing_inputs(path: PathBuf, chunks: &[ChunkEnvelope]) -> Result<(), 
     let mut writer = BufWriter::new(file);
     write_inputs(
         &mut writer,
-        chunks.iter().map(|chunk| chunk.embedding_input.as_str()),
+        chunks.iter().map(|chunk| chunk.lexical_input.as_str()),
     )?;
     writer.flush().map_err(inspection_failure)
 }
@@ -348,15 +348,11 @@ mod tests {
     fn indexing_inputs_are_plain_blocks_separated_by_one_empty_line() {
         let mut output = Vec::new();
 
-        write_inputs(
-            &mut output,
-            ["passage: Первый чанк", "passage: Второй чанк"],
-        )
-        .unwrap();
+        write_inputs(&mut output, ["Первый чанк", "Второй чанк"]).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "passage: Первый чанк\n\npassage: Второй чанк\n"
+            "Первый чанк\n\nВторой чанк\n"
         );
     }
 }
