@@ -11,7 +11,7 @@ updated: "2026-08-16"
 
 ## Пакеты
 
-- [TDR-FS-2 — Workspaces и terminal UX](<TDR-FS-2 Workspaces и terminal UX.md>)
+- [TDR-FS-2 - Рабочие области и поисковый интерфейс](<TDR-FS-2 Workspaces и terminal UX.md>)
 
 ## Заменённые самостоятельные механизмы
 
@@ -33,8 +33,9 @@ updated: "2026-08-16"
 8. [TDR-FS-2.1 — Каталог и admission рабочей области](<TDR-FS-2.1 Каталог и admission рабочей области.md>)
 9. [TDR-FS-2.2 — Namespace `.fastsearch` и migration](<TDR-FS-2.2 Namespace .fastsearch и migration.md>)
 10. [TDR-FS-2.3 — Terminal routing и `terminal-dialogue`](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>)
-11. [TDR-FS-2.4 — Automatic model provisioning](<TDR-FS-2.4 Automatic model provisioning.md>)
-12. [TDR-FS-2.5 — Режим сравнения embedding-моделей](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>)
+11. [TDR-FS-2.4 - Автоматическая подготовка моделей](<TDR-FS-2.4 Automatic model provisioning.md>)
+12. [TDR-FS-2.5 - Режим сравнения embedding-моделей](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>)
+13. [TDR-FS-2.6 - Единый поиск и переранжирование](<TDR-FS-2.6 Единый поиск и переранжирование.md>)
 
 ## Реестр
 

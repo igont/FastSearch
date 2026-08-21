@@ -2,11 +2,11 @@
 
 ## Назначение
 
-FastSearch создаётся как один локальный инструмент с общим ядром, CLI и агентским интерфейсом. Основной продуктовый контур проходит через DT1-DT4. Полный граф выделен в FastGraph, а следующим отдельным результатом FastSearch становится поставщик снимков DT12.
+FastSearch создаётся как один локальный инструмент с общим ядром, CLI и агентским интерфейсом. Основной продуктовый контур проходит через DT1-DT4. Полный граф выделен в FastGraph, а поставщик снимков DT12 остаётся отдельным отложенным результатом после DT4.
 
-Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Прежние паспорта DT5-DT11 сохранены как заменённая история, а действующий следующий паспорт DT12 находится в [Obsidian/Docs/Roadmap](Obsidian/Docs/Roadmap/00%20Roadmap.md).
+Эта дорожная карта фиксирует общий смысл деревьев и границы между ними. Она не заменяет материализованный план текущего дерева. Прежние паспорта DT5-DT11 сохранены как заменённая история, а отложенный паспорт DT12 находится в [Obsidian/Docs/Roadmap](Obsidian/Docs/Roadmap/00%20Roadmap.md).
 
-## Фактическое состояние на 16.08.2026
+## Фактическое состояние
 
 - Дерево 1 принято как контрактный baseline.
 - Дерево 2 принято и слито в `main` ревизией `adc9ad95842047bf5b6c47cba127d7f40eeb09c9`.
@@ -17,9 +17,9 @@ FastSearch создаётся как один локальный инструм�
 - Дерево 4 материализовано как план `FASTSEARCH-DT4-AGENT-TOOL-13-08-2026`, `PV-6`, в `.agents/DT-13-08-2026_19-10-Агентский-MCP-инструмент-FastSearch`. Только Foundation `A1→A4` имеет executable contract; B–E — `DORMANT OUTLINE` до GA/GM-PRODUCTION. Последние review потребовали развести shared `.cfknowledge` и product-owned state, planning/execution revisions и revision-scoped baseline gates; PV-6 материализует эти исправления и самостоятельно проверен Root без нового reviewer по указанию владельца. Product implementation не начата.
 - Historical [DT3→DT4 handoff](evidence/dt3-dt4-handoff.md) сохраняет принятый DT3 product baseline; для strict agent admission, flat marker-owned `.cfknowledge/fastsearch-dt4-<instance_id>`, SDK lifecycle, error carriers, vector authority, accounting, limits и gates его явно supersede-ит PV-6.
 - Owner decision 16.08.2026 по [workspace и terminal UX](Obsidian/Paradigms/Архитектура/Рабочие%20области%20и%20интерфейс/00%20Рабочие%20области%20и%20интерфейс.md) реализован в основном human runtime: один системный executable, persistent catalog областей, ровно два optional source contours с multiple roots, `.fastsearch` namespace и terminal-first routing. Это не переписывает DT3 acceptance; direct three-path CLI сохранён как compatibility surface.
-- Retrieval model provisioning расширен до одного selectable workspace slot: E5 Small/Base/Large, Qwen3 Embedding 0.6B и Nomic Embed Text v2 MoE. Загружается и запускается только выбранная модель; readiness не инициирует index/update/search. E5 Small остаётся default и immutable-qualified baseline, остальные варианты — candidates до общего corpus benchmark. `/experiment record` материализует query/hits/latency/judgment в portable `.fastsearch/knowledge`.
-- TDR-FS-2.5 реализован базовым model-evaluation slice: persistent revision-scoped vector partitions, read-only `/compare` readiness, подтверждённый `/update`, shared lexical baseline и отдельная выдача всех ready models. Обычный режим остаётся single-model. До qualification нового default остаются real-model cross-restart acceptance, disk preflight и versioned full-run evidence.
-- Materialized DT4 PV-6 предшествует этому owner decision. До `G-EXECUTION-BASE` его agent-facing workspace profile и storage leaves должны быть пересмотрены против текущего [TDR-FS-2](Obsidian/Docs/TDR/TDR-FS-2%20Workspaces%20и%20terminal%20UX.md); прежний `.cfknowledge` target нельзя исполнять как актуальный owner contract.
+- Каталог и автоматическая подготовка поддерживают девять embedding-моделей, включая Arctic Embed L v2, E5 Large и Nomic Embed Text v2 MoE. Для них существуют раздельные модельные проекции и экспериментальный `/compare`, который показывает независимые блоки и не формирует общий рейтинг.
+- Qwen3-Reranker-0.6B, фиксированный производственный набор из трёх embedding-моделей, общий поиск лучших шести, фильтры метаданных, единый JSON-ответ и MCP ещё не реализованы. Их принятый технический контракт находится в [TDR-FS-2.4](Obsidian/Docs/TDR/TDR-FS-2.4%20Automatic%20model%20provisioning.md) и [TDR-FS-2.6](Obsidian/Docs/TDR/TDR-FS-2.6%20Единый%20поиск%20и%20переранжирование.md).
+- Материализованный DT4 PV-6 предшествует этому решению. До `G-EXECUTION-BASE` он должен быть пересобран по TDR-FS-2.4 и TDR-FS-2.6: прежние предположения об одной модели и необязательном E5, целевое пространство `.cfknowledge` и старый протокольный ответ не являются актуальным исполнительным контрактом.
 - Перед implementation обязателен `G-EXECUTION-BASE`: после отдельного разрешения владельца текущие PV-6 `ROADMAP.md` и handoff фиксируются docs-only commit, затем exact hash/ancestry записываются как `execution_revision`. Planning snapshot не считается execution baseline. После этого `G-BASE@execution`, а затем `G-BASE@A1`…`G-BASE@A4` исполняются заново на exact revision своей стадии; исторический PASS не переиспользуется. Пока gate не закрыт, worktree A не создаётся.
 
 ## Общие правила движения
@@ -228,69 +228,71 @@ TODO блокирует закрытие текущего дерева, если
 
 ### Образ результата
 
-Принятый retrieval core получает узкий локальный MCP-вход. CLI и MCP используют одну production-композицию и возвращают семантически одинаковые результаты, ошибки, provenance и freshness, хотя их текстовое представление различается. Инструмент запускается и диагностируется без знания внутренних каталогов индекса.
+Пользователь или агент передаёт один запрос без выбора модели и получает до шести лучших уникальных фрагментов. Arctic Embed L v2, E5 Large и Nomic Embed Text v2 MoE находят кандидатов, Qwen3-Reranker-0.6B строит общий порядок, а CLI, JSON и MCP возвращают один типизированный результат с путём, состоянием проекта, статусом документа и содержимым.
 
 ### Вход
 
-- exact local `main` planning snapshot `23ed8773f9830bf6762f058255b17cbb1fe7ad46`, historical DT3 product baseline `5b25f5bf235309761f4376dc4143b246c8409c66` и прочитанный archive/handoff/PV-6; execution revision назначается только `G-EXECUTION-BASE`;
-- принятые `AgentSurface`, `ProductionConfig` и `ProductionRuntime` без transport-specific типов внутри domain;
-- завершённые document, lexical, optional vector, map и symbol adapters;
-- regression dataset, DT3 release evidence и повторная проверка доступности локального E5 cache;
-- инвентаризация test-only mocks, protocol gaps, устаревших комментариев и реально открытых TODO;
-- принятые до implementation решения по dual-era envelope, DTO/redaction, strict `instance_id` + opaque admitted root, map-source related, exact outcome/legacy projection, agent-scoped vector health и single-owner concurrency; B/C/D1/D2 получают configurable bounds, а release numbers замораживаются только D3.
+- исторический DT3 product baseline, текущая реализация рабочего пространства, каталог из девяти embedding-моделей, модельные проекции и `/compare`;
+- принятые [TDR-FS-2.4](Obsidian/Docs/TDR/TDR-FS-2.4%20Automatic%20model%20provisioning.md) и [TDR-FS-2.6](Obsidian/Docs/TDR/TDR-FS-2.6%20Единый%20поиск%20и%20переранжирование.md);
+- существующие `AgentSurface`, `ProductionConfig` и `ProductionRuntime` без протокольных типов внутри предметной области;
+- канонические записи с метаданными, полнотекстовый поиск, раздельные векторные проекции, карты и структурные символы;
+- пересобранный план DT4 с точной исполнительной редакцией, назначаемой только на `G-EXECUTION-BASE`;
+- независимый эталон для порядка шести результатов, фильтров и равенства JSON/MCP.
 
 ### Что делает дерево
 
-- добавляет в тот же executable локальный MCP server; базовый кандидат transport — `stdio`, а любой listener/remote contour требует отдельного evidence и replan;
-- преобразует MCP input/output через отдельные typed protocol DTO, не сериализуя domain-модель как случайный публичный wire contract;
-- предоставляет agent tools для `search`, `get`, `related` и `status` поверх того же `AgentSurface`/`ProductionRuntime`;
-- определяет indexing ownership явно: `update/rebuild` остаются operator CLI либо становятся отдельными maintenance tools, но никогда не выполняются скрыто внутри каждого search request;
-- проверяет semantic parity CLI/MCP на общей contract suite: records, ordering, channels, provenance, freshness и structured errors;
-- вводит измеренные ограничения query length, result count, payload bytes, execution time и одновременно обслуживаемой работы; truncation и cancellation наблюдаемы;
-- historical PV-6 фиксирует agent profile для document/code roots, logical instance id и optional model root и помещает state в `.cfknowledge`; перед execution этот leaf должен быть заменён workspace profile и `.fastsearch/local` storage по TDR-FS-2 без раскрытия physical paths в wire;
-- проверяет lifecycle долгоживущего процесса: startup, повторные requests, stale/degraded recovery, provider absence/failure и controlled shutdown;
-- готовит воспроизводимую Windows-first сборку, checksum, smoke из чистого каталога и документацию запуска MCP-клиентом;
-- сохраняет optional model cache внешним immutable artifact: «один бинарник» означает один FastSearch executable, а не встраивание весов E5;
-- подтверждает отсутствие production mock route и объявляет `Capability::AgentSurface` доступной только при реально запущенном protocol adapter.
+- разделяет описатели embedding-модели и reranker, добавляет Qwen3-Reranker-0.6B в общий поток загрузки, атомарной публикации и вычислительной проверки;
+- вводит фиксированный производственный набор Arctic, E5 Large, Nomic и Qwen без настройки на уровне запроса или рабочей области;
+- нормализует `project_scope` и `document_status`, задаёт значения по умолчанию и применяет только явно переданные фильтры;
+- параллельно получает по шесть кандидатов трёх embedding-моделей, удаляет повторы по канонической записи и передаёт общий набор Qwen reranker;
+- вводит общий `SearchResponse` для человекочитаемой консоли, `--json` и MCP без сведений о моделях, исходных рангах и внутренних оценках;
+- добавляет в тот же исполняемый файл локальный MCP server через `stdio` и единственный MCP-инструмент `search` поверх общего `SearchResponse`; существующие `get`, `related` и `status` не публикуются в MCP-контракте DT4;
+- оставляет `update/rebuild` явными действиями обслуживания и не выполняет перестроение скрыто внутри запроса;
+- проверяет равенство JSON и MCP по полям, порядку, фильтрам, содержимому и типизированным ошибкам;
+- вводит измеренные пределы длины запроса, размера ответа, времени и одновременной работы; ограничение числа результатов закреплено значением шесть;
+- проверяет запуск, повторные запросы, неготовность набора, восстановление и управляемое завершение долгоживущего процесса;
+- готовит воспроизводимую Windows-first сборку, контрольную сумму, проверку из чистого каталога и инструкцию подключения MCP-клиента.
 
 ### Какие проблемы решает
 
-- предоставляет стабильный локальный агентский интерфейс без дублирования retrieval logic;
-- устраняет дорогой shell/process и текстовый parsing boundary для каждого agent request;
-- делает protocol, indexing, provider и storage failures различимыми и наблюдаемыми;
-- ограничивает контекст и ресурсы на protocol boundary, а не полагается на дисциплину клиента;
-- подтверждает пригодность Windows-сборки для регулярного локального использования;
-- закрывает воспроизводимые release и эксплуатационные gates в заявленном platform scope.
+- даёт агенту один запрос и один список лучших шести результатов без выбора моделей;
+- устраняет необходимость самостоятельно объединять три выдачи и разбирать терминальный текст;
+- делает ошибки протокола, моделей, проекций, фильтров и хранилища различимыми;
+- сохраняет один поисковый контракт для человека, автоматизации и MCP;
+- ограничивает контекст и ресурсы на публичной границе;
+- подтверждает пригодность Windows-сборки для регулярного локального использования.
 
 ### Какие проблемы не решает
 
-- не превращает FastSearch в RAG-chat;
-- не добавляет HTTP service, multi-user daemon, cloud inference, auth subsystem или отдельную внешнюю поисковую платформу без нового evidence;
-- не расширяет scope новыми пользовательскими функциями;
-- не переоткрывает принятые контракты без регрессии или нового риска.
-- не обещает compiler-perfect references, semantic refactoring, dirty-buffer overlay, новые языки или Linux qualification;
-- не встраивает model weights в executable и не превращает optional E5 в обязательное условие lexical/code navigation.
+- не превращает FastSearch в генератор ответов или RAG-chat;
+- не добавляет HTTP-сервис, многопользовательский daemon, облачный inference или авторизацию;
+- не включает в шесть результатов графовое расширение связанными документами и их пояснениями;
+- не публикует внутренние оценки Qwen или происхождение кандидатов;
+- не обещает новые языки анализа, Linux qualification или полные связи исходного кода;
+- не встраивает веса моделей в исполняемый файл.
 
 ### Состояние на завершении
 
-- локальный MCP client поднимает server, выполняет `search/get/related/status` и корректно завершает процесс;
-- CLI и MCP проходят общую semantic contract suite, включая ordering, provenance, freshness и typed failures;
-- startup configuration однозначна, machine paths не протекают в protocol payload, скрытых index mutations нет;
-- обязательные runtime-capabilities используют реальные adapters, а `AgentSurface` честно виден как Real только в MCP composition;
-- отсутствие optional provider даёт штатную деградацию без потери exact/FTS/maps/symbols;
-- query/result/payload/time/concurrency limits и context-economy measurements имеют причинное evidence;
-- выпускается проверенный Windows executable с checksum, fresh-directory smoke и инструкцией подключения локального MCP-клиента.
+- чистая подготовка получает три embedding-модели и Qwen3-Reranker-0.6B, выполняет проверки ролей и повторно открывает готовый набор без загрузки;
+- один MCP `search` без фильтров возвращает шесть лучших уникальных фрагментов с последовательными номерами;
+- необязательные `project_scope` и `document_status` фильтруют только при переданном параметре, а отсутствующие свойства получают `general` и `actual`;
+- JSON и MCP проходят общую контрактную проверку полей, порядка, содержимого и типизированных ошибок;
+- консоль показывает русские подписи и не раскрывает модели, исходные позиции или оценку Qwen;
+- неготовность любой обязательной роли не создаёт частичную производственную выдачу;
+- пути локального состояния не попадают в протокол, а запрос не изменяет индексы;
+- выпускается проверенный Windows executable с контрольной суммой, проверкой из чистого каталога и инструкцией подключения MCP-клиента.
 
 ### Gate materialization
 
-Перед материализацией дерева 4 требовался bounded discovery. Его решения теперь канонизированы PV-6, а фактические evidence производятся Foundation/D3 gates:
+Текущий PV-6 не исполняется без пересборки. До `G-EXECUTION-BASE` новый план обязан:
 
-1. выбрать и зафиксировать protocol/SDK version и проверить минимальный Rust `stdio` handshake на текущем toolchain;
-2. определить wire DTO и точное отображение domain errors/status без потери provenance;
-3. согласовать startup configuration и ownership `index update/rebuild`;
-4. выбрать последовательную либо явно синхронизированную модель долгоживущего runtime;
-5. измерить core/actor в A4 и modern+legacy production stdio в D3; только D3 назначает release numeric limits и закрывает `G-LIMITS`, это не блокирует B/C/D1/D2;
-6. A4 вызывает текущий automatic provisioning contract TDR-FS-2.4 и фиксирует полученную immutable E5 revision в evidence; ручная доставка cache больше не является prerequisite. Недоступность сети/cache оставляет vector acceptance `NOT_READY`, но не делает E5 обязательным условием lexical/code navigation.
+1. привязать каждый обязательный результат к TDR-FS-2.4 и TDR-FS-2.6 и удалить прежние предположения об одной модели и необязательном поставщике;
+2. закрепить репозиторий, точную редакцию и вычислительный адаптер Qwen3-Reranker-0.6B;
+3. определить общий DTO, отображение ошибок и параметры фильтров до реализации консольного и MCP-представлений;
+4. назначить ранний сквозной проход: один реальный MCP `search` через три проекции и Qwen возвращает шесть результатов на ограниченном корпусе;
+5. разделить массовую подготовку моделей, поисковый координатор, протокольный адаптер и выпуск на независимо проверяемые результаты;
+6. выбрать последовательную или явно синхронизированную модель долгоживущего runtime и измерить пределы памяти, времени и размера ответа;
+7. назначить точную исполнительную редакцию, повторить baseline gates и только после этого разрешить реализацию.
 
 ## Передача полного графа и следующий этап
 

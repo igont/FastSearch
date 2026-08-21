@@ -1,77 +1,95 @@
 ---
-tdr_id: "TDR-FS-2.4"
-title: "Automatic model provisioning"
-status: "принято"
-implementation_stage: "текущее"
-parent_tdr_id: "TDR-FS-2"
-child_tdr_ids: []
-updated: "2026-08-16"
+TDR: TDR-FS-2; TDR-FS-2.5; TDR-FS-2.6
+Индексация: true
 ---
-# TDR-FS-2.4 — Automatic model provisioning
+# TDR-FS-2.4 - Автоматическая подготовка моделей
 
-## Контекст TDR
+## Контекст и задача
 
-- [PAR-FS-010](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) — evidence-first qualification и model provenance.
-- [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) — один executable, общий machine-local state и отсутствие технических path prompts.
-- [Evidence-first выбор моделей](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) - поисковые критерии смены модели по умолчанию.
+FastSearch должен получать модели без ручного указания путей и отличать наличие весов от готовности вычислительного контракта. Обычный поиск требует несколько моделей с разными ролями: embedding-модели строят векторные проекции, а reranker оценивает пары «запрос - фрагмент» без собственного индекса.
 
-## Входы и результат
+## Поддерживаемые парадигмы
 
-Входы: выбранный `EmbeddingModelId`, product data directory, catalog repository/revision, runtime contract и optional `HF_ENDPOINT`. Результат: одна активная и готовая machine-local embedding-модель для workspace либо typed `VectorRetrieval` failure без ложного Current state. Несколько моделей могут находиться в cache, но в runtime используется ровно одна.
+[Выбор поисковых моделей по доказательствам](<../../Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md>) требует воспроизводимой идентичности и проверки каждой модели. [FastSearch как поисковый контур](<../../Paradigms/Архитектура/02 FastSearch как поисковый контур.md>) запрещает скрытую частичную выдачу обычного поиска.
 
-## Механизм
+## Входы и результаты
 
-1. Workspace profile хранит stable model slug; отсутствие поля в старом profile означает backward-compatible `multilingual-e5-small`.
-2. Interactive creation показывает framework-rendered каталог; `/model set <номер>` сначала provisions и probes candidate, затем сохраняет выбор. Ошибка до admission не изменяет прежнюю active model.
-3. Runtime определяет общий product data directory через `FASTSEARCH_HOME` или platform data directory. Пользователь не вводит model path.
-4. Provisioner получает обязательные assets строго из catalog revision в Hugging Face-compatible cache. Каждая сетевая попытка ограничена 60 секундами; до 24 попыток продолжают `.download` через HTTP Range. Только после полной публикации FastEmbed открывает соответствующий ONNX либо Candle runtime из того же cache.
-5. Readiness probe выполняет inference на синтетической строке, проверяет finite vector и точную размерность. Corpus, source state и indexes при этом не читаются и не изменяются.
-6. Ready marker содержит slug, repository, catalog revision и dimension; повторное открытие не повторяет тяжёлый probe.
-7. Смена model identity не переиспользует прежнюю vector projection. `/index update` либо `/index rebuild` остаются отдельным явным действием.
-8. Последний search можно зафиксировать через `/experiment record`: journal сохраняет model, query, hit count, latency и judgment в portable `.fastsearch/knowledge`.
-9. После успешной CPU readiness provisioner выполняет machine-local GPU probe без доступа к corpus. Состояние `unknown/ready/unavailable`, backend и диагностическая причина сохраняются рядом с model cache и повторно используются для той же catalog revision.
-10. Terminal catalog разделяет readiness весов и execution capability: CPU/GPU не являются одним общим статусом. До фактической пробы GPU отображается `?`; успешный finite embedding точной размерности даёт `✓`; доказанная недоступность текущего backend даёт `—`.
+Входами являются описание роли, репозиторий, неизменяемая редакция, обязательные артефакты, вычислительный контракт и локальное продуктовое хранилище. Результатом становится готовый артефакт конкретной роли либо типизированная ошибка подготовки без публикации ложного состояния готовности.
 
-Каталог кандидатов: `multilingual-e5-small`, `multilingual-e5-base`, `multilingual-e5-large`, `qwen3-embedding-0.6b`, `nomic-embed-text-v2-moe`. E5 использует mean-pooling и `query:`/`passage:`; Qwen3 использует last-token runtime и retrieval instruction; Nomic v2 MoE использует mean-pooling и `search_query:`/`search_document:`. Подмена этих контрактов единым pooling запрещена.
+## Решение
 
-## Ошибки и граничные случаи
+Общий поставщик артефактов поддерживает два разных описателя: embedding-модель и reranker. Общими остаются загрузка, продолжение прерванной передачи, блокировки, атомарная публикация и проверка манифеста. Готовность вычисления проверяется адаптером соответствующей роли.
 
-- Network/mirror недоступен или CDN завис: incomplete transport state не публикуется; bounded retry продолжает тот же `.download`, а после исчерпания возвращается typed failure.
-- Cache incomplete/corrupt либо веса удалены после прежнего success: `.ready` сверяется с фактическим weight artifact, stale marker снимается, provider initialization повторяет получение и readiness.
-- Два процесса запускаются одновременно: download locks и exclusive install lock исключают частичную публикацию.
-- Процесс завершается до atomic rename: active revision root не меняется.
-- Model загружена, но inference/indexing завершился ошибкой: ошибка распространяется наружу; vector channel не подменяется lexical success.
-- Interactive mode сохраняет exact/FTS/maps/symbols при временной недоступности provider и показывает typed error. Direct mode возвращает non-zero typed failure.
+Производственный набор содержит:
+
+- `arctic-embed-l-v2` - Arctic Embed L v2;
+- `multilingual-e5-large` - E5 Large;
+- `nomic-embed-text-v2-moe` - Nomic Embed Text v2 MoE;
+- `qwen3-reranker-0.6b` - [Qwen3-Reranker-0.6B](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B).
+
+Репозиторий и точная редакция каждого артефакта закрепляются в каталоге. Qwen3 Embedding 0.6B и Qwen3-Reranker-0.6B являются разными моделями и не заменяют друг друга.
+
+## Логика работы
+
+1. Координатор определяет все обязательные роли производственного набора.
+2. Поставщик проверяет локальные манифесты и наличие закреплённых артефактов.
+3. Отсутствующие файлы загружаются с ограниченными попытками и продолжением частичной передачи. Независимые загрузки могут выполняться параллельно в пределах ресурсного ограничения.
+4. Полностью полученная редакция публикуется атомарно и только после этого передаётся проверке роли.
+5. Embedding-модель кодирует синтетическую строку; проверка подтверждает конечные значения и точную размерность вектора.
+6. Reranker оценивает синтетическую пару «запрос - фрагмент»; проверка подтверждает конечный и сортируемый результат по закреплённому шаблону входа.
+7. Тяжёлые проверки вычислительной готовности выполняются последовательно, чтобы ограничить одновременное потребление памяти.
+8. Маркер готовности сохраняет роль, репозиторий, редакцию, вычислительный контракт и проверенную среду выполнения.
+
+Reranker не получает векторную проекцию и не участвует в индексировании корпуса. Его готовность относится только к оценке пар во время запроса.
+
+## Состояние до и после
+
+До подготовки роль находится в состоянии `ABSENT`, `INCOMPLETE`, `STALE` или `UNAVAILABLE`. После успешной публикации и проверки она становится `READY` для точной редакции и среды выполнения. Изменение репозитория, редакции или вычислительного контракта делает прежний маркер недействительным.
+
+Готовность обычного поиска является составным состоянием. Она достигается только при готовности четырёх ролей и актуальности трёх векторных проекций.
+
+## Ошибки и восстановление
+
+- Прерванная загрузка сохраняет частичный файл и продолжается с подтверждённого смещения.
+- Повреждённый или неполный артефакт не публикуется и загружается повторно.
+- Одновременные процессы используют блокировку установки и не видят частично опубликованный каталог.
+- Ошибка вычислительной проверки оставляет роль неготовой, даже если файлы присутствуют.
+- Неготовность любой обязательной роли блокирует обычный семантический поиск; частичный набор не запускается.
+- `--help` и `--version` не инициируют сетевую или модельную подготовку.
 
 ## Инварианты
 
-- Обычный пользователь не вводит model path и не запускает отдельную install-команду; indexing остаётся самостоятельным lifecycle action.
-- Завершение install не инициирует index, rebuild, scan источников или search.
-- GPU capability не выводится из названия модели или наличия видеокарты: `✓` требует реального inference probe на текущем runtime backend.
-- Неуспешная GPU probe не отменяет готовую CPU-модель и не блокирует обычный поиск.
-- Repository, catalog revision, runtime family и dimension наблюдаемы. Exact immutable manifest доказан для принятого E5 Small qualification contour; кандидаты не становятся новым default до отдельного evidence gate.
-- Готовой считается только полностью опубликованная model root.
-- Один model cache используется несколькими workspaces и не попадает в Git.
-- `--help` и `--version` не инициируют network/model lifecycle.
-- Vector projection не объявляется успешной при provider failure.
-- Смена model/revision/runtime contract требует новой qualification evidence и invalidates projection provenance.
+- Пользователь не вводит путь к модели и не выбирает модель обычного запроса.
+- Получение весов не запускает сканирование источников, индексирование или поиск.
+- Готовность подтверждается реальным вычислением соответствующей роли.
+- Reranker не создаёт и не изменяет векторные проекции.
+- Один локальный кэш переиспользуется рабочими областями и не попадает в Git.
+- Частичный или устаревший артефакт не объявляется готовым.
 
-## Связь с кодом и проверки
+## Рассмотренные варианты
 
-- `src/domain/embedding_model.rs` — stable serializable IDs, dimensions и parser.
-- `src/application/model_cache.rs` — catalog sources/revisions, cache location, readiness и model identity.
-- `src/domain/execution.rs` — execution devices и трёхсостоянный capability contract.
-- `src/application/workspace.rs` — persisted selection и structured experiment journal.
-- `src/application/console.rs` — terminal-dialogue catalog, `/model set`, progress, degradation и `/experiment record`.
-- `src/application/cli.rs` — automatic provisioning direct surface и operator override.
-- `src/adapters/vector/verified_provider.rs` — exact minimal manifest и immutable provider admission.
-- `examples/batch_benchmark.rs` — воспроизводимое speed/memory измерение batch size на реальном corpus.
-- `tests/e5_auto_pipeline.rs` — явная последовательность provisioning → index → search с обязательным `Vector` hit; отдельный CLI UX test запрещает implicit startup index.
-- `tests/model_catalog_pipeline.rs` — сетевой acceptance всех пяти catalog entries: download/open/synthetic inference без workspace index.
-- `tests/b2_vector_lifecycle.rs` и vector security tests — lifecycle, determinism, mutation/reparse defense и recovery.
-- `evidence/model-auto-provisioning.md` — фактический clean-cache smoke принятого E5 Small contour.
-- `evidence/model-catalog-provisioning.md` — источники, ревизии и real-runtime acceptance всего selectable catalog.
+Единый описатель для всех моделей скрывает различие между построением вектора и оценкой пары. Раздельные роли сохраняют общий транспорт артефактов, но требуют корректной проверки каждого вычислительного контракта.
 
-## Состояние реализации
+Ручная установка reranker отдельной командой нарушает основной сценарий без путей моделей. Поэтому он входит в тот же автоматический поток, что и embedding-модели.
 
-Selectable catalog и оба runtime family реализованы для Windows-first product runtime. Обычная suite не требует сети. E5 Small сохраняет прежний immutable cache-gated security oracle; E5 DirectML capability проверяется фактическим inference и сохраняется по catalog revision. Base/Large/Qwen/Nomic требуют последовательной real-model qualification на одном versioned corpus. До этого `multilingual-e5-small` остаётся default, а остальные варианты являются experiment candidates. Linux qualification, GPU execution policy для обычного поиска, Candle CUDA для Qwen/Nomic и полная immutable admission кандидатов остаются открытыми gaps.
+## Последствия
+
+Каталог моделей получает новый тип роли и обязательный артефакт Qwen3-Reranker-0.6B. Индексный координатор продолжает работать только с embedding-моделями, а общий координатор готовности учитывает все четыре роли.
+
+## Связи и основания
+
+[TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет пакет. [TDR-FS-2.5](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>) использует модельные проекции для исследования. [TDR-FS-2.6](<TDR-FS-2.6 Единый поиск и переранжирование.md>) потребляет готовый производственный набор.
+
+Текущий поставщик embedding-моделей находится в [`src/application/model_cache.rs`](../../../src/application/model_cache.rs), каталог идентичностей - в [`src/domain/embedding_model.rs`](../../../src/domain/embedding_model.rs), а вычислительные адаптеры - в [`src/adapters/vector`](../../../src/adapters/vector).
+
+## Проверка решения
+
+Проверка из чистого кэша должна получить и открыть все четыре закреплённые роли, выполнить три векторные пробы и одну пробу переранжирования, перезапустить процесс без повторной загрузки и подтвердить неизменную идентичность. Отдельная проверка доказывает, что reranker не создаёт модельную проекцию, а ошибка любой роли не допускает обычный поиск.
+
+## Отложенные вопросы
+
+Конкретный вычислительный адаптер Qwen3-Reranker-0.6B выбирается в плане реализации при сохранении закреплённого входного и выходного контракта.
+
+## Термины
+
+Reranker - модель, которая оценивает релевантность готовой пары «запрос - кандидат» и строит итоговый порядок. Роль модели - набор требований к её входу, результату, проверке готовности и участию в индексировании.
