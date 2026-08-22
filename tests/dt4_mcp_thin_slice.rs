@@ -28,9 +28,10 @@ use tokio::{
     process::{Child, Command},
 };
 
-const READ_TIMEOUT: Duration = Duration::from_secs(35);
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+const EOF_TIMEOUT: Duration = Duration::from_secs(10);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
-const CANCEL_WATCHDOG: Duration = Duration::from_secs(35);
+const SEARCH_WATCHDOG: Duration = Duration::from_secs(35);
 const MODELS: [EmbeddingModelId; 3] = [
     EmbeddingModelId::SnowflakeArcticEmbedLV2,
     EmbeddingModelId::MultilingualE5Large,
@@ -73,7 +74,8 @@ async fn mcp_search_crosses_three_projections_and_qwen() -> Result<(), Box<dyn s
     let started = Instant::now();
     let transport = run.transport()?;
     let monitor = ChildWorkingSetMonitor::start(transport.id().ok_or("server process id")?);
-    let client = VersionedClient.serve(transport).await?;
+    let client =
+        tokio::time::timeout(INITIALIZE_TIMEOUT, VersionedClient.serve(transport)).await??;
     assert_eq!(
         client
             .peer_info()
@@ -86,7 +88,7 @@ async fn mcp_search_crosses_three_projections_and_qwen() -> Result<(), Box<dyn s
     assert_eq!(tools[0].name, "search");
     let query = fs::read_to_string(run.fixture.join("query.txt"))?;
     let response = tokio::time::timeout(
-        READ_TIMEOUT,
+        SEARCH_WATCHDOG,
         client.call_tool(
             CallToolRequestParams::new("search")
                 .with_arguments(JsonObject::from_iter([("query".to_owned(), json!(query))])),
@@ -122,7 +124,10 @@ async fn mcp_search_crosses_three_projections_and_qwen() -> Result<(), Box<dyn s
             "free_physical_memory_after_bytes": free_physical_memory_bytes()?,
             "limits": {
                 "deadline_ms": 30_000,
-                "watchdog_ms": 35_000,
+                "initialize_timeout_ms": 10_000,
+                "eof_timeout_ms": 10_000,
+                "busy_timeout_ms": 2_000,
+                "search_watchdog_ms": 35_000,
                 "working_set_bytes": 8_u64 * 1024 * 1024 * 1024,
                 "free_before_bytes": 12_u64 * 1024 * 1024 * 1024,
                 "reserve_bytes": 4_u64 * 1024 * 1024 * 1024,
@@ -136,7 +141,7 @@ async fn mcp_search_crosses_three_projections_and_qwen() -> Result<(), Box<dyn s
                 "legacy_and_test_environment_removed": true,
                 "global_product_home_unchanged": true,
                 "global_huggingface_cache_unchanged": true,
-                "repository_unchanged_during_child": true,
+                "product_tree_unchanged_during_child": true,
                 "model_cache_template_unchanged": true
             }
         }))?,
@@ -164,7 +169,7 @@ async fn cancelled_call_emits_no_late_response() -> Result<(), Box<dyn std::erro
         &json!({"jsonrpc":"2.0","id":3,"method":"ping"}),
     )
     .await?;
-    let ids = collect_ids(&mut reader, CANCEL_WATCHDOG).await?;
+    let ids = collect_ids(&mut reader, SEARCH_WATCHDOG).await?;
     assert!(ids.contains(&3));
     assert!(!ids.contains(&2));
     drop(writer);
@@ -179,14 +184,13 @@ async fn eof_stops_server() -> Result<(), Box<dyn std::error::Error>> {
     let run = IsolatedRun::prepare()?;
     let mut child = run.spawn();
     drop(child.stdin.take());
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .ok_or("server stdout")?
-        .read_to_string(&mut stdout)
-        .await?;
-    let status = tokio::time::timeout(READ_TIMEOUT, child.wait()).await??;
+    let mut stdout = child.stdout.take().ok_or("server stdout")?;
+    let (status, stdout) = tokio::time::timeout(EOF_TIMEOUT, async {
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).await?;
+        Ok::<_, std::io::Error>((child.wait().await?, output))
+    })
+    .await??;
     assert!(status.success());
     assert!(stdout.is_empty());
     run.assert_isolated()?;
@@ -223,7 +227,7 @@ async fn third_call_is_busy() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
     }
-    let ids = collect_ids(&mut reader, CANCEL_WATCHDOG).await?;
+    let ids = collect_ids(&mut reader, SEARCH_WATCHDOG).await?;
     assert!(!ids.contains(&2));
     assert!(!ids.contains(&3));
     drop(writer);
@@ -272,7 +276,7 @@ impl IsolatedRun {
             .map(fingerprint)
             .transpose()?
             .unwrap_or_default();
-        let repository_before = fingerprint(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+        let repository_before = product_tree_fingerprint(Path::new(env!("CARGO_MANIFEST_DIR")))?;
         let cache_before = fingerprint(&model_cache)?;
         let root = unique_temp();
         let workspace = root.join("workspace");
@@ -416,7 +420,7 @@ impl IsolatedRun {
             self.global_hf_before
         );
         assert_eq!(
-            fingerprint(Path::new(env!("CARGO_MANIFEST_DIR")))?,
+            product_tree_fingerprint(Path::new(env!("CARGO_MANIFEST_DIR")))?,
             self.repository_before
         );
         assert!(self.root.is_dir());
@@ -577,6 +581,13 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 fn fingerprint(root: &Path) -> Result<Vec<(String, u64, u128)>, std::io::Error> {
+    fingerprint_excluding(root, &[])
+}
+
+fn fingerprint_excluding(
+    root: &Path,
+    excluded_roots: &[&str],
+) -> Result<Vec<(String, u64, u128)>, std::io::Error> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -585,14 +596,22 @@ fn fingerprint(root: &Path) -> Result<Vec<(String, u64, u128)>, std::io::Error> 
     while let Some(dir) = pending.pop() {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
-            let metadata = fs::symlink_metadata(entry.path())?;
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap();
+            if relative
+                .components()
+                .next()
+                .and_then(|component| component.as_os_str().to_str())
+                .is_some_and(|component| excluded_roots.contains(&component))
+            {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&path)?;
             if metadata.is_dir() {
-                pending.push(entry.path())
+                pending.push(path)
             } else if metadata.is_file() {
                 output.push((
-                    entry
-                        .path()
-                        .strip_prefix(root)
+                    path.strip_prefix(root)
                         .unwrap()
                         .to_string_lossy()
                         .replace('\\', "/"),
@@ -610,12 +629,18 @@ fn fingerprint(root: &Path) -> Result<Vec<(String, u64, u128)>, std::io::Error> 
     Ok(output)
 }
 
+fn product_tree_fingerprint(root: &Path) -> Result<Vec<(String, u64, u128)>, std::io::Error> {
+    const OPERATIONAL_ROOTS: &[&str] =
+        &[".agents", ".code-review-graph", ".dtree", ".git", "target"];
+    fingerprint_excluding(root, OPERATIONAL_ROOTS)
+}
+
 async fn initialize<W: AsyncWrite + Unpin, R: tokio::io::AsyncRead + Unpin>(
     writer: &mut W,
     reader: &mut BufReader<R>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     send_json(writer,&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"dt4-thin-slice","version":"1"}}})).await?;
-    let value = read_id(reader, 1, READ_TIMEOUT).await?;
+    let value = read_id(reader, 1, INITIALIZE_TIMEOUT).await?;
     assert_eq!(value["result"]["protocolVersion"], "2025-11-25");
     send_json(
         writer,
@@ -681,9 +706,19 @@ async fn collect_ids<R: tokio::io::AsyncRead + Unpin>(
     Ok(ids)
 }
 async fn wait_for_child(child: &mut Child) -> Result<(), Box<dyn std::error::Error>> {
-    let status = tokio::time::timeout(READ_TIMEOUT, child.wait()).await??;
+    let status = tokio::time::timeout(EOF_TIMEOUT, child.wait()).await??;
     assert!(status.success());
     Ok(())
+}
+
+#[test]
+fn control_plane_windows_are_bounded_without_shortening_heavy_search() {
+    assert_eq!(INITIALIZE_TIMEOUT, Duration::from_secs(10));
+    assert_eq!(EOF_TIMEOUT, Duration::from_secs(10));
+    assert_eq!(BUSY_TIMEOUT, Duration::from_secs(2));
+    assert_eq!(SEARCH_WATCHDOG, Duration::from_secs(35));
+    assert!(INITIALIZE_TIMEOUT < SEARCH_WATCHDOG);
+    assert!(EOF_TIMEOUT < SEARCH_WATCHDOG);
 }
 fn assert_public_oracle(actual: &Value, oracle: &Value) -> Result<(), Box<dyn std::error::Error>> {
     let actual = actual["results"].as_array().ok_or("actual results")?;

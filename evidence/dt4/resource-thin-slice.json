@@ -2,9 +2,9 @@
   "candidate_input": "isolated-release-mcp",
   "candidate_slots": 15,
   "corpus_generation": 1,
-  "elapsed_ms": 11177,
-  "free_physical_memory_after_bytes": 22873350144,
-  "free_physical_memory_before_bytes": 22677946368,
+  "elapsed_ms": 9051,
+  "free_physical_memory_after_bytes": 23919480832,
+  "free_physical_memory_before_bytes": 23809114112,
   "gate": "G-RESOURCE@TS-DT4-01",
   "isolation": {
     "child_product_path_override": [
@@ -15,16 +15,19 @@
     "legacy_and_test_environment_removed": true,
     "model_cache_template_unchanged": true,
     "preparation_outside_server": true,
-    "repository_unchanged_during_child": true,
+    "product_tree_unchanged_during_child": true,
     "unique_product_home": true,
     "unique_workspace": true
   },
   "limits": {
+    "busy_timeout_ms": 2000,
     "deadline_ms": 30000,
+    "eof_timeout_ms": 10000,
     "free_before_bytes": 12884901888,
+    "initialize_timeout_ms": 10000,
     "reserve_bytes": 4294967296,
     "response_bytes": 131072,
-    "watchdog_ms": 35000,
+    "search_watchdog_ms": 35000,
     "working_set_bytes": 8589934592
   },
   "models": {
@@ -33,7 +36,7 @@
     "nomic-embed-text-v2-moe": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
     "qwen3-reranker-0.6b": "e61197ed45024b0ed8a2d74b80b4d909f1255473"
   },
-  "peak_working_set_bytes": 6337671168,
+  "peak_working_set_bytes": 6355914752,
   "public_results": 6,
   "schema": 1,
   "serialized_response_bytes": 3402
