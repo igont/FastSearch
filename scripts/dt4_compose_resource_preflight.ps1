@@ -24,6 +24,7 @@ $result = [ordered]@{
     embedding_roles = $roles
     qwen_role = [ordered]@{
         model_revision = $qwen.model_revision
+        manifest_sha256 = $qwen.manifest_sha256
         cold_open_ms = $qwen.cold_open_ms
         inference_ms = $qwen.inference_ms
         working_set_after_open_bytes = $qwen.working_set_after_open_bytes

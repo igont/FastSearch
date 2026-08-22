@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "gate": "G-QWEN",
+  "status": "PASS",
+  "base_candidate": "2c63ed01822bd936e3f7ec2f960d3577688317a4",
+  "command": "cargo test --locked --lib adapters::qwen_reranker::tests -- --nocapture",
+  "result": "4 passed; 0 failed; 0 ignored",
+  "checks": [
+    {
+      "name": "official_manifest_entry_matches_compiled_admission",
+      "status": "PASS",
+      "evidence": "The committed manifest hash, repository, revision, exact three paths, byte sizes and SHA-256 values match the compiled admission."
+    },
+    {
+      "name": "altered_manifest_and_substituted_root_fail_closed",
+      "status": "PASS",
+      "evidence": "An altered manifest and a substituted shared root are rejected before model construction."
+    },
+    {
+      "name": "active_provider_denies_mutation_and_replacement_then_releases_handles",
+      "status": "PASS",
+      "evidence": "Mutation and replacement fail while verified handles are resident and succeed only after provider drop."
+    },
+    {
+      "name": "failed_admission_releases_every_partially_acquired_handle",
+      "status": "PASS",
+      "evidence": "A mid-admission hash mismatch returns failure and releases every already acquired handle."
+    }
+  ]
+}

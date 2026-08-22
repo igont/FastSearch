@@ -4,8 +4,8 @@
   "status": "PASS",
   "executable": {
     "path": "../.cargo-target/FastSearch/release/fastsearch.exe",
-    "bytes": 45012992,
-    "sha256": "4449698b847b8a330d61e92d07ae266a8c27b087c1b586b8112074ee884c443a"
+    "bytes": 45014528,
+    "sha256": "0c2547d80e23883df25e2a074a4d6074127fdb227a1c7fcee8f1fc354f7b3f37"
   },
   "qwen_weights": {
     "external_path": "model.safetensors",

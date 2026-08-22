@@ -36,6 +36,7 @@ struct Evidence {
     gate: &'static str,
     status: &'static str,
     model_revision: &'static str,
+    manifest_sha256: String,
     yes_token: u32,
     no_token: u32,
     tolerance: f32,
@@ -56,9 +57,14 @@ struct Evidence {
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let model_root = PathBuf::from(std::env::args_os().nth(1).ok_or("model root required")?);
-    let cases_path = PathBuf::from(std::env::args_os().nth(2).ok_or("cases path required")?);
-    let oracle_path = PathBuf::from(std::env::args_os().nth(3).ok_or("oracle path required")?);
-    let output_path = PathBuf::from(std::env::args_os().nth(4).ok_or("output path required")?);
+    let manifest_path = PathBuf::from(
+        std::env::args_os()
+            .nth(2)
+            .ok_or("model manifest required")?,
+    );
+    let cases_path = PathBuf::from(std::env::args_os().nth(3).ok_or("cases path required")?);
+    let oracle_path = PathBuf::from(std::env::args_os().nth(4).ok_or("oracle path required")?);
+    let output_path = PathBuf::from(std::env::args_os().nth(5).ok_or("output path required")?);
     let fixture: Fixture = serde_json::from_slice(&fs::read(&cases_path)?)?;
     let oracle: Oracle = serde_json::from_slice(&fs::read(&oracle_path)?)?;
     let expected: BTreeMap<_, _> = oracle
@@ -69,8 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let free_physical_memory_before_bytes = free_physical_memory_bytes();
     let open_started = Instant::now();
-    let mut model = QwenReranker::open(&model_root)?;
+    let mut model = QwenReranker::open(&model_root, &manifest_path)?;
     let cold_open_ms = open_started.elapsed().as_millis();
+    let manifest_sha256 = model.manifest_sha256().to_owned();
     let working_set_after_open_bytes = working_set_bytes();
     let inference_started = Instant::now();
     let mut rust_scores = Vec::with_capacity(fixture.pairs.len());
@@ -113,6 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         gate: "G-QWEN",
         status: "PASS",
         model_revision: QWEN_REVISION,
+        manifest_sha256,
         yes_token: QWEN_YES_TOKEN,
         no_token: QWEN_NO_TOKEN,
         tolerance: 0.02,
@@ -130,7 +138,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         rust_order,
         maximum_absolute_delta,
     };
-    fs::write(output_path, serde_json::to_vec_pretty(&evidence)?)?;
+    let mut output = serde_json::to_vec_pretty(&evidence)?;
+    output.push(b'\n');
+    fs::write(output_path, output)?;
     Ok(())
 }
 

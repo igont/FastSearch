@@ -10,10 +10,16 @@
 
 ```powershell
 & C:\Users\garig\.cache\fastsearch-dt4-oracle-py313\Scripts\python.exe scripts\dt4_qwen_oracle.py --model-root C:\Users\garig\.cache\huggingface\hub\models--Qwen--Qwen3-Reranker-0.6B\snapshots\e61197ed45024b0ed8a2d74b80b4d909f1255473 --cases evidence\dt4\fixtures\qwen-preflight-cases.json --output evidence\dt4\qwen-python-oracle.json
-cargo run --release --locked --example dt4_qwen_preflight -- C:\Users\garig\.cache\huggingface\hub\models--Qwen--Qwen3-Reranker-0.6B\snapshots\e61197ed45024b0ed8a2d74b80b4d909f1255473 evidence\dt4\fixtures\qwen-preflight-cases.json evidence\dt4\qwen-python-oracle.json evidence\dt4\qwen-preflight.json
+cargo run --release --locked --example dt4_qwen_preflight -- C:\Users\garig\.cache\huggingface\hub\models--Qwen--Qwen3-Reranker-0.6B\snapshots\e61197ed45024b0ed8a2d74b80b4d909f1255473 evidence\dt4\fixtures\ts-dt4-01\model-manifest.json evidence\dt4\fixtures\qwen-preflight-cases.json evidence\dt4\qwen-python-oracle.json evidence\dt4\qwen-preflight.json
 ```
 
-Результат: `G-QWEN = PASS`. Размер и контрольная сумма выпуска дополнительно проверены в `executable-weight-check.json`; веса не включены ни в Git, ни в исполняемый файл.
+Результат: `G-QWEN = PASS`. До открытия модели манифест сверяется со встроенным эталоном, а открытые после проверки файловые дескрипторы запрещают изменение и замену артефактов на всё время работы модели. Отрицательные тесты подтверждают отказ при изменённом манифесте или подменённом корне модели, блокировку изменения и замены во время работы модели, а также освобождение всех дескрипторов при ошибке. Размер и контрольная сумма выпуска дополнительно проверены в `executable-weight-check.json`; веса не включены ни в Git, ни в исполняемый файл.
+
+```powershell
+cargo test --locked --lib adapters::qwen_reranker::tests -- --nocapture
+```
+
+Результат отрицательных проверок: 4 пройдено, 0 ошибок; подробности находятся в `qwen-security-negative.json`.
 
 ## G-MCP
 
@@ -56,3 +62,5 @@ git diff --check
 ## Термины
 
 MCP здесь означает протокол взаимодействия с инструментальным сервером, `stdio` - обмен через стандартные потоки процесса, EOF - закрытие входного потока. Python-оракул - независимый эталонный расчёт, с которым сравнивается реализация на Rust.
+
+Манифест модели - закреплённый список её файлов, размеров и контрольных сумм. Файловый дескриптор - удерживаемый процессом системный доступ к уже проверенному файлу, который запрещает его изменение или замену до закрытия модели.
