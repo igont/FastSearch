@@ -34,7 +34,7 @@ pub use public_search::{
     ProjectScope, PublicSearchError, PublicSearchErrorCode, PublicSearchRequest,
     PublicSearchResponse, PublicSearchResult,
 };
-pub use thin_search::{ThinSearchAudit, ThinSearchCoordinator};
+pub use thin_search::{SEARCH_DEADLINE, ThinSearchAudit, ThinSearchCoordinator};
 pub use workspace::{
     CatalogEntry, DiscoveryReport, SourceRoot, WorkspaceCatalog, WorkspaceProfile, WorkspaceStore,
 };

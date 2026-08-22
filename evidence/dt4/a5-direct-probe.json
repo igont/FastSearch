@@ -24,13 +24,13 @@
         "named-root-v1:ts-dt4-01-docs:08-no-hidden-indexing.md:markdown:35:Явное обслуживание"
       ]
     },
-    "elapsed_ms": 11870,
+    "elapsed_ms": 8626,
     "embedding_adapters_released_before_qwen": true,
     "embedding_parallelism": 2,
-    "free_physical_memory_after_bytes": 25338806272,
-    "free_physical_memory_before_bytes": 25609875456,
-    "peak_observed_working_set_bytes": 6992564224,
-    "serialized_response_bytes": 3372,
+    "free_physical_memory_after_bytes": 23597219840,
+    "free_physical_memory_before_bytes": 23557550080,
+    "peak_observed_working_set_bytes": 6985592832,
+    "serialized_response_bytes": 3468,
     "unique_candidates": 7
   },
   "candidate_contract": {
@@ -47,7 +47,7 @@
       {
         "content": "FastSearch автоматически загружает закреплённые модели в общий локальный кэш, проверяет редакцию и контрольные суммы, а затем повторно использует готовые артефакты без сетевого запроса.",
         "document_status": "actual",
-        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/01-model-cache.md",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e/prepared/corpus/01-model-cache.md",
         "project_scope": "general",
         "rank": 1,
         "title": "Общий кэш моделей"
@@ -55,7 +55,7 @@
       {
         "content": "Каждая локальная модель связана с точной редакцией исходного репозитория. Совпадение имени без совпадения редакции и SHA-256 не подтверждает готовность поиска.",
         "document_status": "actual",
-        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/03-model-revisions.md",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e/prepared/corpus/03-model-revisions.md",
         "project_scope": "general",
         "rank": 2,
         "title": "Неизменяемые редакции"
@@ -63,7 +63,7 @@
       {
         "content": "Подготовленная модель становится доступной только после полной загрузки обязательных файлов и успешной вычислительной пробы. Частичный каталог не получает признак готовности.",
         "document_status": "actual",
-        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/02-atomic-publish.md",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e/prepared/corpus/02-atomic-publish.md",
         "project_scope": "general",
         "rank": 3,
         "title": "Атомарная публикация"
@@ -71,7 +71,7 @@
       {
         "content": "Обычный поиск получает кандидатов из проекций Arctic, E5 Large и Nomic. Все три проекции относятся к одному поколению корпуса и точным редакциям моделей.",
         "document_status": "actual",
-        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/05-three-projections.md",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e/prepared/corpus/05-three-projections.md",
         "project_scope": "general",
         "rank": 4,
         "title": "Три векторные проекции"
@@ -79,7 +79,7 @@
       {
         "content": "Поисковый запрос не скачивает модели и не перестраивает индексы. Неготовое состояние возвращает типизированную ошибку и требует отдельного обслуживания.",
         "document_status": "actual",
-        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/08-no-hidden-indexing.md",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e/prepared/corpus/08-no-hidden-indexing.md",
         "project_scope": "general",
         "rank": 5,
         "title": "Явное обслуживание"
@@ -87,7 +87,7 @@
       {
         "content": "Рабочая область хранит документальные и кодовые корни в переносимом файле workspace.toml. Машинное состояние остаётся в локальном каталоге .fastsearch.",
         "document_status": "actual",
-        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/04-workspace-roots.md",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e/prepared/corpus/04-workspace-roots.md",
         "project_scope": "general",
         "rank": 6,
         "title": "Корни рабочей области"

@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::atomic::AtomicBool};
+use std::{fs, path::PathBuf, sync::atomic::AtomicBool, time::Instant};
 
 use fastsearch::application::{PublicSearchRequest, ThinSearchCoordinator};
 use serde_json::json;
@@ -13,7 +13,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = PathBuf::from(std::env::args_os().nth(3).ok_or("output path required")?);
     let request = PublicSearchRequest::new(fs::read_to_string(query_path)?, None, None)?;
     let mut coordinator = ThinSearchCoordinator::open(&workspace)?;
-    let (response, audit) = coordinator.search(&request, &AtomicBool::new(false))?;
+    let (response, audit) =
+        coordinator.search(&request, &AtomicBool::new(false), Instant::now())?;
     fs::write(
         output,
         serde_json::to_vec_pretty(&json!({

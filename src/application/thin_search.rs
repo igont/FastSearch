@@ -100,8 +100,9 @@ impl ThinSearchCoordinator {
         &mut self,
         request: &PublicSearchRequest,
         cancelled: &AtomicBool,
+        admitted_at: Instant,
     ) -> Result<(PublicSearchResponse, ThinSearchAudit), PublicSearchError> {
-        let started = Instant::now();
+        ensure_deadline(admitted_at)?;
         let monitor = WorkingSetMonitor::start();
         let free_physical_memory_before_bytes = ensure_memory_admission()?;
         ensure_active(cancelled)?;
@@ -149,7 +150,7 @@ impl ThinSearchCoordinator {
         let outcomes = runtime
             .search_model_partitions_bounded(&requests, &query, EMBEDDING_PARALLELISM)
             .map_err(search_failed)?;
-        ensure_deadline(started)?;
+        ensure_deadline(admitted_at)?;
         ensure_active(cancelled)?;
         ensure_working_set(monitor.peak())?;
         ensure_memory_reserve()?;
@@ -182,7 +183,7 @@ impl ThinSearchCoordinator {
 
         // Every LocalE5Vector was owned inside the completed scoped jobs and is dropped here.
         let embedding_adapters_released_before_qwen = true;
-        ensure_deadline(started)?;
+        ensure_deadline(admitted_at)?;
         ensure_active(cancelled)?;
         if !self.model_manifest.is_file() || !self.qwen_root.is_dir() {
             return Err(PublicSearchError::not_ready(
@@ -193,7 +194,7 @@ impl ThinSearchCoordinator {
             .map_err(|error| search_failed(error.to_string()))?;
         let mut ranked = Vec::with_capacity(candidates.len());
         for (id, record) in candidates {
-            ensure_deadline(started)?;
+            ensure_deadline(admitted_at)?;
             ensure_active(cancelled)?;
             let score = qwen
                 .score(request.query().trim(), record.searchable_content())
@@ -203,7 +204,7 @@ impl ThinSearchCoordinator {
         drop(qwen);
         ensure_working_set(monitor.peak())?;
         ensure_memory_reserve()?;
-        ensure_deadline(started)?;
+        ensure_deadline(admitted_at)?;
         ensure_active(cancelled)?;
         ranked.sort_by(|left, right| {
             right
@@ -234,7 +235,7 @@ impl ThinSearchCoordinator {
             candidate_slots,
             unique_candidates: seen.len(),
             embedding_adapters_released_before_qwen,
-            elapsed_ms: started.elapsed().as_millis(),
+            elapsed_ms: admitted_at.elapsed().as_millis(),
             peak_observed_working_set_bytes: peak,
             free_physical_memory_before_bytes,
             free_physical_memory_after_bytes: available_physical_memory_bytes(),

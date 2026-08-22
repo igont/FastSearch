@@ -2,7 +2,7 @@
   "gate": "G-RESOURCE@A5",
   "partitions": [
     {
-      "build_duration_ms": 4031,
+      "build_duration_ms": 3111,
       "freshness": "Current",
       "model": "arctic-embed-l-v2",
       "projection_generation": 1,
@@ -10,7 +10,7 @@
       "state_generation": 1
     },
     {
-      "build_duration_ms": 2749,
+      "build_duration_ms": 2040,
       "freshness": "Current",
       "model": "multilingual-e5-large",
       "projection_generation": 1,
@@ -18,7 +18,7 @@
       "state_generation": 1
     },
     {
-      "build_duration_ms": 4315,
+      "build_duration_ms": 3483,
       "freshness": "Current",
       "model": "nomic-embed-text-v2-moe",
       "projection_generation": 1,
@@ -29,5 +29,5 @@
   "preparation": "explicit-outside-mcp",
   "schema": 1,
   "state_generation": 1,
-  "workspace": "C:\\Users\\garig\\AppData\\Local\\Temp\\fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db"
+  "workspace": "C:\\Users\\garig\\AppData\\Local\\Temp\\fastsearch-dt4-a5-rework-ef2a659abb654a8590b9bf8e2c88437e\\prepared"
 }
