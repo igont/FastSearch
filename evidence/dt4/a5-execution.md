@@ -22,7 +22,7 @@
 
 После отмены ответы двух вызовов не появились в `stdout` за полное 35-секундное клиентское окно наблюдения; затем закрытие `stdin` подтвердило завершение обеих работ и процесса. Это окно оставляет время для получения и классификации `TIMEOUT` у неотменённого вызова и наблюдает отсутствие поздних ответов после отмены, но не продлевает 30-секундный срок поиска. Отдельное закрытие входного потока до `initialize` завершило процесс без вывода и с кодом 0.
 
-Следующая последовательность выполняет явную подготовку, задаёт все пять переменных приёмки и запускает тот же исполняемый файл выпуска на подготовленной и неподготовленной рабочих областях:
+Следующая последовательность выполняет явную подготовку, сохраняет новый отчёт о ресурсах во временном каталоге запуска, задаёт все пять переменных приёмки и последовательно запускает тот же исполняемый файл выпуска на подготовленной и неподготовленной рабочих областях:
 
 ```powershell
 $target = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).target_directory
@@ -30,22 +30,23 @@ $fixture = (Resolve-Path 'evidence\dt4\fixtures\ts-dt4-01').Path
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) ('fastsearch-dt4-a5-' + [guid]::NewGuid().ToString('N'))
 $prepared = Join-Path $runRoot 'prepared'
 $unready = Join-Path $runRoot 'unready'
+$resource = Join-Path $runRoot 'a5-resource.json'
 
 cargo build --release --locked --bin fastsearch --examples
 New-Item -ItemType Directory -Force -Path $runRoot, (Join-Path $unready 'corpus'), (Join-Path $unready '.fastsearch\local') | Out-Null
 Copy-Item -LiteralPath (Join-Path $fixture 'workspace\.fastsearch\workspace.toml') -Destination (Join-Path $unready '.fastsearch\workspace.toml')
 Copy-Item -Path (Join-Path $fixture 'corpus\*') -Destination (Join-Path $unready 'corpus') -Recurse
-& (Join-Path $target 'release\examples\dt4_a5_prepare_fixture.exe') $fixture $prepared (Join-Path (Resolve-Path 'evidence\dt4').Path 'a5-resource.json')
+& (Join-Path $target 'release\examples\dt4_a5_prepare_fixture.exe') $fixture $prepared $resource
 
 $env:FASTSEARCH_A5_RELEASE_BINARY = Join-Path $target 'release\fastsearch.exe'
 $env:FASTSEARCH_A5_WORKSPACE = $prepared
 $env:FASTSEARCH_A5_UNREADY_WORKSPACE = $unready
 $env:FASTSEARCH_A5_QUERY = (Resolve-Path 'evidence\dt4\fixtures\ts-dt4-01\query.txt').Path
 $env:FASTSEARCH_A5_ORACLE = (Resolve-Path 'evidence\dt4\fixtures\ts-dt4-01\oracle.json').Path
-cargo test --locked --test dt4_a5_mcp_acceptance -- --ignored --nocapture
+cargo test --locked --test dt4_a5_mcp_acceptance -- --ignored --nocapture --test-threads=1
 ```
 
-Результат: 4 проверки пройдено, 0 ошибок. Общая длительность - 37,17 с. Приёмочные окна `BUSY`, отмены, холодного поиска и EOF соблюдены.
+Результат буквального последовательного запуска: 4 проверки пройдено, 0 ошибок. Общая длительность - 43,62 с. Приёмочные окна `BUSY`, отмены, холодного поиска и EOF соблюдены. Подготовка создала `$resource` под `$runRoot` и не изменила отслеживаемый файл доказательства.
 
 ## G-RESOURCE@A5
 
