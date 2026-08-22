@@ -450,22 +450,13 @@ impl std::fmt::Display for PublicSearchError {
 impl std::error::Error for PublicSearchError {}
 
 fn validate_public_source_path(path: &str) -> Result<(), PublicSearchError> {
-    let invalid_shape = path.contains('\\')
-        || path.ends_with('/')
-        || path.contains("//")
-        || !Path::new(path).is_absolute();
-    let components = path.strip_prefix('/').unwrap_or(path);
-    let invalid_component = components.is_empty()
-        || components
-            .split('/')
-            .any(|component| component.is_empty() || component == "." || component == "..");
-    if invalid_shape || invalid_component {
+    let Some(components) = normalized_public_path_components(path) else {
         return Err(PublicSearchError::search_failed(
             "source path is not normalized and absolute",
         ));
-    }
+    };
 
-    let internal_component = components.split('/').any(|component| {
+    let internal_component = components.into_iter().any(|component| {
         #[cfg(windows)]
         {
             component.eq_ignore_ascii_case(".fastsearch")
@@ -482,6 +473,53 @@ fn validate_public_source_path(path: &str) -> Result<(), PublicSearchError> {
     }
 
     Ok(())
+}
+
+fn valid_public_path_component(component: &str) -> bool {
+    !component.is_empty() && component != "." && component != ".."
+}
+
+#[cfg(windows)]
+fn normalized_public_path_components(path: &str) -> Option<Vec<&str>> {
+    if path.contains('\\') || path.ends_with('/') || !Path::new(path).is_absolute() {
+        return None;
+    }
+
+    if let Some(unc_path) = path.strip_prefix("//") {
+        let components = unc_path.split('/').collect::<Vec<_>>();
+        if components.len() < 2 || !components.iter().copied().all(valid_public_path_component) {
+            return None;
+        }
+        return Some(components);
+    }
+
+    if path.contains("//") {
+        return None;
+    }
+    let components = path.split('/').collect::<Vec<_>>();
+    components
+        .iter()
+        .copied()
+        .all(valid_public_path_component)
+        .then_some(components)
+}
+
+#[cfg(not(windows))]
+fn normalized_public_path_components(path: &str) -> Option<Vec<&str>> {
+    if path.contains('\\')
+        || path.ends_with('/')
+        || path.contains("//")
+        || !Path::new(path).is_absolute()
+    {
+        return None;
+    }
+
+    let components = path.strip_prefix('/')?.split('/').collect::<Vec<_>>();
+    components
+        .iter()
+        .copied()
+        .all(valid_public_path_component)
+        .then_some(components)
 }
 
 fn effective_metadata(

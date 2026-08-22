@@ -355,6 +355,44 @@ fn windows_rejects_internal_component_case_insensitively() {
     assert_eq!(error.code(), PublicSearchErrorCode::SearchFailed);
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_accepts_normalized_unc_source_path() {
+    let result = PublicSearchResult::new(
+        1,
+        "Guide",
+        "//server/share/docs/guide.md",
+        ProjectScope::General,
+        DocumentStatus::Actual,
+        "content",
+    )
+    .unwrap();
+    assert_eq!(result.path(), "//server/share/docs/guide.md");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_rejects_malformed_unc_source_paths() {
+    for path in [
+        "//server",
+        "///server/share/docs/guide.md",
+        "//server//docs/guide.md",
+        "//server/share/docs/",
+        "//server/share/.FASTSEARCH/index/record.md",
+    ] {
+        let error = PublicSearchResult::new(
+            1,
+            "Guide",
+            path,
+            ProjectScope::General,
+            DocumentStatus::Actual,
+            "content",
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), PublicSearchErrorCode::SearchFailed, "{path}");
+    }
+}
+
 #[test]
 fn bounded_serializer_accepts_exact_contract_shape_below_limit() {
     let response = PublicSearchResponse::from_ranked_results(
