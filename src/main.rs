@@ -11,6 +11,9 @@ use terminal_dialogue::write_line;
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments.first().is_some_and(|value| value == "mcp") {
+        return run_mcp(&arguments[1..]);
+    }
     if arguments.is_empty() || arguments.as_slice() == ["chat"] {
         configure_interactive_console();
         return match run_interactive() {
@@ -60,6 +63,25 @@ fn main() -> ExitCode {
                 emit_stderr(&format!("fastsearch failed: {}", error.message()));
             }
             ExitCode::from(error.exit_code())
+        }
+    }
+}
+
+fn run_mcp(arguments: &[String]) -> ExitCode {
+    let [workspace_flag, workspace] = arguments else {
+        emit_stderr("Использование: fastsearch mcp --workspace <абсолютный-каталог>");
+        return ExitCode::from(2);
+    };
+    let workspace = std::path::PathBuf::from(workspace);
+    if workspace_flag != "--workspace" || !workspace.is_absolute() || !workspace.is_dir() {
+        emit_stderr("Использование: fastsearch mcp --workspace <абсолютный-каталог>");
+        return ExitCode::from(2);
+    }
+    match fastsearch::adapters::mcp::run_stdio(workspace) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            emit_stderr(&format!("fastsearch mcp failed: {error}"));
+            ExitCode::from(1)
         }
     }
 }

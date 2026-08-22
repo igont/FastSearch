@@ -1,0 +1,98 @@
+{
+  "audit": {
+    "candidate_slots": 15,
+    "candidates_by_model": {
+      "arctic-embed-l-v2": [
+        "named-root-v1:ts-dt4-01-docs:02-atomic-publish.md:markdown:39:Атомарная публикация",
+        "named-root-v1:ts-dt4-01-docs:01-model-cache.md:markdown:32:Общий кэш моделей",
+        "named-root-v1:ts-dt4-01-docs:03-model-revisions.md:markdown:41:Неизменяемые редакции",
+        "named-root-v1:ts-dt4-01-docs:08-no-hidden-indexing.md:markdown:35:Явное обслуживание",
+        "named-root-v1:ts-dt4-01-docs:10-public-response.md:markdown:37:Публичный результат"
+      ],
+      "multilingual-e5-large": [
+        "named-root-v1:ts-dt4-01-docs:02-atomic-publish.md:markdown:39:Атомарная публикация",
+        "named-root-v1:ts-dt4-01-docs:01-model-cache.md:markdown:32:Общий кэш моделей",
+        "named-root-v1:ts-dt4-01-docs:03-model-revisions.md:markdown:41:Неизменяемые редакции",
+        "named-root-v1:ts-dt4-01-docs:05-three-projections.md:markdown:42:Три векторные проекции",
+        "named-root-v1:ts-dt4-01-docs:08-no-hidden-indexing.md:markdown:35:Явное обслуживание"
+      ],
+      "nomic-embed-text-v2-moe": [
+        "named-root-v1:ts-dt4-01-docs:02-atomic-publish.md:markdown:39:Атомарная публикация",
+        "named-root-v1:ts-dt4-01-docs:01-model-cache.md:markdown:32:Общий кэш моделей",
+        "named-root-v1:ts-dt4-01-docs:03-model-revisions.md:markdown:41:Неизменяемые редакции",
+        "named-root-v1:ts-dt4-01-docs:04-workspace-roots.md:markdown:40:Корни рабочей области",
+        "named-root-v1:ts-dt4-01-docs:08-no-hidden-indexing.md:markdown:35:Явное обслуживание"
+      ]
+    },
+    "elapsed_ms": 11870,
+    "embedding_adapters_released_before_qwen": true,
+    "embedding_parallelism": 2,
+    "free_physical_memory_after_bytes": 25338806272,
+    "free_physical_memory_before_bytes": 25609875456,
+    "peak_observed_working_set_bytes": 6992564224,
+    "serialized_response_bytes": 3372,
+    "unique_candidates": 7
+  },
+  "candidate_contract": {
+    "capacity": 15,
+    "models": 3,
+    "per_model": 5,
+    "public_max": 6
+  },
+  "gate": "TS-DT4-01-intermediate",
+  "response": {
+    "count": 6,
+    "query": "автоматическая подготовка локальных моделей\n",
+    "results": [
+      {
+        "content": "FastSearch автоматически загружает закреплённые модели в общий локальный кэш, проверяет редакцию и контрольные суммы, а затем повторно использует готовые артефакты без сетевого запроса.",
+        "document_status": "actual",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/01-model-cache.md",
+        "project_scope": "general",
+        "rank": 1,
+        "title": "Общий кэш моделей"
+      },
+      {
+        "content": "Каждая локальная модель связана с точной редакцией исходного репозитория. Совпадение имени без совпадения редакции и SHA-256 не подтверждает готовность поиска.",
+        "document_status": "actual",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/03-model-revisions.md",
+        "project_scope": "general",
+        "rank": 2,
+        "title": "Неизменяемые редакции"
+      },
+      {
+        "content": "Подготовленная модель становится доступной только после полной загрузки обязательных файлов и успешной вычислительной пробы. Частичный каталог не получает признак готовности.",
+        "document_status": "actual",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/02-atomic-publish.md",
+        "project_scope": "general",
+        "rank": 3,
+        "title": "Атомарная публикация"
+      },
+      {
+        "content": "Обычный поиск получает кандидатов из проекций Arctic, E5 Large и Nomic. Все три проекции относятся к одному поколению корпуса и точным редакциям моделей.",
+        "document_status": "actual",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/05-three-projections.md",
+        "project_scope": "general",
+        "rank": 4,
+        "title": "Три векторные проекции"
+      },
+      {
+        "content": "Поисковый запрос не скачивает модели и не перестраивает индексы. Неготовое состояние возвращает типизированную ошибку и требует отдельного обслуживания.",
+        "document_status": "actual",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/08-no-hidden-indexing.md",
+        "project_scope": "general",
+        "rank": 5,
+        "title": "Явное обслуживание"
+      },
+      {
+        "content": "Рабочая область хранит документальные и кодовые корни в переносимом файле workspace.toml. Машинное состояние остаётся в локальном каталоге .fastsearch.",
+        "document_status": "actual",
+        "path": "C:/Users/garig/AppData/Local/Temp/fastsearch-dt4-a5-721361e38ecf45bea5a91ec0582205db/corpus/04-workspace-roots.md",
+        "project_scope": "general",
+        "rank": 6,
+        "title": "Корни рабочей области"
+      }
+    ]
+  },
+  "schema": 1
+}

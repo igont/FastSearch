@@ -2,6 +2,7 @@
 
 pub mod lexical;
 pub mod maps;
+pub mod mcp;
 pub(crate) mod process_metrics;
 pub mod qwen_reranker;
 pub mod source;

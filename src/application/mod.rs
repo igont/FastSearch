@@ -11,6 +11,7 @@ mod model_cache;
 mod production;
 mod public_search;
 mod retrieval_projection;
+mod thin_search;
 mod workspace;
 
 pub use cli::{CliError, OutputFormat, execute_cli, execute_cli_formatted};
@@ -33,6 +34,7 @@ pub use public_search::{
     ProjectScope, PublicSearchError, PublicSearchErrorCode, PublicSearchRequest,
     PublicSearchResponse, PublicSearchResult,
 };
+pub use thin_search::{ThinSearchAudit, ThinSearchCoordinator};
 pub use workspace::{
     CatalogEntry, DiscoveryReport, SourceRoot, WorkspaceCatalog, WorkspaceProfile, WorkspaceStore,
 };

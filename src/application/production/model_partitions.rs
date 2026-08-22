@@ -138,6 +138,66 @@ impl ProductionRuntime {
         Ok(outcomes)
     }
 
+    /// Searches all requested partitions against one canonical generation with
+    /// an explicit concurrency width. DT4 uses width two to stay below its
+    /// accepted process-memory limit while still overlapping model work.
+    pub(crate) fn search_model_partitions_bounded(
+        &self,
+        requests: &[(EmbeddingModelId, PathBuf)],
+        query: &SearchQuery,
+        concurrency: usize,
+    ) -> Result<Vec<ModelPartitionSearchOutcome>, FastSearchError> {
+        if concurrency == 0 {
+            return Err(FastSearchError::new(
+                ErrorKind::InvalidContent,
+                "model partition concurrency must be positive",
+            ));
+        }
+        let canonical_records = self.state.all_records()?;
+        let generation = self.state.durable_generation()?;
+        let service_root = self.service.service_root().to_path_buf();
+        let mut outcomes = Vec::with_capacity(requests.len());
+        for batch in requests.chunks(concurrency) {
+            let attempts = run_jobs_in_parallel(batch, |(model, model_root)| {
+                let started = Instant::now();
+                let response =
+                    super::super::model_cache::configured_model_device(*model).and_then(|device| {
+                        let records = project_records(&canonical_records, *model)?.records;
+                        let vector = LocalE5Vector::open_persistent_with_model_on_device(
+                            model_root,
+                            super::super::model_cache::model_identity(*model),
+                            *model,
+                            model_partition_root(&service_root, *model),
+                            device,
+                        );
+                        vector.restore(&records, generation)?;
+                        vector.search(query)
+                    });
+                (*model, started.elapsed().as_millis(), response)
+            });
+            outcomes.extend(attempts.into_iter().map(|(model, latency_ms, response)| {
+                (
+                    model,
+                    latency_ms,
+                    response.and_then(|value| canonicalize_projection_hits(&self.state, value)),
+                )
+            }));
+        }
+        if self.state.durable_generation()? != generation {
+            return Err(FastSearchError::new(
+                ErrorKind::ProjectionFailure,
+                "canonical generation changed during bounded model search",
+            ));
+        }
+        outcomes.sort_by_key(|(model, _, _)| {
+            EmbeddingModelId::DISPLAY_ORDER
+                .iter()
+                .position(|candidate| candidate == model)
+                .unwrap_or(EmbeddingModelId::DISPLAY_ORDER.len())
+        });
+        Ok(outcomes)
+    }
+
     pub fn lexical_baseline(&self, query: &SearchQuery) -> Result<SearchResponse, FastSearchError> {
         canonicalize_projection_hits(&self.state, self.lexical.search(query)?)
     }
