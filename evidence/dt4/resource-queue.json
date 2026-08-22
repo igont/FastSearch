@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "gate": "G-RESOURCE-PREFLIGHT@A2",
+  "status": "PASS",
+  "role": "bounded-request-queue-and-response",
+  "queue_capacity": 2,
+  "samples": [
+    {
+      "payload_bytes": 1024,
+      "elapsed_microseconds": 9,
+      "serialized_response_bytes": 1047
+    },
+    {
+      "payload_bytes": 65536,
+      "elapsed_microseconds": 118,
+      "serialized_response_bytes": 65559
+    },
+    {
+      "payload_bytes": 1048576,
+      "elapsed_microseconds": 798,
+      "serialized_response_bytes": 1048599
+    }
+  ]
+}

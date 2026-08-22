@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "instruction": "Given a web search query, retrieve relevant passages that answer the query",
+  "pairs": [
+    {"id":"capital-positive","query":"What is the capital of China?","document":"The capital of China is Beijing."},
+    {"id":"capital-negative","query":"What is the capital of China?","document":"Gravity attracts bodies and governs planetary motion."},
+    {"id":"rust-positive","query":"Как закрепить версию Rust для проекта?","document":"Создайте rust-toolchain.toml и укажите точный канал компилятора."},
+    {"id":"rust-negative","query":"Как закрепить версию Rust для проекта?","document":"Для выпечки хлеба смешайте муку, воду, соль и закваску."},
+    {"id":"mcp-positive","query":"How does an MCP stdio server terminate?","document":"The local server stops accepting requests and exits after its standard input reaches EOF."},
+    {"id":"mcp-negative","query":"How does an MCP stdio server terminate?","document":"An HTTP cache stores responses according to freshness headers."},
+    {"id":"models-positive","query":"автоматическая подготовка локальных моделей","document":"Программа загружает закреплённые веса в общий локальный кэш и проверяет их перед поиском."},
+    {"id":"models-partial","query":"автоматическая подготовка локальных моделей","document":"Локальная рабочая область содержит документальные и кодовые корни."},
+    {"id":"hash-positive","query":"Why pin artifact SHA-256?","document":"A recorded SHA-256 detects replacement or corruption of immutable model files."},
+    {"id":"hash-negative","query":"Why pin artifact SHA-256?","document":"A tokenizer splits input text into model tokens."}
+  ]
+}

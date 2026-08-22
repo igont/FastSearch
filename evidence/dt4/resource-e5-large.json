@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "gate": "G-RESOURCE-PREFLIGHT@A2",
+  "status": "PASS",
+  "role": "multilingual-e5-large",
+  "repository": "Qdrant/multilingual-e5-large-onnx",
+  "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+  "cold_open_ms": 0,
+  "free_physical_memory_before_bytes": 20325003264,
+  "free_physical_memory_after_bytes": 20324663296,
+  "measurements": [
+    {
+      "input_characters": 32,
+      "batch_size": 1,
+      "cold_duration_ms": 1599,
+      "warm_duration_ms": 43,
+      "working_set_bytes": 1574518784
+    },
+    {
+      "input_characters": 32,
+      "batch_size": 2,
+      "cold_duration_ms": 1552,
+      "warm_duration_ms": 31,
+      "working_set_bytes": 1578549248
+    },
+    {
+      "input_characters": 256,
+      "batch_size": 1,
+      "cold_duration_ms": 1588,
+      "warm_duration_ms": 86,
+      "working_set_bytes": 1627643904
+    },
+    {
+      "input_characters": 256,
+      "batch_size": 2,
+      "cold_duration_ms": 1577,
+      "warm_duration_ms": 71,
+      "working_set_bytes": 1686818816
+    },
+    {
+      "input_characters": 1024,
+      "batch_size": 1,
+      "cold_duration_ms": 1735,
+      "warm_duration_ms": 231,
+      "working_set_bytes": 1692168192
+    },
+    {
+      "input_characters": 1024,
+      "batch_size": 2,
+      "cold_duration_ms": 1728,
+      "warm_duration_ms": 212,
+      "working_set_bytes": 1705791488
+    }
+  ]
+}

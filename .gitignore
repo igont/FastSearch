@@ -9,6 +9,10 @@
 /target/
 /spikes/**/target/
 
+# Python helper output
+__pycache__/
+*.py[cod]
+
 # Locally compiled Windows binaries
 /*.exe
 /*.dll

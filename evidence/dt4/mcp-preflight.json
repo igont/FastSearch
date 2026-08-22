@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "gate": "G-MCP",
+  "status": "PASS",
+  "sdk": "rmcp 3.1.4",
+  "protocol_version": "2025-11-25",
+  "command": "cargo test --locked --test dt4_mcp_sdk_preflight -- --nocapture",
+  "tests": [
+    {"name":"rmcp_client_crosses_real_stdio_without_working_search","status":"PASS","evidence":"initialize -> notifications/initialized; one search tool; structured protocol-only response; working_search_invoked=false"},
+    {"name":"incompatible_client_stops_after_negotiation","status":"PASS","evidence":"client requested 2026-07-28; server answered 2025-11-25; client closed before tools/list or tools/call"},
+    {"name":"cancellation_suppresses_late_response","status":"PASS","evidence":"cancelled request id never appeared after the controlled model-stage release; a later ping completed"},
+    {"name":"eof_stops_stdio_server_without_output_noise","status":"PASS","evidence":"EOF before initialize returned exit code 0 and empty stdout"}
+  ],
+  "result": "4 passed; 0 failed; 0 ignored"
+}

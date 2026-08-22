@@ -141,6 +141,30 @@ impl EmbeddingBatchMeasurement {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct EmbeddingColdWarmMeasurement {
+    cold_duration_ms: u128,
+    warm_duration_ms: u128,
+    working_set_bytes: Option<u64>,
+}
+
+impl EmbeddingColdWarmMeasurement {
+    #[must_use]
+    pub const fn cold_duration_ms(&self) -> u128 {
+        self.cold_duration_ms
+    }
+
+    #[must_use]
+    pub const fn warm_duration_ms(&self) -> u128 {
+        self.warm_duration_ms
+    }
+
+    #[must_use]
+    pub const fn working_set_bytes(&self) -> Option<u64> {
+        self.working_set_bytes
+    }
+}
+
 /// Benchmarks CPU inference with one loaded runtime. Every candidate is
 /// measured three times and reported by median wall-clock duration.
 pub fn benchmark_embedding_batches(
@@ -194,6 +218,45 @@ pub fn benchmark_embedding_batches_on_device(
         });
     }
     Ok(measurements)
+}
+
+/// Measures the first inference including runtime opening and then the median
+/// of three repeated inferences on the same loaded CPU runtime.
+pub fn benchmark_embedding_cold_warm(
+    model_id: EmbeddingModelId,
+    cache_root: &Path,
+    texts: &[String],
+    batch_size: usize,
+) -> Result<EmbeddingColdWarmMeasurement, FastSearchError> {
+    if texts.is_empty() || batch_size == 0 {
+        return Err(FastSearchError::new(
+            ErrorKind::InvalidContent,
+            "cold/warm benchmark requires texts and a positive batch size",
+        ));
+    }
+    let cold_started = Instant::now();
+    let mut provider = VerifiedProvider::acquire_on_device(
+        cache_root,
+        model_id,
+        false,
+        true,
+        ExecutionDevice::Cpu,
+    )?;
+    provider.embed_benchmark_texts(texts, batch_size)?;
+    let cold_duration_ms = cold_started.elapsed().as_millis();
+
+    let mut warm_rounds = Vec::with_capacity(3);
+    for _ in 0..3 {
+        let started = Instant::now();
+        provider.embed_benchmark_texts(texts, batch_size)?;
+        warm_rounds.push(started.elapsed());
+    }
+    warm_rounds.sort_unstable();
+    Ok(EmbeddingColdWarmMeasurement {
+        cold_duration_ms,
+        warm_duration_ms: warm_rounds[1].as_millis(),
+        working_set_bytes: super::process_metrics::working_set_bytes(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

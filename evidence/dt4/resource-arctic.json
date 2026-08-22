@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "gate": "G-RESOURCE-PREFLIGHT@A2",
+  "status": "PASS",
+  "role": "arctic-embed-l-v2",
+  "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+  "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+  "cold_open_ms": 0,
+  "free_physical_memory_before_bytes": 20325371904,
+  "free_physical_memory_after_bytes": 20319584256,
+  "measurements": [
+    {
+      "input_characters": 32,
+      "batch_size": 1,
+      "cold_duration_ms": 2795,
+      "warm_duration_ms": 43,
+      "working_set_bytes": 2630098944
+    },
+    {
+      "input_characters": 32,
+      "batch_size": 2,
+      "cold_duration_ms": 2777,
+      "warm_duration_ms": 29,
+      "working_set_bytes": 2635677696
+    },
+    {
+      "input_characters": 256,
+      "batch_size": 1,
+      "cold_duration_ms": 2820,
+      "warm_duration_ms": 82,
+      "working_set_bytes": 2684665856
+    },
+    {
+      "input_characters": 256,
+      "batch_size": 2,
+      "cold_duration_ms": 2815,
+      "warm_duration_ms": 66,
+      "working_set_bytes": 2743705600
+    },
+    {
+      "input_characters": 1024,
+      "batch_size": 1,
+      "cold_duration_ms": 2955,
+      "warm_duration_ms": 219,
+      "working_set_bytes": 2774913024
+    },
+    {
+      "input_characters": 1024,
+      "batch_size": 2,
+      "cold_duration_ms": 2956,
+      "warm_duration_ms": 203,
+      "working_set_bytes": 2820370432
+    }
+  ]
+}

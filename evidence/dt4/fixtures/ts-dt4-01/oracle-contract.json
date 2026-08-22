@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "embedding_model_count": 3,
+  "candidates_per_model": 5,
+  "candidate_slots_before_deduplication": 15,
+  "public_result_limit": 6
+}

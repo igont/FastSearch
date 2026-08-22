@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "gate": "G-RESOURCE-PREFLIGHT@A2",
+  "status": "PASS",
+  "role": "nomic-embed-text-v2-moe",
+  "repository": "nomic-ai/nomic-embed-text-v2-moe",
+  "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+  "cold_open_ms": 1,
+  "free_physical_memory_before_bytes": 20385333248,
+  "free_physical_memory_after_bytes": 20404342784,
+  "measurements": [
+    {
+      "input_characters": 32,
+      "batch_size": 1,
+      "cold_duration_ms": 1145,
+      "warm_duration_ms": 67,
+      "working_set_bytes": 2196336640
+    },
+    {
+      "input_characters": 32,
+      "batch_size": 2,
+      "cold_duration_ms": 1150,
+      "warm_duration_ms": 67,
+      "working_set_bytes": 2197880832
+    },
+    {
+      "input_characters": 256,
+      "batch_size": 1,
+      "cold_duration_ms": 1245,
+      "warm_duration_ms": 169,
+      "working_set_bytes": 2204524544
+    },
+    {
+      "input_characters": 256,
+      "batch_size": 2,
+      "cold_duration_ms": 1245,
+      "warm_duration_ms": 168,
+      "working_set_bytes": 2206547968
+    },
+    {
+      "input_characters": 1024,
+      "batch_size": 1,
+      "cold_duration_ms": 1658,
+      "warm_duration_ms": 582,
+      "working_set_bytes": 2207805440
+    },
+    {
+      "input_characters": 1024,
+      "batch_size": 2,
+      "cold_duration_ms": 1667,
+      "warm_duration_ms": 581,
+      "working_set_bytes": 2207244288
+    }
+  ]
+}

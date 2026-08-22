@@ -1,0 +1,241 @@
+{
+  "schema": 1,
+  "engine": "CPython 3.13.14",
+  "script_sha256": "6459044db2accc26d619e3f69363d52702137e9099792fef39419c0e7e12b36e",
+  "requirements_sha256": "bbe4845c8e1ae27ed2d896374eae28e841a1e54082e3d57a02406cbb1684bc98",
+  "corpus_manifest_sha256": "51e33448b7e8b86078fb4feb75935695562fe89240a8965241a79138930ceef6",
+  "model_manifest_sha256": "f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637",
+  "query_sha256": "6193e3faddd339b9d6c42c359824514698375d3673c610e68625cdff2fbbd0ca",
+  "oracle_contract_sha256": "711795b4ca9e0e6c28f2b9cae080388150c00fd75cb7e7a4653419d961d5fccb",
+  "model_revisions": {
+    "arctic": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+    "e5": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+    "nomic": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+    "qwen": "e61197ed45024b0ed8a2d74b80b4d909f1255473"
+  },
+  "nomic_code_revision": "7710840340a098cfb869c4f65e87cf2b1b70caca",
+  "candidate_contract": {
+    "schema": 1,
+    "embedding_model_count": 3,
+    "candidates_per_model": 5,
+    "candidate_slots_before_deduplication": 15,
+    "public_result_limit": 6
+  },
+  "embedding_candidates": {
+    "arctic-embed-l-v2": [
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+        "rank": 1
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+        "rank": 2
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+        "rank": 3
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание",
+        "rank": 4
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области",
+        "rank": 5
+      }
+    ],
+    "multilingual-e5-large": [
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+        "rank": 1
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+        "rank": 2
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+        "rank": 3
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание",
+        "rank": 4
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции",
+        "rank": 5
+      }
+    ],
+    "nomic-embed-text-v2-moe": [
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+        "rank": 1
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+        "rank": 2
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+        "rank": 3
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области",
+        "rank": 4
+      },
+      {
+        "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции",
+        "rank": 5
+      }
+    ]
+  },
+  "candidate_slots_before_deduplication": [
+    {
+      "model_slug": "arctic-embed-l-v2",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+      "rank": 1
+    },
+    {
+      "model_slug": "arctic-embed-l-v2",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+      "rank": 2
+    },
+    {
+      "model_slug": "arctic-embed-l-v2",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+      "rank": 3
+    },
+    {
+      "model_slug": "arctic-embed-l-v2",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание",
+      "rank": 4
+    },
+    {
+      "model_slug": "arctic-embed-l-v2",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области",
+      "rank": 5
+    },
+    {
+      "model_slug": "multilingual-e5-large",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+      "rank": 1
+    },
+    {
+      "model_slug": "multilingual-e5-large",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+      "rank": 2
+    },
+    {
+      "model_slug": "multilingual-e5-large",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+      "rank": 3
+    },
+    {
+      "model_slug": "multilingual-e5-large",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание",
+      "rank": 4
+    },
+    {
+      "model_slug": "multilingual-e5-large",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции",
+      "rank": 5
+    },
+    {
+      "model_slug": "nomic-embed-text-v2-moe",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+      "rank": 1
+    },
+    {
+      "model_slug": "nomic-embed-text-v2-moe",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+      "rank": 2
+    },
+    {
+      "model_slug": "nomic-embed-text-v2-moe",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+      "rank": 3
+    },
+    {
+      "model_slug": "nomic-embed-text-v2-moe",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области",
+      "rank": 4
+    },
+    {
+      "model_slug": "nomic-embed-text-v2-moe",
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции",
+      "rank": 5
+    }
+  ],
+  "deduplicated_stable_ids": [
+    "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+    "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+    "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+    "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области",
+    "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции",
+    "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание"
+  ],
+  "qwen_probabilities": {
+    "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей": 0.9993842840194702,
+    "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация": 0.32677769660949707,
+    "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции": 0.9105620980262756,
+    "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области": 0.0009797880193218589,
+    "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции": 0.0028581318911165,
+    "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание": 0.0009808494942262769
+  },
+  "results": [
+    {
+      "rank": 1,
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/01-model-cache.md:markdown:32:Общий кэш моделей",
+      "title": "Общий кэш моделей",
+      "normalized_path": "corpus/01-model-cache.md",
+      "project_scope": "general",
+      "document_status": "actual",
+      "content_sha256": "29146f914d4c76df8645f1e9d95293c6c8537161d8a519e17c4f214976742e01"
+    },
+    {
+      "rank": 2,
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/03-model-revisions.md:markdown:41:Неизменяемые редакции",
+      "title": "Неизменяемые редакции",
+      "normalized_path": "corpus/03-model-revisions.md",
+      "project_scope": "general",
+      "document_status": "actual",
+      "content_sha256": "df2cad0cf9583e478c94027bfea1e3d4b46fb90555bca3e3d85e087433f19ff6"
+    },
+    {
+      "rank": 3,
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/02-atomic-publish.md:markdown:39:Атомарная публикация",
+      "title": "Атомарная публикация",
+      "normalized_path": "corpus/02-atomic-publish.md",
+      "project_scope": "general",
+      "document_status": "actual",
+      "content_sha256": "4e8ff768de5adfcaff9cc53187b252172363d2b1aec90fa6e4a9542907f2cf60"
+    },
+    {
+      "rank": 4,
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/05-three-projections.md:markdown:42:Три векторные проекции",
+      "title": "Три векторные проекции",
+      "normalized_path": "corpus/05-three-projections.md",
+      "project_scope": "general",
+      "document_status": "actual",
+      "content_sha256": "24ecc556fa130b34061a054c38e1e9918dad23798331235cc283e8d42ed70632"
+    },
+    {
+      "rank": 5,
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/08-no-hidden-indexing.md:markdown:35:Явное обслуживание",
+      "title": "Явное обслуживание",
+      "normalized_path": "corpus/08-no-hidden-indexing.md",
+      "project_scope": "general",
+      "document_status": "actual",
+      "content_sha256": "bce8e131e38fde4672f7953bbca9f03a0d93559f03f160c0ea8d48742b16917e"
+    },
+    {
+      "rank": 6,
+      "stable_id": "named-root-v1:ts-dt4-01-docs:corpus/04-workspace-roots.md:markdown:40:Корни рабочей области",
+      "title": "Корни рабочей области",
+      "normalized_path": "corpus/04-workspace-roots.md",
+      "project_scope": "general",
+      "document_status": "actual",
+      "content_sha256": "f9992f9a5282bc8b041f596414487e3903ee305549cd91106b994d1cdaa68e2d"
+    }
+  ]
+}

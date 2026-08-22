@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "gate": "G-QWEN",
+  "status": "PASS",
+  "model_revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+  "yes_token": 9693,
+  "no_token": 2152,
+  "tolerance": 0.02,
+  "free_physical_memory_before_bytes": 20331966464,
+  "free_physical_memory_after_bytes": 17860755456,
+  "working_set_after_open_bytes": 2447040512,
+  "working_set_after_inference_bytes": 2485805056,
+  "cold_open_ms": 1045,
+  "inference_ms": 3229,
+  "files": {
+    "config.json": "d479c427a9ca5295218063d4f9aca4f297ab4ac27487cca7af42c84643d51ef0",
+    "model.safetensors": "27cd75a405b9c1b46b59abfd88aaa209e6fed2a1972cde9b70e7659537c5e65b",
+    "tokenizer.json": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+  },
+  "cases_sha256": "6ed86baa4f3e3c57c5082ba559c74282176ca7f2f3cf0206f34be1dc293d4a63",
+  "oracle_sha256": "930134da9b0658b14111edacb0b28062d4efac57fc0c8af16cb3da4d33ab92e3",
+  "rust_scores": [
+    {
+      "id": "capital-positive",
+      "probability_yes": 0.99949825
+    },
+    {
+      "id": "capital-negative",
+      "probability_yes": 0.000013200434
+    },
+    {
+      "id": "rust-positive",
+      "probability_yes": 0.9796642
+    },
+    {
+      "id": "rust-negative",
+      "probability_yes": 0.000023243734
+    },
+    {
+      "id": "mcp-positive",
+      "probability_yes": 0.9942503
+    },
+    {
+      "id": "mcp-negative",
+      "probability_yes": 0.0003135997
+    },
+    {
+      "id": "models-positive",
+      "probability_yes": 0.035091847
+    },
+    {
+      "id": "models-partial",
+      "probability_yes": 0.004990067
+    },
+    {
+      "id": "hash-positive",
+      "probability_yes": 0.9104906
+    },
+    {
+      "id": "hash-negative",
+      "probability_yes": 0.00049801794
+    }
+  ],
+  "python_order": [
+    "capital-positive",
+    "mcp-positive",
+    "rust-positive",
+    "hash-positive",
+    "models-positive",
+    "models-partial",
+    "hash-negative",
+    "mcp-negative",
+    "rust-negative",
+    "capital-negative"
+  ],
+  "rust_order": [
+    "capital-positive",
+    "mcp-positive",
+    "rust-positive",
+    "hash-positive",
+    "models-positive",
+    "models-partial",
+    "hash-negative",
+    "mcp-negative",
+    "rust-negative",
+    "capital-negative"
+  ],
+  "maximum_absolute_delta": 0.000002026558
+}

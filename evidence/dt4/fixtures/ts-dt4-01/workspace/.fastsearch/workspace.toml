@@ -1,0 +1,15 @@
+schema_version = 1
+id = "ts-dt4-01"
+name = "TS-DT4-01"
+embedding_model = "multilingual-e5-large"
+
+[documentation]
+required_value = "true"
+roots = [{ id = "ts-dt4-01-docs", path = "corpus" }]
+
+[code]
+required_value = "true"
+roots = []
+
+[exclude]
+common = [".fastsearch", ".git", "target"]

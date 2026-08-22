@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "engine": "CPython 3.13.14 / torch 2.7.1 / transformers 4.53.3",
+  "model_revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+  "yes_token": 9693,
+  "no_token": 2152,
+  "files": {
+    "config.json": "d479c427a9ca5295218063d4f9aca4f297ab4ac27487cca7af42c84643d51ef0",
+    "tokenizer.json": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+    "model.safetensors": "27cd75a405b9c1b46b59abfd88aaa209e6fed2a1972cde9b70e7659537c5e65b"
+  },
+  "cases_sha256": "6ed86baa4f3e3c57c5082ba559c74282176ca7f2f3cf0206f34be1dc293d4a63",
+  "scores": [
+    {
+      "id": "capital-positive",
+      "probability_yes": 0.9994982481002808
+    },
+    {
+      "id": "capital-negative",
+      "probability_yes": 1.320055980613688e-05
+    },
+    {
+      "id": "rust-positive",
+      "probability_yes": 0.9796638488769531
+    },
+    {
+      "id": "rust-negative",
+      "probability_yes": 2.3243246687343344e-05
+    },
+    {
+      "id": "mcp-positive",
+      "probability_yes": 0.9942501783370972
+    },
+    {
+      "id": "mcp-negative",
+      "probability_yes": 0.00031360177672468126
+    },
+    {
+      "id": "models-positive",
+      "probability_yes": 0.035091400146484375
+    },
+    {
+      "id": "models-partial",
+      "probability_yes": 0.00499005289748311
+    },
+    {
+      "id": "hash-positive",
+      "probability_yes": 0.9104885458946228
+    },
+    {
+      "id": "hash-negative",
+      "probability_yes": 0.0004980200901627541
+    }
+  ],
+  "order": [
+    "capital-positive",
+    "mcp-positive",
+    "rust-positive",
+    "hash-positive",
+    "models-positive",
+    "models-partial",
+    "hash-negative",
+    "mcp-negative",
+    "rust-negative",
+    "capital-negative"
+  ]
+}

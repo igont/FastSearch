@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "generation": 1,
+  "fragment_count": 10,
+  "fragments": [
+    {"path":"corpus/01-model-cache.md","bytes":407,"sha256":"1cd0bd6fcf4bc2f283a0f7c2d9d81ac6967c6394377aa5a55f2674e842d05765"},
+    {"path":"corpus/02-atomic-publish.md","bytes":406,"sha256":"987c5e87dc6b7cef29fb1b225584b80f5091aa47e3f4142f63a26d253f947aa0"},
+    {"path":"corpus/03-model-revisions.md","bytes":371,"sha256":"4517869785496d986d42488c72cc8e4c701ca5299f1d7bdbbbc2707ecad99bb9"},
+    {"path":"corpus/04-workspace-roots.md","bytes":338,"sha256":"717a2d12e1fca40131af640ea98ca5cf47b8e3cb35b4838023bbe35e6957c788"},
+    {"path":"corpus/05-three-projections.md","bytes":345,"sha256":"750993a889c5c0bed6fff64046db139464d63574320b3d2ee92ad03670d7c764"},
+    {"path":"corpus/06-reranking.md","bytes":335,"sha256":"7ad150669c8f7f333ead9b79cee7e8a1788512b41c38233407d127148cebea83"},
+    {"path":"corpus/07-mcp-stdio.md","bytes":324,"sha256":"9c6aabe8944def3d8dd291a0a9d6edebc4092a4d3cb74e4b9aced8e44c28f3d5"},
+    {"path":"corpus/08-no-hidden-indexing.md","bytes":360,"sha256":"2b139a8259ada72c843dbf6eb24ce9b80a701904e90bee0ee44e26e9e1465a81"},
+    {"path":"corpus/09-resource-ownership.md","bytes":360,"sha256":"5d96e71e47d95a3eaf0fddde586ee70d2da3e9a86996bab4c4b91c04b6720db5"},
+    {"path":"corpus/10-public-response.md","bytes":372,"sha256":"32d2fc12e7e15df38ad5f72124d20c26c39c70cd8f716ea5b8ec927fd8486b88"}
+  ]
+}

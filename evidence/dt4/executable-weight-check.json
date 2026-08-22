@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "gate": "G-QWEN",
+  "status": "PASS",
+  "executable": {
+    "path": "../.cargo-target/FastSearch/release/fastsearch.exe",
+    "bytes": 45012992,
+    "sha256": "4449698b847b8a330d61e92d07ae266a8c27b087c1b586b8112074ee884c443a"
+  },
+  "qwen_weights": {
+    "external_path": "model.safetensors",
+    "bytes": 1191588280,
+    "sha256": "27cd75a405b9c1b46b59abfd88aaa209e6fed2a1972cde9b70e7659537c5e65b"
+  },
+  "tracked_weight_files": [],
+  "weight_sha256_marker_in_executable": false,
+  "note": "The executable is 3.78% of the weight file size. Artifact-name strings are loader metadata, not embedded weights."
+}
