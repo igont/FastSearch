@@ -3,6 +3,7 @@
 !.agents/archive/
 .agents/archive/*
 !.agents/archive/*.zip
+/.dtree/
 
 # Rust build output
 /target/
