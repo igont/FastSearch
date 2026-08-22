@@ -9,7 +9,7 @@ updated: "2026-08-16"
 ---
 # TDR-FS-1.4 — Semantic overlay в `.fastsearch`
 
-Решение передано FastGraph и заменено его TDR-FG-1.4 и этапом FG5. Переносимое графовое знание больше не принадлежит namespace FastSearch. [Карта передачи](<../FastGraph.md>) содержит целевые ссылки.
+Решение передано FastGraph и заменено его TDR-FG-1.4 и этапом FG6. Переносимое графовое знание больше не принадлежит namespace FastSearch. [Карта передачи](<../FastGraph.md>) содержит целевые ссылки.
 
 ## Контекст TDR
 
@@ -71,4 +71,3 @@ Baseline: `.cfmap` AUTO/CURATED parser, relations, SQLite state и projection pr
 ## Состояние реализации
 
 Механизм semantic overlay отсутствует и относится к DT8. Workspace layout должен быть материализован раньше или одновременно с первым portable export.
-

@@ -7,7 +7,7 @@ updated: "2026-08-16"
 ---
 # DT8. Semantic overlay в `.fastsearch`
 
-Этап заменён FastGraph FG5. Переносимое графовое знание получает собственную границу FastGraph. [Передача графового контура](<../FastGraph.md>) объясняет изменение.
+Этап заменён FastGraph FG6. Переносимое графовое знание получает собственную границу FastGraph. [Передача графового контура](<../FastGraph.md>) объясняет изменение.
 
 [← Roadmap](<00 Roadmap.md>)
 
@@ -63,4 +63,3 @@ Module/class/function nodes получают versioned semantic descriptions. Ac
 - [PAR-FS-009](<../../Paradigms/Архитектура/Сопровождение графа/04 Переносимый namespace .fastsearch.md>)
 - [TDR-FS-1.4](<../TDR/TDR-FS-1.4 Semantic overlay и .fastsearch.md>)
 - [TDR-FS-2.2](<../TDR/TDR-FS-2.2 Namespace .fastsearch и migration.md>)
-

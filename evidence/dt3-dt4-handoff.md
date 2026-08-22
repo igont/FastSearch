@@ -4,7 +4,7 @@
 
 ## Статус supersession
 
-Этот файл сохраняет historical DT3 product handoff на `5b25f5bf235309761f4376dc4143b246c8409c66`. Текущий planning snapshot DT4 — `23ed8773f9830bf6762f058255b17cbb1fe7ad46`; контракты и gates канонизированы в `.agents/DT-13-08-2026_19-10-Агентский-MCP-инструмент-FastSearch`, `PV-6`. При конфликте по baseline admission, flat marker-owned `.cfknowledge/fastsearch-dt4-<instance_id>`, MCP lifecycle/carriers, related, outcome compatibility, vector authority, limits и revision-scoped gates PV-6 supersede-ит этот historical вход. Execution revision появится только после docs-only `G-EXECUTION-BASE`; planning snapshot не является execution baseline, product implementation DT4 не начата.
+Этот файл сохраняет исторический DT3 product handoff на `5b25f5bf235309761f4376dc4143b246c8409c66`. Прежняя planning revision `23ed8773f9830bf6762f058255b17cbb1fe7ad46` и отсутствующий локальный PV-6 не используются как текущее исполнительное основание. При конфликте действуют [ROADMAP.md](../ROADMAP.md), TDR-FS-2.4, TDR-FS-2.6, TDR-FS-2.7 и план `FASTSEARCH-DT4-FOUNDATION-22-08-2026`, `PV-1`, в `.agents/DT-22-08-2026_11-14-Единый-агентский-поиск-FastSearch`. Execution revision появляется только после `G-EXECUTION-BASE`; реализация DT4 не начата.
 
 ## Точный baseline
 
@@ -82,4 +82,4 @@ DT4 можно материализовать от exact baseline не ниже 
 7. определено, является ли remote-backed baseline обязательным gate до исполнения либо только до выпуска;
 8. E5 cache повторно квалифицирован либо vector-specific acceptance явно оставлена cache-gated без ложного общего `PASS`.
 
-На момент этого historical handoff материализованного плана DT4 не было. Теперь PV-6 создан и явно supersede-ит этот файл для execution decisions; ни handoff, ни план не доказывают ещё не выполненную product implementation, а planning snapshot не становится execution baseline до `G-EXECUTION-BASE`. Каждый последующий `G-BASE@<stage>` привязан к exact candidate revision своей стадии и не наследует исторический PASS.
+На момент этой исторической передачи материализованного плана DT4 не было. Текущий PV-1 заменяет этот файл только для ближайшей границы A1-A5; ни передача, ни план не доказывают ещё не выполненную реализацию. Редакция планирования не становится исполнительным основанием до `G-EXECUTION-BASE`, а каждый последующий `G-BASE@<stage>` привязан к точной проверяемой редакции своей стадии и не наследует исторический PASS.

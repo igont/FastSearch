@@ -3,7 +3,7 @@ id: "fastsearch/docs/tdr/navigation"
 title: "TDR"
 type: "map"
 status: "принято"
-updated: "2026-08-16"
+updated: "2026-08-22"
 ---
 # TDR FastSearch
 
@@ -36,6 +36,7 @@ updated: "2026-08-16"
 11. [TDR-FS-2.4 - Автоматическая подготовка моделей](<TDR-FS-2.4 Automatic model provisioning.md>)
 12. [TDR-FS-2.5 - Режим сравнения embedding-моделей](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>)
 13. [TDR-FS-2.6 - Единый поиск и переранжирование](<TDR-FS-2.6 Единый поиск и переранжирование.md>)
+14. [TDR-FS-2.7 - MCP через stdio и владение средой исполнения](<TDR-FS-2.7 MCP stdio и runtime.md>)
 
 ## Реестр
 
