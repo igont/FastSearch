@@ -104,20 +104,20 @@ impl PublicSearchRequest {
         document_status: Option<DocumentStatus>,
     ) -> Result<Self, PublicSearchError> {
         let query = query.into();
-        let query = query.trim();
-        if query.is_empty() {
+        let trimmed_query = query.trim();
+        if trimmed_query.is_empty() {
             return Err(PublicSearchError::invalid_request(
                 "search query is blank after trimming",
             ));
         }
-        if query.chars().count() > MAX_PUBLIC_QUERY_CHARS {
+        if trimmed_query.chars().count() > MAX_PUBLIC_QUERY_CHARS {
             return Err(PublicSearchError::invalid_request(
                 "search query exceeds 1024 Unicode scalar values",
             ));
         }
 
         Ok(Self {
-            query: query.to_owned(),
+            query,
             project_scope,
             document_status,
         })
@@ -140,7 +140,7 @@ impl PublicSearchRequest {
 
     /// Converts the public request without exposing an internal mode selector.
     pub fn to_search_query(&self) -> Result<SearchQuery, PublicSearchError> {
-        SearchQuery::new(&self.query, SearchMode::Balanced)
+        SearchQuery::new(self.query.trim(), SearchMode::Balanced)
             .map_err(|error| PublicSearchError::invalid_request(error.message()))
     }
 
@@ -201,17 +201,7 @@ impl PublicSearchResult {
                 "public result has an invalid rank or blank content",
             ));
         }
-        if !Path::new(&path).is_absolute() || path.contains('\\') {
-            return Err(PublicSearchError::search_failed(
-                "source path is not normalized and absolute",
-            ));
-        }
-        if path.split('/').any(|part| part == "." || part == "..") || path.contains("/.fastsearch/")
-        {
-            return Err(PublicSearchError::search_failed(
-                "source path is not admissible for a public result",
-            ));
-        }
+        validate_public_source_path(&path)?;
 
         Ok(Self {
             rank,
@@ -458,6 +448,41 @@ impl std::fmt::Display for PublicSearchError {
 }
 
 impl std::error::Error for PublicSearchError {}
+
+fn validate_public_source_path(path: &str) -> Result<(), PublicSearchError> {
+    let invalid_shape = path.contains('\\')
+        || path.ends_with('/')
+        || path.contains("//")
+        || !Path::new(path).is_absolute();
+    let components = path.strip_prefix('/').unwrap_or(path);
+    let invalid_component = components.is_empty()
+        || components
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..");
+    if invalid_shape || invalid_component {
+        return Err(PublicSearchError::search_failed(
+            "source path is not normalized and absolute",
+        ));
+    }
+
+    let internal_component = components.split('/').any(|component| {
+        #[cfg(windows)]
+        {
+            component.eq_ignore_ascii_case(".fastsearch")
+        }
+        #[cfg(not(windows))]
+        {
+            component == ".fastsearch"
+        }
+    });
+    if internal_component {
+        return Err(PublicSearchError::search_failed(
+            "source path is not admissible for a public result",
+        ));
+    }
+
+    Ok(())
+}
 
 fn effective_metadata(
     record: &CanonicalRecord,

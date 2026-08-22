@@ -58,17 +58,29 @@ fn record(id: &str, scope: Option<&str>, status: Option<&str>) -> CanonicalRecor
 }
 
 #[test]
-fn request_trims_query_validates_unicode_scalar_limit_and_forces_balanced() {
+fn request_preserves_original_query_but_validates_and_searches_trimmed_balanced_text() {
     let request = request();
-    assert_eq!(request.query(), "navigation");
+    assert_eq!(request.query(), "  navigation  ");
+    let internal = request.to_search_query().unwrap();
+    assert_eq!(internal.text(), "navigation");
+    assert_eq!(internal.mode(), SearchMode::Balanced);
+
+    let wire = serde_json::to_vec(&request).unwrap();
+    let roundtrip: PublicSearchRequest = serde_json::from_slice(&wire).unwrap();
+    assert_eq!(roundtrip, request);
+    assert_eq!(roundtrip.query(), "  navigation  ");
+    assert_eq!(roundtrip.to_search_query().unwrap().text(), "navigation");
+    let response = PublicSearchResponse::from_ranked_results(&roundtrip, []).unwrap();
+    assert_eq!(response.query(), "  navigation  ");
     assert_eq!(
-        request.to_search_query().unwrap().mode(),
-        SearchMode::Balanced
+        serde_json::to_value(response).unwrap()["query"],
+        "  navigation  "
     );
 
-    let boundary = "я".repeat(1024);
+    let boundary = format!("  {}  ", "я".repeat(1024));
     assert!(PublicSearchRequest::new(boundary, None, None).is_ok());
-    let error = PublicSearchRequest::new("я".repeat(1025), None, None).unwrap_err();
+    let error =
+        PublicSearchRequest::new(format!("  {}  ", "я".repeat(1025)), None, None).unwrap_err();
     assert_eq!(error.code(), PublicSearchErrorCode::InvalidRequest);
     assert!(!error.retryable());
     assert!(PublicSearchRequest::new(" \n\t ", None, None).is_err());
@@ -258,11 +270,39 @@ fn every_public_error_has_stable_code_message_retryability_and_hides_domain_caus
 
 #[test]
 fn public_result_rejects_non_absolute_internal_or_unnormalized_paths() {
+    let platform_double_separator = if cfg!(windows) {
+        "C:/workspace//docs/guide.md"
+    } else {
+        "/workspace//docs/guide.md"
+    };
+    let platform_trailing_separator = if cfg!(windows) {
+        "C:/workspace/docs/"
+    } else {
+        "/workspace/docs/"
+    };
+    let platform_internal_path = if cfg!(windows) {
+        "C:/workspace/.FASTSEARCH/index/record.md"
+    } else {
+        "/workspace/.fastsearch/index/record.md"
+    };
+    let platform_parent = if cfg!(windows) {
+        "C:/workspace/docs/../secret.md"
+    } else {
+        "/workspace/docs/../secret.md"
+    };
+    let platform_current = if cfg!(windows) {
+        "C:/workspace/./docs/guide.md"
+    } else {
+        "/workspace/./docs/guide.md"
+    };
     for path in [
         "docs/guide.md",
         "C:\\workspace\\docs\\guide.md",
-        "C:/workspace/.fastsearch/index/record.md",
-        "C:/workspace/docs/../secret.md",
+        platform_double_separator,
+        platform_trailing_separator,
+        platform_internal_path,
+        platform_parent,
+        platform_current,
     ] {
         let error = PublicSearchResult::new(
             1,
@@ -275,6 +315,44 @@ fn public_result_rejects_non_absolute_internal_or_unnormalized_paths() {
         .unwrap_err();
         assert_eq!(error.code(), PublicSearchErrorCode::SearchFailed);
     }
+}
+
+#[test]
+fn every_public_result_creation_path_uses_the_same_path_validation() {
+    let invalid = if cfg!(windows) {
+        "C:/workspace//docs/guide.md"
+    } else {
+        "/workspace//docs/guide.md"
+    };
+    let record = record("guide", None, None);
+    assert!(
+        PublicSearchResult::from_record(1, &record, invalid)
+            .unwrap_err()
+            .domain_cause()
+            .unwrap()
+            .contains("normalized")
+    );
+
+    let internal = SearchResponse::new(vec![SearchHit::new(record, RetrievalChannel::Vector, 1.0)]);
+    let error =
+        PublicSearchResponse::from_internal(&request(), &internal, |_| Ok(invalid.to_owned()))
+            .unwrap_err();
+    assert_eq!(error.code(), PublicSearchErrorCode::SearchFailed);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_rejects_internal_component_case_insensitively() {
+    let error = PublicSearchResult::new(
+        1,
+        "Guide",
+        "C:/workspace/.FASTSEARCH/index/record.md",
+        ProjectScope::General,
+        DocumentStatus::Actual,
+        "content",
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), PublicSearchErrorCode::SearchFailed);
 }
 
 #[test]
