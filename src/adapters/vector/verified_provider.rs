@@ -288,8 +288,8 @@ impl VerifiedProvider {
                 "Instruct: Given a search query, retrieve relevant documentation and source-code passages\nQuery: {query}"
             ),
             EmbeddingModelId::NomicEmbedTextV2Moe => format!("search_query: {query}"),
-            EmbeddingModelId::SnowflakeArcticEmbedLV2
-            | EmbeddingModelId::GteMultilingualBase
+            EmbeddingModelId::SnowflakeArcticEmbedLV2 => format!("query: {query}"),
+            EmbeddingModelId::GteMultilingualBase
             | EmbeddingModelId::BgeM3
             | EmbeddingModelId::JinaEmbeddingsV3 => query.to_owned(),
         };

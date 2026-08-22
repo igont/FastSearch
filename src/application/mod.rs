@@ -12,6 +12,8 @@ mod production;
 mod public_search;
 mod retrieval_projection;
 mod thin_search;
+#[cfg(test)]
+mod unified_search;
 mod workspace;
 
 pub use cli::{CliError, OutputFormat, execute_cli, execute_cli_formatted};

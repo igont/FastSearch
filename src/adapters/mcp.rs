@@ -261,6 +261,17 @@ fn tool_error(error: PublicSearchError) -> CallToolResult {
 }
 
 pub fn run_stdio(workspace: PathBuf) -> Result<(), String> {
+    if let Some(product_home) = std::env::var_os("FASTSEARCH_HOME") {
+        // SAFETY: the CLI establishes its model-cache root before it starts any runtime thread.
+        unsafe {
+            std::env::set_var(
+                "HF_HOME",
+                PathBuf::from(product_home)
+                    .join("models")
+                    .join("huggingface"),
+            );
+        }
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

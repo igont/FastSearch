@@ -12,6 +12,7 @@ const CHUNK_KIND_METADATA: &str = "_fastsearch_chunk_kind";
 const SOURCE_PATH_METADATA: &str = "_fastsearch_source_path";
 const SOURCE_START_METADATA: &str = "_fastsearch_source_start_line";
 const SOURCE_END_METADATA: &str = "_fastsearch_source_end_line";
+const HEADING_DEPTH_METADATA: &str = "_fastsearch_heading_depth";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,7 +75,8 @@ pub(crate) fn project_records(
             projected.push(record.clone());
             continue;
         }
-        let context = heading_context(record);
+        let headings = heading_path(record);
+        let context = headings.join(" > ");
         let base_line = record
             .metadata()
             .get(SOURCE_START_METADATA)
@@ -90,7 +92,11 @@ pub(crate) fn project_records(
             let projected_id =
                 make_chunk_id(record.id().as_str(), ordinal, block.kind, &block_text);
             let visible_text = visible_block_text(block.kind, &block_text);
-            let lexical_input = format!("{context}: {visible_text}");
+            let lexical_input = if headings.len() == 1 {
+                format!("{context}\n{visible_text}")
+            } else {
+                format!("{context}: {visible_text}")
+            };
             let embedding_input = embedding_input(model, &lexical_input);
             let source_start = base_line.map(|line| line + block.start_line);
             let source_end = base_line.map(|line| line + block.end_line);
@@ -107,6 +113,10 @@ pub(crate) fn project_records(
             metadata.insert(
                 SOURCE_PATH_METADATA.to_owned(),
                 record.locator().path().to_owned(),
+            );
+            metadata.insert(
+                HEADING_DEPTH_METADATA.to_owned(),
+                headings.len().to_string(),
             );
             if let Some(line) = source_start {
                 metadata.insert(SOURCE_START_METADATA.to_owned(), line.to_string());
@@ -154,7 +164,13 @@ pub(crate) fn project_records(
 }
 
 pub(crate) fn lexical_input(record: &CanonicalRecord) -> String {
-    if record.metadata().contains_key(PARENT_ID_METADATA) {
+    if record
+        .metadata()
+        .get(HEADING_DEPTH_METADATA)
+        .is_some_and(|depth| depth == "1")
+    {
+        format!("{}\n{}", record.title(), record.searchable_content())
+    } else if record.metadata().contains_key(PARENT_ID_METADATA) {
         format!("{}: {}", record.title(), record.searchable_content())
     } else {
         format!("{}\n{}", record.title(), record.searchable_content())
@@ -176,10 +192,6 @@ fn heading_path(record: &CanonicalRecord) -> Vec<String> {
         crate::domain::SourceSelector::MarkdownHeading { heading_path } => heading_path.clone(),
         _ => vec![record.title().to_owned()],
     }
-}
-
-fn heading_context(record: &CanonicalRecord) -> String {
-    heading_path(record).join(" > ")
 }
 
 fn visible_markdown_text(input: &str) -> String {
@@ -599,6 +611,33 @@ mod tests {
         );
         assert_eq!(corpus.chunks[0].source_line_start, Some(10));
         assert!(corpus.chunks[0].embedding_input.starts_with("passage: "));
+    }
+
+    #[test]
+    fn top_level_envelope_matches_the_structural_embedding_input() {
+        let locator = SourceLocator::markdown("guide.md", ["Правила"]).unwrap();
+        let source = CanonicalRecord::new(
+            StableId::parse("top-level-section").unwrap(),
+            RecordKind::MarkdownSection,
+            locator,
+            "Правила",
+            "Тело раздела",
+            BTreeMap::new(),
+            Vec::new(),
+            ContentHash::parse("hash-top").unwrap(),
+        )
+        .unwrap();
+
+        let corpus = project_records(&[source], EmbeddingModelId::MultilingualE5Large).unwrap();
+        assert_eq!(corpus.chunks[0].lexical_input, "Правила\nТело раздела");
+        assert_eq!(
+            corpus.chunks[0].embedding_input,
+            "passage: Правила\nТело раздела"
+        );
+        assert_eq!(
+            lexical_input(&corpus.records[0]),
+            corpus.chunks[0].lexical_input
+        );
     }
 
     #[test]

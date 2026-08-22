@@ -50,7 +50,7 @@ def read_records(root: Path) -> list[dict]:
         content = content.strip()
         relative = f"corpus/{path.name}"
         stable_id = (
-            f"named-root-v1:ts-dt4-01-docs:{relative}:markdown:"
+            f"named-root-v1:ts-dt4-01-docs:{path.name}:markdown:"
             f"{len(title.encode('utf-8'))}:{title}"
         )
         records.append(
@@ -59,6 +59,7 @@ def read_records(root: Path) -> list[dict]:
                 "title": title,
                 "normalized_path": relative,
                 "content": content,
+                "embedding_text": f"{title}\n{content}",
                 "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             }
         )
@@ -192,7 +193,7 @@ def main() -> None:
     if model_count != 3 or candidate_slots != model_count * candidates_per_model:
         raise RuntimeError(f"invalid TS-DT4-01 candidate contract: {contract}")
     query = (args.fixture_root / "query.txt").read_text(encoding="utf-8").strip()
-    texts = [record["content"] for record in records]
+    texts = [record["embedding_text"] for record in records]
 
     arctic_query = onnx_embeddings(roots["arctic"], roots["arctic"] / "onnx/model.onnx", [query], "query: ", 8192, "cls")
     arctic_documents = onnx_embeddings(roots["arctic"], roots["arctic"] / "onnx/model.onnx", texts, "", 8192, "cls")
@@ -214,11 +215,14 @@ def main() -> None:
         raise RuntimeError(
             f"expected {candidate_slots} candidate slots, found {len(slots_before_deduplication)}"
         )
-    candidate_ids = {
-        item["stable_id"]
-        for model_candidates in candidates.values()
-        for item in model_candidates
-    }
+    deduplicated_stable_ids = list(
+        dict.fromkeys(
+            item["stable_id"]
+            for model_candidates in candidates.values()
+            for item in model_candidates
+        )
+    )
+    candidate_ids = set(deduplicated_stable_ids)
     selected = [record for record in records if record["stable_id"] in candidate_ids]
     probabilities = qwen_scores(query, selected)
     final_records = sorted(
@@ -253,7 +257,7 @@ def main() -> None:
         "candidate_contract": contract,
         "embedding_candidates": candidates,
         "candidate_slots_before_deduplication": slots_before_deduplication,
-        "deduplicated_stable_ids": sorted(candidate_ids),
+        "deduplicated_stable_ids": deduplicated_stable_ids,
         "qwen_probabilities": probabilities,
         "results": final,
     }

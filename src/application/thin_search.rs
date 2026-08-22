@@ -47,6 +47,10 @@ pub struct ThinSearchAudit {
     pub free_physical_memory_after_bytes: Option<u64>,
     pub serialized_response_bytes: usize,
     pub embedding_parallelism: usize,
+    #[cfg(test)]
+    pub deduplicated_stable_ids: Vec<String>,
+    #[cfg(test)]
+    pub qwen_probabilities: BTreeMap<String, f32>,
 }
 
 pub struct ThinSearchCoordinator {
@@ -157,6 +161,10 @@ impl ThinSearchCoordinator {
 
         let mut candidates_by_model = BTreeMap::new();
         let mut candidates = BTreeMap::new();
+        #[cfg(test)]
+        let mut deduplicated_stable_ids = Vec::new();
+        #[cfg(test)]
+        let mut observed_candidate_ids = BTreeSet::new();
         for (model, _, outcome) in outcomes {
             let response = outcome.map_err(search_failed)?;
             if response.freshness() != IndexFreshness::Current {
@@ -167,10 +175,13 @@ impl ThinSearchCoordinator {
             }
             let mut ids = Vec::new();
             for hit in response.hits().iter().take(EMBEDDING_CANDIDATES_PER_MODEL) {
-                ids.push(hit.record().id().as_str().to_owned());
-                candidates
-                    .entry(hit.record().id().as_str().to_owned())
-                    .or_insert_with(|| hit.record().clone());
+                let id = hit.record().id().as_str().to_owned();
+                ids.push(id.clone());
+                #[cfg(test)]
+                if observed_candidate_ids.insert(id.clone()) {
+                    deduplicated_stable_ids.push(id.clone());
+                }
+                candidates.entry(id).or_insert_with(|| hit.record().clone());
             }
             candidates_by_model.insert(model.slug().to_owned(), ids);
         }
@@ -193,12 +204,16 @@ impl ThinSearchCoordinator {
         let mut qwen = QwenReranker::open(&self.qwen_root, &self.model_manifest)
             .map_err(|error| search_failed(error.to_string()))?;
         let mut ranked = Vec::with_capacity(candidates.len());
+        #[cfg(test)]
+        let mut qwen_probabilities = BTreeMap::new();
         for (id, record) in candidates {
             ensure_deadline(admitted_at)?;
             ensure_active(cancelled)?;
             let score = qwen
                 .score(request.query().trim(), record.searchable_content())
                 .map_err(|error| search_failed(error.to_string()))?;
+            #[cfg(test)]
+            qwen_probabilities.insert(id.clone(), score);
             ranked.push((id, score, record));
         }
         drop(qwen);
@@ -241,6 +256,10 @@ impl ThinSearchCoordinator {
             free_physical_memory_after_bytes: available_physical_memory_bytes(),
             serialized_response_bytes,
             embedding_parallelism: EMBEDDING_PARALLELISM,
+            #[cfg(test)]
+            deduplicated_stable_ids,
+            #[cfg(test)]
+            qwen_probabilities,
         };
         Ok((response, audit))
     }

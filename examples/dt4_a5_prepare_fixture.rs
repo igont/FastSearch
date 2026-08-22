@@ -31,11 +31,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         workspace.join(".fastsearch/workspace.toml"),
     )?;
 
-    let product_models = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or("LOCALAPPDATA is unavailable")?
-        .join("FastSearch")
-        .join("models");
+    let product_home = if let Some(value) = std::env::var_os("FASTSEARCH_HOME") {
+        let value = PathBuf::from(value);
+        // SAFETY: this single-threaded preparation process has not started model workers yet.
+        unsafe { std::env::set_var("HF_HOME", value.join("models").join("huggingface")) };
+        value
+    } else {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or("LOCALAPPDATA is unavailable")?
+            .join("FastSearch")
+    };
+    let product_models = product_home.join("models");
     fs::create_dir_all(&product_models)?;
     let catalog = product_models.join("model-manifest.json");
     let source_catalog = fixture.join("model-manifest.json");

@@ -1,0 +1,40 @@
+{
+  "candidate_input": "isolated-release-mcp",
+  "candidate_slots": 15,
+  "corpus_generation": 1,
+  "elapsed_ms": 11177,
+  "free_physical_memory_after_bytes": 22873350144,
+  "free_physical_memory_before_bytes": 22677946368,
+  "gate": "G-RESOURCE@TS-DT4-01",
+  "isolation": {
+    "child_product_path_override": [
+      "FASTSEARCH_HOME"
+    ],
+    "global_huggingface_cache_unchanged": true,
+    "global_product_home_unchanged": true,
+    "legacy_and_test_environment_removed": true,
+    "model_cache_template_unchanged": true,
+    "preparation_outside_server": true,
+    "repository_unchanged_during_child": true,
+    "unique_product_home": true,
+    "unique_workspace": true
+  },
+  "limits": {
+    "deadline_ms": 30000,
+    "free_before_bytes": 12884901888,
+    "reserve_bytes": 4294967296,
+    "response_bytes": 131072,
+    "watchdog_ms": 35000,
+    "working_set_bytes": 8589934592
+  },
+  "models": {
+    "arctic-embed-l-v2": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+    "multilingual-e5-large": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+    "nomic-embed-text-v2-moe": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+    "qwen3-reranker-0.6b": "e61197ed45024b0ed8a2d74b80b4d909f1255473"
+  },
+  "peak_working_set_bytes": 6337671168,
+  "public_results": 6,
+  "schema": 1,
+  "serialized_response_bytes": 3402
+}
