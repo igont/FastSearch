@@ -1,12 +1,19 @@
-//! Vendored from fastembed 5.17.4 (Apache-2.0 OR MIT) for pinned local-file admission.
-//! nomic-embed-text-v2-moe: First general-purpose MoE embedding model.
+//! Код создан на основе `src/models/nomic_v2_moe.rs` из `fastembed` 5.17.4.
+//! Исходный проект: <https://github.com/Anush008/fastembed-rs>, VCS-ревизия
+//! пакета `1bbd0b61938cbad133d727f950e0efca79f370a8`, SHA-256 исходного файла
+//! `39f8b810a6efb1ca0a7264200c9d0c0eb48a1d38fdc61a84435dd4cdd02809f2`.
+//! Код распространяется по Apache-2.0; сохранённый текст лицензии находится в
+//! `third_party/fastembed-5.17.4/LICENSE`.
+//! Файл изменён для FastSearch: модель читает данные только из проверенного
+//! локального каталога.
+//! nomic-embed-text-v2-moe: универсальная модель векторного представления MoE.
 //!
-//! 475M total / 305M active params, 8 experts with top-2 routing.
-//! NomicBert architecture with MoE layers on alternating transformer blocks.
+//! Всего 475 млн параметров, 305 млн активных, 8 экспертов с выбором двух лучших.
+//! Архитектура NomicBert чередует обычные блоки трансформера со слоями MoE.
 //!
-//! This module provides [`NomicV2MoeTextEmbedding`] which handles tokenization,
-//! forward pass, mean pooling, and L2 normalization — entirely via candle-nn.
-//! No ONNX runtime required.
+//! Модуль предоставляет [`NomicV2MoeTextEmbedding`] для токенизации, прямого
+//! прохода, усредняющего пулинга и L2-нормализации средствами candle-nn.
+//! Среда выполнения ONNX не требуется.
 
 use candle_core::{D, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{LayerNorm, Linear, Module, VarBuilder, layer_norm, linear};

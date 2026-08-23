@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "gate": "G-TS-DT4-02-SMOKE",
   "outcome": "PASS",
   "cold_artifact_acquisition": {
@@ -14,25 +14,49 @@
   },
   "offline_seed": {
     "source_artifacts_root": "D:\\Igor\\Programming\\FastSearch-dt4-b-a-smoke-home\\models\\production\\artifacts",
-    "destination_fastsearch_home": "D:\\Igor\\Programming\\FastSearch-dt4-b-a-smoke-home-final-offline",
+    "destination_fastsearch_home": "D:\\Igor\\Programming\\FastSearch-dt4-b-a-smoke-home-final-offline-r2",
     "destination_was_new": true,
-    "method": "same-volume hardlinks",
-    "raw_artifact_files": 23,
-    "raw_artifact_bytes": 7658956360,
+    "method": "same-volume hardlinks selected by an explicit allowlist",
+    "allowlist_source": "14 PRODUCTION_MODEL_CATALOG required_files plus 4 ArtifactProvider runtime support files",
+    "descriptor_required_files": 14,
+    "runtime_support_files": 4,
+    "allowlist": [
+      { "role": "arctic-embed-l-v2", "path": "config.json", "bytes": 818, "sha256": "706f5d1eb9ddf64b5d3067c562b893b80ad1022db7f68c20eb07ff24d33b6c15", "source": "required_files" },
+      { "role": "arctic-embed-l-v2", "path": "tokenizer.json", "bytes": 17083074, "sha256": "39feb9863a378165ab9c5c689047203d789422966c0c58721c5309fd039a8edc", "source": "required_files" },
+      { "role": "arctic-embed-l-v2", "path": "onnx/model.onnx", "bytes": 702280, "sha256": "f74aa79745ccfb1e75daa7e8e6552a78402d4de193eb8ca67a931358d3e0a25e", "source": "required_files" },
+      { "role": "arctic-embed-l-v2", "path": "onnx/model.onnx_data", "bytes": 2266886160, "sha256": "fe7d75ff258fbda10a6bea63c5422df5579d625355b1aca69ba6923c0ba604a9", "source": "required_files" },
+      { "role": "arctic-embed-l-v2", "path": "tokenizer_config.json", "bytes": 1339, "sha256": "cb058b4c5c0c08738eb028c2ae82ed55cd84ce8999ece76b13472af80f0f77f1", "source": "runtime_support" },
+      { "role": "arctic-embed-l-v2", "path": "special_tokens_map.json", "bytes": 964, "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835", "source": "runtime_support" },
+      { "role": "multilingual-e5-large", "path": "config.json", "bytes": 716, "sha256": "1de8c3be1f344c0eefa4962480a006f8639f416dfafaa95a770e3cf4bceae6a4", "source": "required_files" },
+      { "role": "multilingual-e5-large", "path": "tokenizer.json", "bytes": 17082756, "sha256": "f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af", "source": "required_files" },
+      { "role": "multilingual-e5-large", "path": "model.onnx", "bytes": 545851, "sha256": "1c09780c907c8a91a77a6ab1fd231f79e090d2907ca431223703dfebeed3d36c", "source": "required_files" },
+      { "role": "multilingual-e5-large", "path": "model.onnx_data", "bytes": 2235363328, "sha256": "0cf1883fee81c63819a44e2ba0efa51d4043d9759685a4ebebbde97e0623d15c", "source": "required_files" },
+      { "role": "multilingual-e5-large", "path": "tokenizer_config.json", "bytes": 1147, "sha256": "f90024142df07163e5e6c5b9a6ad7c8c68b22a9112af11e3db4559a9ff90f737", "source": "runtime_support" },
+      { "role": "multilingual-e5-large", "path": "special_tokens_map.json", "bytes": 964, "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835", "source": "runtime_support" },
+      { "role": "nomic-embed-text-v2-moe", "path": "config.json", "bytes": 2482, "sha256": "4f076b4798fc2ba916f1900e0d10177714ee1aa94e0ef809102e723078d3efd3", "source": "required_files" },
+      { "role": "nomic-embed-text-v2-moe", "path": "tokenizer.json", "bytes": 17082734, "sha256": "3a56def25aa40facc030ea8b0b87f3688e4b3c39eb8b45d5702b3a1300fe2a20", "source": "required_files" },
+      { "role": "nomic-embed-text-v2-moe", "path": "model.safetensors", "bytes": 1901187232, "sha256": "097012b27af76d80af74fed4bc2ccc9091245286f776adf03ad1758a24ade9a0", "source": "required_files" },
+      { "role": "qwen3-reranker-0.6b", "path": "config.json", "bytes": 727, "sha256": "d479c427a9ca5295218063d4f9aca4f297ab4ac27487cca7af42c84643d51ef0", "source": "required_files" },
+      { "role": "qwen3-reranker-0.6b", "path": "tokenizer.json", "bytes": 11422654, "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4", "source": "required_files" },
+      { "role": "qwen3-reranker-0.6b", "path": "model.safetensors", "bytes": 1191588280, "sha256": "27cd75a405b9c1b46b59abfd88aaa209e6fed2a1972cde9b70e7659537c5e65b", "source": "required_files" }
+    ],
+    "seeded_files": 18,
+    "seeded_bytes": 7658953506,
     "manifest_format": "sorted relative-path NUL byte-length NUL file-sha256 records",
-    "source_manifest_sha256": "bcd3574293ec45a0868bce53bcbc114536cdbc8237e3f74bbfcb2df0201e5d3f",
-    "destination_manifest_sha256": "bcd3574293ec45a0868bce53bcbc114536cdbc8237e3f74bbfcb2df0201e5d3f",
-    "manifests_equal": true,
-    "transferred_markers_or_state": 0,
-    "destination_marker_files_before_prepare": 0,
-    "destination_role_state_existed_before_prepare": false
+    "source_manifest_sha256": "1138c1cf241f7dc22d00b2834fd92e16745b572384db4f34a8238b93abaaf94f",
+    "destination_manifest_sha256": "1138c1cf241f7dc22d00b2834fd92e16745b572384db4f34a8238b93abaaf94f",
+    "all_source_destination_file_hashes_equal": true,
+    "excluded": ["refs/main", "model-manifest.json", "model-set.roles", "model-set.ready.json", "model-set.install.lock"],
+    "refs_before_prepare": 0,
+    "model_manifests_before_prepare": 0,
+    "marker_state_lock_files_before_prepare": 0
   },
   "environment": {
     "os": "Windows x86_64",
     "device": "cpu",
-    "fastsearch_home": "D:\\Igor\\Programming\\FastSearch-dt4-b-a-smoke-home-final-offline",
-    "free_disk_gib_before": 94.2,
-    "free_physical_memory_gib_before": 21.41,
+    "fastsearch_home": "D:\\Igor\\Programming\\FastSearch-dt4-b-a-smoke-home-final-offline-r2",
+    "free_disk_gib_before": 91.94,
+    "free_physical_memory_gib_before": 21.08,
     "total_physical_memory_gib": 31.84,
     "minimum_free_disk_gib": 20,
     "minimum_free_physical_memory_gib": 12,
@@ -49,8 +73,18 @@
   },
   "binary": {
     "path": "D:\\Igor\\Programming\\.cargo-target\\FastSearch\\release\\fastsearch.exe",
-    "sha256": "2ac46547315d80935d5dcf59b43da4422251383db5fd315dde50068280a74dc1",
+    "sha256": "f45b4de5f9eaff937421ac913e5688a0817b71f6eebafca897a12b44d7d2b9d0",
     "build": "cargo build --release --bin fastsearch"
+  },
+  "nomic_provenance": {
+    "upstream": "https://github.com/Anush008/fastembed-rs",
+    "version": "5.17.4",
+    "vcs_revision": "1bbd0b61938cbad133d727f950e0efca79f370a8",
+    "source_path": "src/models/nomic_v2_moe.rs",
+    "source_sha256": "39f8b810a6efb1ca0a7264200c9d0c0eb48a1d38fdc61a84435dd4cdd02809f2",
+    "declared_license": "Apache-2.0",
+    "retained_license_path": "third_party/fastembed-5.17.4/LICENSE",
+    "retained_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   },
   "oracle": {
     "path": "evidence/dt4/fixtures/ts-dt4-02/oracle.json",
@@ -62,40 +96,20 @@
   },
   "prepare": {
     "command": "fastsearch.exe models prepare --json",
-    "started_at": "2026-08-23T16:41:42.4319384+03:00",
-    "ended_at": "2026-08-23T16:41:55.4304411+03:00",
+    "started_at": "2026-08-23T17:01:10.5419255+03:00",
+    "ended_at": "2026-08-23T17:01:24.8850020+03:00",
     "exit_code": 0,
-    "wall_clock_ms": 12958,
-    "reported_duration_ms": 12554,
+    "wall_clock_ms": 14300,
+    "reported_duration_ms": 12249,
     "downloaded_bytes": 0,
     "network_bytes": 0,
     "ready": true,
     "generation": "0d3a38b40d8011f1c42bddebb3529a16dd4d04cf6bb18cddfeae5ca7bdf1e5f2",
     "roles": [
-      {
-        "role": "arctic-embed-l-v2",
-        "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
-        "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
-        "marker_sha256": "8b7c52afa9b17bf7143a9684da9550bdaf260fe225a78ded4e10d8f91f34a743"
-      },
-      {
-        "role": "multilingual-e5-large",
-        "repository": "Qdrant/multilingual-e5-large-onnx",
-        "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
-        "marker_sha256": "a588fe3998e727a7c1f09ba8ecb5592554f4c208f0291aed3dbd53454dead8b0"
-      },
-      {
-        "role": "nomic-embed-text-v2-moe",
-        "repository": "nomic-ai/nomic-embed-text-v2-moe",
-        "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
-        "marker_sha256": "8f891b4c0e95f9374a66b0a70341cd90025fb1a069dc281ed9a45d54b7fd3b54"
-      },
-      {
-        "role": "qwen3-reranker-0.6b",
-        "repository": "Qwen/Qwen3-Reranker-0.6B",
-        "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
-        "marker_sha256": "30c5ee7a3fd3d7860e23399d5712928aea00e886475ecb31c93ebfaaba531f82"
-      }
+      { "role": "arctic-embed-l-v2", "repository": "Snowflake/snowflake-arctic-embed-l-v2.0", "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a", "marker_sha256": "8b7c52afa9b17bf7143a9684da9550bdaf260fe225a78ded4e10d8f91f34a743" },
+      { "role": "multilingual-e5-large", "repository": "Qdrant/multilingual-e5-large-onnx", "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6", "marker_sha256": "a588fe3998e727a7c1f09ba8ecb5592554f4c208f0291aed3dbd53454dead8b0" },
+      { "role": "nomic-embed-text-v2-moe", "repository": "nomic-ai/nomic-embed-text-v2-moe", "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85", "marker_sha256": "8f891b4c0e95f9374a66b0a70341cd90025fb1a069dc281ed9a45d54b7fd3b54" },
+      { "role": "qwen3-reranker-0.6b", "repository": "Qwen/Qwen3-Reranker-0.6B", "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473", "marker_sha256": "30c5ee7a3fd3d7860e23399d5712928aea00e886475ecb31c93ebfaaba531f82" }
     ]
   },
   "restart_status": {
