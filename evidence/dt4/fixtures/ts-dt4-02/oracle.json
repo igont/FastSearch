@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "engine": "CPython 3.13.14",
+  "dependencies": {
+    "numpy": "2.3.2",
+    "onnxruntime": "1.22.1",
+    "torch": "2.7.1",
+    "transformers": "4.53.3",
+    "tokenizers": "0.21.2"
+  },
+  "script_sha256": "f875837320211af21d6ccfa635711c4b47b85bfde177b1620e4a74177028d0f1",
+  "requirements_sha256": "bbe4845c8e1ae27ed2d896374eae28e841a1e54082e3d57a02406cbb1684bc98",
+  "cases_sha256": "0c87b972e6166e38e67a52dd5189b41dce1f7943e4b2f9ea85032276dcd77f67",
+  "model_manifest_sha256": "f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637",
+  "model_revisions": {
+    "arctic-embed-l-v2": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+    "multilingual-e5-large": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+    "nomic-embed-text-v2-moe": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+    "qwen3-reranker-0.6b": "e61197ed45024b0ed8a2d74b80b4d909f1255473"
+  },
+  "nomic_code_revision": "7710840340a098cfb869c4f65e87cf2b1b70caca",
+  "tolerance": {
+    "embedding_component_absolute": 1e-05,
+    "embedding_norm_absolute": 1e-05,
+    "reranker_probability_absolute": 1e-05
+  },
+  "observations": {
+    "arctic-embed-l-v2": {
+      "dimension": 1024,
+      "query_norm": 1.0,
+      "query_components": [
+        0.034557655453681946,
+        -0.07677095383405685,
+        0.026776626706123352,
+        -0.025163859128952026,
+        -0.05606380105018616,
+        0.04101020097732544,
+        0.0058569759130477905,
+        0.06945201009511948
+      ],
+      "scores": {
+        "ready": 0.4286655783653259,
+        "unrelated": 0.3439543843269348
+      },
+      "order": [
+        "ready",
+        "unrelated"
+      ]
+    },
+    "multilingual-e5-large": {
+      "dimension": 1024,
+      "query_norm": 0.9999999403953552,
+      "query_components": [
+        0.01874888315796852,
+        -0.0586257241666317,
+        -0.025434760376811028,
+        -0.024951037019491196,
+        0.041137225925922394,
+        -0.006777944974601269,
+        -0.015996865928173065,
+        0.094815194606781
+      ],
+      "scores": {
+        "ready": 0.8180814981460571,
+        "unrelated": 0.7870281934738159
+      },
+      "order": [
+        "ready",
+        "unrelated"
+      ]
+    },
+    "nomic-embed-text-v2-moe": {
+      "dimension": 768,
+      "query_norm": 0.9999999403953552,
+      "query_components": [
+        0.028601985424757004,
+        -0.033773273229599,
+        0.03864758089184761,
+        -0.0008113388903439045,
+        0.007866333238780499,
+        -0.037432800978422165,
+        -0.004340245854109526,
+        0.01726653426885605
+      ],
+      "scores": {
+        "ready": 0.40061846375465393,
+        "unrelated": 0.33165088295936584
+      },
+      "order": [
+        "ready",
+        "unrelated"
+      ]
+    },
+    "qwen3-reranker-0.6b": {
+      "yes_token": 9693,
+      "no_token": 2152,
+      "scores": {
+        "ready": 0.001974999438971281,
+        "unrelated": 3.1835745176067576e-05
+      },
+      "order": [
+        "ready",
+        "unrelated"
+      ]
+    }
+  }
+}

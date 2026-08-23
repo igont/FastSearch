@@ -8,6 +8,7 @@ mod console;
 pub mod fusion;
 mod inspection;
 mod model_cache;
+mod model_readiness;
 mod production;
 mod public_search;
 mod retrieval_projection;
@@ -29,6 +30,12 @@ pub use model_cache::{
     EmbeddingModelDescriptor, MODEL_CATALOG, ModelProvisionProgress, ModelRuntimeCapabilities,
     embedding_model_cache_status, ensure_e5_model, ensure_embedding_model,
     ensure_embedding_model_with_progress, model_descriptor, model_runtime_capabilities,
+};
+pub use model_readiness::{
+    MODEL_SET_LOCK_FILE, MODEL_SET_READY_FILE, MODEL_SET_SCHEMA, ModelArtifactDescriptor,
+    ModelContractError, ModelSetReadySnapshot, ModelSetRoleSnapshot, PRODUCTION_MODEL_CATALOG,
+    ProductionModelDescriptor, RoleReadinessMarker, model_set_paths, production_model_descriptor,
+    publish_model_set_snapshot, read_model_set_snapshot,
 };
 pub use production::{ModelPartitionMetrics, ProductionConfig, ProductionRuntime};
 pub use public_search::{

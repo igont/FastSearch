@@ -13,7 +13,7 @@ use terminal_dialogue::{
     ResultItem, TerminalDocument,
 };
 
-const USAGE: &str = "usage:\n  fastsearch init <documents> <code> <service> [e5-root]\n  fastsearch index update <documents> <code> <service> [e5-root]\n  fastsearch index rebuild <documents> <code> <service> [e5-root]\n  fastsearch search <documents> <code> <service> <balanced|current|design> <query> [e5-root]\n  fastsearch get <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch related <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch status <documents> <code> <service> [e5-root]";
+const USAGE: &str = "usage:\n  fastsearch models prepare [--json]\n  fastsearch models status [--json]\n  fastsearch init <documents> <code> <service> [e5-root]\n  fastsearch index update <documents> <code> <service> [e5-root]\n  fastsearch index rebuild <documents> <code> <service> [e5-root]\n  fastsearch search <documents> <code> <service> <balanced|current|design> <query> [e5-root]\n  fastsearch get <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch related <documents> <code> <service> <stable-id> [e5-root]\n  fastsearch status <documents> <code> <service> [e5-root]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CliError {
@@ -87,6 +87,9 @@ pub fn execute_cli_formatted(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Command {
+    Models {
+        action: ModelsAction,
+    },
     Production {
         config: ProductionCommandConfig,
         action: CommandAction,
@@ -96,6 +99,12 @@ pub(super) enum Command {
         service: String,
         action: CommandAction,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ModelsAction {
+    Prepare,
+    Status,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,6 +151,10 @@ impl Command {
     #[cfg(test)]
     fn name(&self) -> &'static str {
         match self {
+            Self::Models { action } => match action {
+                ModelsAction::Prepare => "models prepare",
+                ModelsAction::Status => "models status",
+            },
             Self::Production { action, .. } | Self::Compatibility { action, .. } => action.name(),
         }
     }
@@ -181,6 +194,12 @@ fn parse_command(arguments: Vec<String>) -> Result<Command, CliError> {
         };
     }
     match arguments.as_slice() {
+        [models, action] if models == "models" && action == "prepare" => Ok(Command::Models {
+            action: ModelsAction::Prepare,
+        }),
+        [models, action] if models == "models" && action == "status" => Ok(Command::Models {
+            action: ModelsAction::Status,
+        }),
         [command, documents, code, service] if command == "init" || command == "status" => Ok(
             production_command(documents, code, service, None, command_action(command)?),
         ),
@@ -323,6 +342,16 @@ fn record_action(command: &str, id: &str) -> CommandAction {
 /// Executes one private CLI command. It deliberately stays below the public application surface.
 pub(super) fn execute_command(command: Command) -> Result<CommandOutcome, CliError> {
     match command {
+        Command::Models { action } => Err(CliError::Runtime {
+            code: "model_readiness_pending",
+            message: format!(
+                "{} contract is available; artifact execution belongs to DT4 leaf A2",
+                match action {
+                    ModelsAction::Prepare => "models prepare",
+                    ModelsAction::Status => "models status",
+                }
+            ),
+        }),
         Command::Production { config, action } => execute_production_command(config, action),
         Command::Compatibility {
             source,
@@ -980,5 +1009,21 @@ mod command_contract_tests {
         let output = render_outcome(CommandOutcome::status_for_test(), OutputFormat::Technical);
 
         assert!(output.contains("freshness="));
+    }
+
+    #[test]
+    fn model_commands_parse_without_workspace_arguments() {
+        assert_eq!(
+            parse_command(vec!["models".to_owned(), "prepare".to_owned()])
+                .unwrap()
+                .name(),
+            "models prepare"
+        );
+        assert_eq!(
+            parse_command(vec!["models".to_owned(), "status".to_owned()])
+                .unwrap()
+                .name(),
+            "models status"
+        );
     }
 }

@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "embedding": {
+    "query": "Как FastSearch проверяет готовность модели?",
+    "documents": [
+      {"id": "ready", "text": "Готовность подтверждается проверкой артефактов и реальной вычислительной пробой."},
+      {"id": "unrelated", "text": "Команда выводит справку терминала без загрузки моделей."}
+    ]
+  },
+  "reranker": {
+    "instruction": "Given a web search query, retrieve relevant passages that answer the query",
+    "pairs": [
+      {"id": "ready", "query": "Как проверяется готовность модели?", "document": "FastSearch сверяет манифест и выполняет вычислительную пробу."},
+      {"id": "unrelated", "query": "Как проверяется готовность модели?", "document": "Справка терминала показывает доступные команды."}
+    ]
+  },
+  "tolerance": {
+    "embedding_component_absolute": 0.00001,
+    "embedding_norm_absolute": 0.00001,
+    "reranker_probability_absolute": 0.00001
+  }
+}

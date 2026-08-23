@@ -3,6 +3,7 @@
 mod embedding_model;
 mod error;
 mod execution;
+mod model_role;
 mod record;
 mod search;
 mod status;
@@ -10,6 +11,7 @@ mod status;
 pub use embedding_model::EmbeddingModelId;
 pub use error::{ErrorKind, FastSearchError};
 pub use execution::{DeviceCapabilityStatus, ExecutionDevice};
+pub use model_role::{ModelRoleKind, ProductionModelRole};
 pub use record::{
     CanonicalRecord, ContentHash, FileHash, LogicalRootId, RecordKind, RootedSourceLocator,
     SourceAdmission, SourceLocator, SourceSelector, SourceSnapshot, StableId,
