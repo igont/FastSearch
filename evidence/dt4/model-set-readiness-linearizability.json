@@ -1,0 +1,68 @@
+{
+  "schema": "FASTSEARCH-DT4-MODEL-SET-READINESS-v1",
+  "task_id": "FASTSEARCH-DT4-B-MODEL-READINESS",
+  "leaf": "A4",
+  "base_revision": "82cc385f7b3543162197c6711a986a18fa199b8f",
+  "candidate_relation": "the commit containing this evidence is the immutable A4 candidate",
+  "date": "2026-08-23",
+  "scope": {
+    "network_used": false,
+    "real_model_weights_used": false,
+    "search_or_indexing_used": false,
+    "fixtures": "temporary directories, exact marker bytes, and deterministic process barriers only"
+  },
+  "contract": {
+    "writer_lock": "model-set.install.lock covers artifact acquisition, four role probes, role marker publication, and aggregate commit",
+    "reader_lock": "models status verifies aggregate marker, exact role marker bytes, manifests, and required artifact size/SHA-256 under the same lock",
+    "not_ready": "marker-only, missing, corrupt, mixed, or artifact-invalid state returns MODEL_SET_NOT_READY",
+    "public_boundary": "marker-only filesystem reader is crate-test-only and is not exported as a readiness API"
+  },
+  "deterministic_oracles": {
+    "role_state_matrix": {
+      "combinations": 16,
+      "ready_combinations": 1,
+      "rule": "only 4/4 exact role markers are READY"
+    },
+    "process_race": {
+      "processes": [
+        "writer-one",
+        "writer-two",
+        "reader"
+      ],
+      "barrier": "writer-one pauses after publishing two of four content-addressed role markers",
+      "observations": [
+        "writer-two cannot reach its midpoint while writer-one owns the lock",
+        "reader cannot return while writer-one is at the two-of-four midpoint",
+        "reader returns the complete first or second generation, never the old or partial generation",
+        "the final aggregate snapshot is the complete second-writer generation"
+      ]
+    }
+  },
+  "verification": [
+    {
+      "command": "cargo test --lib application::model_readiness::tests -- --nocapture",
+      "result": "PASS: 12 passed, 0 failed"
+    },
+    {
+      "command": "cargo test --test model_role_contract",
+      "result": "PASS: 4 passed, 0 failed"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo fmt -- --check",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test --workspace",
+      "result": "PASS: all ordinary workspace tests; pre-existing model/network/release tests remained explicitly ignored"
+    }
+  ],
+  "deferred_to_a5": [
+    "full SHA-256 scans of the four real pinned model copies",
+    "per-role real corruption and recovery",
+    "release-binary acceptance against the verified local artifact store"
+  ]
+}

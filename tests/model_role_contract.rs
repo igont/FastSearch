@@ -123,7 +123,7 @@ fn independent_oracle_artifact_is_self_identifying_and_covers_four_probes() {
 }
 
 #[test]
-fn public_model_status_reads_the_durable_snapshot_without_a_workspace() {
+fn public_model_status_rejects_marker_only_state_without_a_workspace() {
     let binary = env!("CARGO_BIN_EXE_fastsearch");
     let home = std::env::temp_dir().join(format!("fastsearch-model-status-{}", std::process::id()));
     if home.exists() {
@@ -141,17 +141,16 @@ fn public_model_status_reads_the_durable_snapshot_without_a_workspace() {
         .env("FASTSEARCH_HOME", &home)
         .output()
         .unwrap();
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(report["status"], "error");
+    assert_eq!(report["error"]["code"], "model_readiness_failed");
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("MODEL_SET_NOT_READY:")
     );
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["status"], "ok");
-    assert_eq!(report["kind"], "model_set");
-    assert_eq!(report["ready"], true);
-    assert_eq!(report["roles"].as_array().unwrap().len(), 4);
-    assert_eq!(report["downloaded_bytes"], 0);
     assert!(!home.join("catalog.json").exists());
     assert!(!home.join("workspaces").exists());
 

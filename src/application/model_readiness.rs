@@ -549,27 +549,51 @@ pub fn publish_model_set_snapshot(
     markers: Vec<RoleReadinessMarker>,
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
     with_model_set_lock(model_root, || {
-        let snapshot = ModelSetReadySnapshot::new(markers.clone()).map_err(contract_error)?;
-        for marker in markers {
-            let manifest = RoleArtifactManifest::for_role(marker.role());
-            if marker.manifest_sha256 != sha256(&manifest.to_json()) {
-                return Err(contract_error(ModelContractError::DurableManifestMismatch(
-                    marker.role(),
-                )));
-            }
-            let (manifest_path, marker_path) =
-                model_role_paths(model_root, marker.role(), &marker.marker_sha256());
-            atomic_write(&manifest_path, &manifest.to_json())?;
-            atomic_write(&marker_path, &marker.to_json())?;
-        }
-        atomic_write(&model_root.join(MODEL_SET_READY_FILE), &snapshot.to_json())?;
-        Ok(snapshot)
+        publish_model_set_snapshot_locked(model_root, markers)
     })
 }
 
-/// Reads and verifies one generation and its current role markers under the same lock.
-pub fn read_model_set_snapshot(
+pub(crate) fn publish_model_set_snapshot_locked(
     model_root: &Path,
+    markers: Vec<RoleReadinessMarker>,
+) -> Result<ModelSetReadySnapshot, FastSearchError> {
+    publish_model_set_snapshot_locked_with_observer(model_root, markers, |_| {})
+}
+
+fn publish_model_set_snapshot_locked_with_observer(
+    model_root: &Path,
+    markers: Vec<RoleReadinessMarker>,
+    mut role_published: impl FnMut(usize),
+) -> Result<ModelSetReadySnapshot, FastSearchError> {
+    let snapshot = ModelSetReadySnapshot::new(markers.clone()).map_err(contract_error)?;
+    for (index, marker) in markers.into_iter().enumerate() {
+        let manifest = RoleArtifactManifest::for_role(marker.role());
+        if marker.manifest_sha256 != sha256(&manifest.to_json()) {
+            return Err(contract_error(ModelContractError::DurableManifestMismatch(
+                marker.role(),
+            )));
+        }
+        let (manifest_path, marker_path) =
+            model_role_paths(model_root, marker.role(), &marker.marker_sha256());
+        atomic_write(&manifest_path, &manifest.to_json())?;
+        atomic_write(&marker_path, &marker.to_json())?;
+        role_published(index + 1);
+    }
+    atomic_write(&model_root.join(MODEL_SET_READY_FILE), &snapshot.to_json())?;
+    Ok(snapshot)
+}
+
+/// Reads and verifies one generation and its current role markers under the same lock.
+#[cfg(test)]
+pub(crate) fn read_model_set_snapshot(
+    model_root: &Path,
+) -> Result<ModelSetReadySnapshot, FastSearchError> {
+    read_model_set_snapshot_with_artifacts(model_root, |_| Ok(()))
+}
+
+pub(crate) fn read_model_set_snapshot_with_artifacts(
+    model_root: &Path,
+    mut verify_artifacts: impl FnMut(ProductionModelRole) -> Result<(), FastSearchError>,
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
     with_model_set_lock(model_root, || {
         let bytes = fs::read(model_root.join(MODEL_SET_READY_FILE)).map_err(state_error)?;
@@ -601,6 +625,7 @@ pub fn read_model_set_snapshot(
                     expected.role,
                 )));
             }
+            verify_artifacts(expected.role)?;
             durable_markers.push(marker);
         }
         let durable_snapshot =
@@ -612,7 +637,7 @@ pub fn read_model_set_snapshot(
     })
 }
 
-fn with_model_set_lock<T>(
+pub(crate) fn with_model_set_lock<T>(
     model_root: &Path,
     operation: impl FnOnce() -> Result<T, FastSearchError>,
 ) -> Result<T, FastSearchError> {
@@ -711,9 +736,10 @@ pub fn model_role_paths(
 #[cfg(test)]
 mod tests {
     use std::{
+        process::{Child, Command},
         sync::atomic::{AtomicU64, Ordering},
         thread,
-        time::{Duration, SystemTime},
+        time::{Duration, Instant, SystemTime},
     };
 
     use super::*;
@@ -743,6 +769,10 @@ mod tests {
     }
 
     fn markers() -> Vec<RoleReadinessMarker> {
+        markers_for("11")
+    }
+
+    fn markers_for(environment_byte: &str) -> Vec<RoleReadinessMarker> {
         ProductionModelRole::ALL
             .into_iter()
             .map(|role| {
@@ -753,11 +783,85 @@ mod tests {
                     descriptor.revision,
                     descriptor.compute_contract_sha256(),
                     descriptor.manifest_sha256(),
-                    ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
+                    ModelRuntimeIdentity::qualified(role, environment_byte.repeat(32)).unwrap(),
                 )
                 .unwrap()
             })
             .collect()
+    }
+
+    fn wait_for(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_child(mut child: Child) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "model-set helper exited with {status}");
+                return;
+            }
+            assert!(Instant::now() < deadline, "model-set helper timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn spawn_helper(root: &Path, operation: &str, prefix: &str, environment: &str) -> Child {
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "application::model_readiness::tests::model_set_readiness_process_helper",
+                "--nocapture",
+            ])
+            .env("FASTSEARCH_MODEL_SET_HELPER", operation)
+            .env("FASTSEARCH_MODEL_SET_ROOT", root)
+            .env("FASTSEARCH_MODEL_SET_PREFIX", prefix)
+            .env("FASTSEARCH_MODEL_SET_ENVIRONMENT", environment)
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn model_set_readiness_process_helper() {
+        let Ok(operation) = std::env::var("FASTSEARCH_MODEL_SET_HELPER") else {
+            return;
+        };
+        let root = PathBuf::from(std::env::var_os("FASTSEARCH_MODEL_SET_ROOT").unwrap());
+        let prefix = std::env::var("FASTSEARCH_MODEL_SET_PREFIX").unwrap();
+        let environment = std::env::var("FASTSEARCH_MODEL_SET_ENVIRONMENT").unwrap();
+        let signal = |suffix: &str| root.join(format!("{prefix}-{suffix}"));
+        fs::write(signal("started"), b"started").unwrap();
+        match operation.as_str() {
+            "writer" => {
+                let snapshot = with_model_set_lock(&root, || {
+                    publish_model_set_snapshot_locked_with_observer(
+                        &root,
+                        markers_for(&environment),
+                        |published| {
+                            if published == 2 {
+                                fs::write(signal("midpoint"), b"two-of-four").unwrap();
+                                wait_for(&signal("continue"));
+                            }
+                        },
+                    )
+                })
+                .unwrap();
+                fs::write(signal("result"), snapshot.generation()).unwrap();
+            }
+            "reader" => {
+                let snapshot = read_model_set_snapshot(&root).unwrap();
+                fs::write(signal("result"), snapshot.generation()).unwrap();
+            }
+            _ => panic!("unknown model-set helper operation"),
+        }
     }
 
     #[test]
@@ -870,6 +974,97 @@ mod tests {
             }
             assert!(read_model_set_snapshot(&root.0).is_err(), "{failure}");
         }
+    }
+
+    #[test]
+    fn model_set_readiness_covers_all_sixteen_role_combinations() {
+        for present_mask in 0_u8..16 {
+            let root = TempRoot::new();
+            let snapshot = publish_model_set_snapshot(&root.0, markers()).unwrap();
+            for (index, role) in snapshot.roles.iter().enumerate() {
+                if present_mask & (1 << index) == 0 {
+                    let (_, marker_path) =
+                        model_role_paths(&root.0, role.role, &role.marker_sha256);
+                    fs::remove_file(marker_path).unwrap();
+                }
+            }
+            assert_eq!(
+                read_model_set_snapshot(&root.0).is_ok(),
+                present_mask == 0b1111,
+                "role mask {present_mask:04b}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_set_readiness_artifact_validation_runs_inside_the_common_lock() {
+        let root = TempRoot::new();
+        publish_model_set_snapshot(&root.0, markers()).unwrap();
+        let mut observed = Vec::new();
+        read_model_set_snapshot_with_artifacts(&root.0, |role| {
+            observed.push(role);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(observed, ProductionModelRole::ALL);
+
+        let error = read_model_set_snapshot_with_artifacts(&root.0, |role| {
+            if role == ProductionModelRole::NomicEmbedTextV2Moe {
+                Err(state_error(std::io::Error::other(
+                    "fixture digest mismatch",
+                )))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn model_set_readiness_is_linearizable_across_processes_and_serializes_writers() {
+        let root = TempRoot::new();
+        let old = publish_model_set_snapshot(&root.0, markers_for("11")).unwrap();
+        let first_expected = ModelSetReadySnapshot::new(markers_for("22")).unwrap();
+        let second_expected = ModelSetReadySnapshot::new(markers_for("33")).unwrap();
+
+        let writer_one = spawn_helper(&root.0, "writer", "writer-one", "22");
+        wait_for(&root.0.join("writer-one-midpoint"));
+
+        let writer_two = spawn_helper(&root.0, "writer", "writer-two", "33");
+        wait_for(&root.0.join("writer-two-started"));
+        let reader = spawn_helper(&root.0, "reader", "reader", "00");
+        wait_for(&root.0.join("reader-started"));
+        thread::sleep(Duration::from_millis(150));
+        assert!(!root.0.join("writer-two-midpoint").exists());
+        assert!(!root.0.join("reader-result").exists());
+
+        fs::write(root.0.join("writer-one-continue"), b"continue").unwrap();
+        wait_child(writer_one);
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !root.0.join("writer-two-midpoint").exists() && !root.0.join("reader-result").exists()
+        {
+            assert!(Instant::now() < deadline, "neither queued process advanced");
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(root.0.join("writer-two-continue"), b"continue").unwrap();
+        wait_child(writer_two);
+        wait_child(reader);
+
+        let writer_one_generation = fs::read_to_string(root.0.join("writer-one-result")).unwrap();
+        let writer_two_generation = fs::read_to_string(root.0.join("writer-two-result")).unwrap();
+        let reader_generation = fs::read_to_string(root.0.join("reader-result")).unwrap();
+        assert_eq!(writer_one_generation, first_expected.generation());
+        assert_eq!(writer_two_generation, second_expected.generation());
+        assert!(
+            reader_generation == first_expected.generation()
+                || reader_generation == second_expected.generation()
+        );
+        assert_ne!(reader_generation, old.generation());
+        assert_eq!(
+            read_model_set_snapshot(&root.0).unwrap().generation(),
+            second_expected.generation()
+        );
     }
 
     #[test]

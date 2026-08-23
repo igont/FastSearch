@@ -42,7 +42,7 @@ pub use model_readiness::{
     ModelRuntimeTarget, ModelSetReadySnapshot, ModelSetRoleSnapshot, PRODUCTION_MODEL_CATALOG,
     ProductionModelDescriptor, ROLE_MANIFEST_FILE, ROLE_READY_FILE, RoleArtifactManifest,
     RoleReadinessMarker, model_role_paths, model_set_paths, production_model_descriptor,
-    publish_model_set_snapshot, read_model_set_snapshot,
+    publish_model_set_snapshot,
 };
 pub use production::{ModelPartitionMetrics, ProductionConfig, ProductionRuntime};
 pub use public_search::{

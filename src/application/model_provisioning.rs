@@ -24,9 +24,16 @@ use crate::{
 
 use super::{
     ModelRuntimeIdentity, ModelSetReadySnapshot, ProductionModelDescriptor, RoleReadinessMarker,
-    production_model_descriptor, publish_model_set_snapshot, read_model_set_snapshot,
+    model_readiness::{
+        publish_model_set_snapshot_locked, read_model_set_snapshot_with_artifacts,
+        with_model_set_lock,
+    },
+    production_model_descriptor,
     workspace::product_home,
 };
+
+#[cfg(test)]
+use super::{model_readiness::read_model_set_snapshot, publish_model_set_snapshot};
 
 const OFFICIAL_MANIFEST: &[u8] =
     include_bytes!("../../evidence/dt4/fixtures/ts-dt4-01/model-manifest.json");
@@ -193,30 +200,33 @@ pub fn prepare_production_model_set() -> Result<ModelSetCommandReport, FastSearc
     let provider = ArtifactProvider::new()?;
     let oracle: Oracle = serde_json::from_slice(ORACLE).map_err(readiness_error)?;
     let cases: OracleCases = serde_json::from_slice(ORACLE_CASES).map_err(readiness_error)?;
-    let mut markers = Vec::with_capacity(ProductionModelRole::ALL.len());
-    let mut downloaded_bytes = 0;
+    let (snapshot, downloaded_bytes) = with_model_set_lock(&model_root, || {
+        let mut markers = Vec::with_capacity(ProductionModelRole::ALL.len());
+        let mut downloaded_bytes = 0;
 
-    for role in ProductionModelRole::ALL {
-        let descriptor = production_model_descriptor(role);
-        let cache_root = model_root.join("artifacts").join(role.slug()).join("hub");
-        let snapshot_root = provider.ensure(descriptor, &cache_root, &mut downloaded_bytes)?;
-        verify_role(role, &cache_root, &snapshot_root, &oracle, &cases)?;
-        let runtime = ModelRuntimeIdentity::qualified(role, runtime_environment_sha256(role))
-            .map_err(readiness_error)?;
-        markers.push(
-            RoleReadinessMarker::new(
-                role,
-                descriptor.repository,
-                descriptor.revision,
-                descriptor.compute_contract_sha256(),
-                descriptor.manifest_sha256(),
-                runtime,
-            )
-            .map_err(readiness_error)?,
-        );
-    }
+        for role in ProductionModelRole::ALL {
+            let descriptor = production_model_descriptor(role);
+            let cache_root = model_root.join("artifacts").join(role.slug()).join("hub");
+            let snapshot_root = provider.ensure(descriptor, &cache_root, &mut downloaded_bytes)?;
+            verify_role(role, &cache_root, &snapshot_root, &oracle, &cases)?;
+            let runtime = ModelRuntimeIdentity::qualified(role, runtime_environment_sha256(role))
+                .map_err(readiness_error)?;
+            markers.push(
+                RoleReadinessMarker::new(
+                    role,
+                    descriptor.repository,
+                    descriptor.revision,
+                    descriptor.compute_contract_sha256(),
+                    descriptor.manifest_sha256(),
+                    runtime,
+                )
+                .map_err(readiness_error)?,
+            );
+        }
 
-    let snapshot = publish_model_set_snapshot(&model_root, markers)?;
+        let snapshot = publish_model_set_snapshot_locked(&model_root, markers)?;
+        Ok((snapshot, downloaded_bytes))
+    })?;
     Ok(ModelSetCommandReport::from_snapshot(
         &snapshot,
         downloaded_bytes,
@@ -226,12 +236,54 @@ pub fn prepare_production_model_set() -> Result<ModelSetCommandReport, FastSearc
 
 pub fn production_model_set_status() -> Result<ModelSetCommandReport, FastSearchError> {
     let started = Instant::now();
-    let snapshot = read_model_set_snapshot(&model_root()?)?;
+    let model_root = model_root()?;
+    let snapshot = read_model_set_snapshot_with_artifacts(&model_root, |role| {
+        verify_cached_artifacts(&model_root, role)
+    })
+    .map_err(model_set_not_ready)?;
     Ok(ModelSetCommandReport::from_snapshot(
         &snapshot,
         0,
         started.elapsed().as_millis(),
     ))
+}
+
+fn verify_cached_artifacts(
+    model_root: &Path,
+    role: ProductionModelRole,
+) -> Result<(), FastSearchError> {
+    let descriptor = production_model_descriptor(role);
+    let snapshot_root = model_root
+        .join("artifacts")
+        .join(role.slug())
+        .join("hub")
+        .join(format!(
+            "models--{}",
+            descriptor.repository.replace('/', "--")
+        ))
+        .join("snapshots")
+        .join(descriptor.revision);
+    for artifact in descriptor.required_files {
+        if !exact_file(
+            &snapshot_root.join(artifact.path),
+            artifact.bytes,
+            artifact.sha256,
+        )? {
+            return Err(readiness_error(format!(
+                "{} artifact {} is not exact",
+                role.slug(),
+                artifact.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn model_set_not_ready(error: FastSearchError) -> FastSearchError {
+    FastSearchError::new(
+        ErrorKind::InvalidContent,
+        format!("MODEL_SET_NOT_READY: {}", error.message()),
+    )
 }
 
 struct ArtifactProvider {
