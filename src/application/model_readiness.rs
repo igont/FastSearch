@@ -21,6 +21,9 @@ use super::workspace::atomic_write;
 pub const MODEL_SET_SCHEMA: u8 = 1;
 pub const MODEL_SET_LOCK_FILE: &str = "model-set.install.lock";
 pub const MODEL_SET_READY_FILE: &str = "model-set.ready.json";
+pub const MODEL_SET_ROLES_DIRECTORY: &str = "model-set.roles";
+pub const ROLE_MANIFEST_FILE: &str = "manifest.json";
+pub const ROLE_READY_FILE: &str = "role.ready.json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ModelArtifactDescriptor {
@@ -37,6 +40,60 @@ pub struct ProductionModelDescriptor {
     pub revision: &'static str,
     pub compute_contract: &'static str,
     pub required_files: &'static [ModelArtifactDescriptor],
+}
+
+/// Closed set of qualified runtime implementations. Exact dependency versions
+/// are part of the serialized variant name and therefore of every marker hash.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ModelRuntimeMechanism {
+    #[serde(rename = "onnxruntime-2.0.0-rc.13-fastembed-5.17.4-cpu")]
+    OnnxRuntimeCpu,
+    #[serde(rename = "candle-core-0.11.0-transformers-0.11.0-nomic-moe-cpu")]
+    NomicCandleCpu,
+    #[serde(
+        rename = "candle-transformers-0.11.0-core-0.11.0-tokenizers-0.22.2-qwen3-causal-lm-cpu"
+    )]
+    Qwen3CausalLmCandleCpu,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelRuntimeTarget {
+    WindowsX86_64Cpu,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelRuntimeIdentity {
+    target: ModelRuntimeTarget,
+    mechanism: ModelRuntimeMechanism,
+    environment_sha256: String,
+}
+
+impl ModelRuntimeIdentity {
+    pub fn qualified(
+        role: ProductionModelRole,
+        environment_sha256: impl Into<String>,
+    ) -> Result<Self, ModelContractError> {
+        let identity = Self {
+            target: ModelRuntimeTarget::WindowsX86_64Cpu,
+            mechanism: expected_runtime_mechanism(role),
+            environment_sha256: environment_sha256.into(),
+        };
+        identity.validate_for_role(role)?;
+        Ok(identity)
+    }
+
+    fn validate_for_role(&self, role: ProductionModelRole) -> Result<(), ModelContractError> {
+        if self.target != ModelRuntimeTarget::WindowsX86_64Cpu
+            || self.mechanism != expected_runtime_mechanism(role)
+        {
+            return Err(ModelContractError::UnsupportedRuntime(role));
+        }
+        if !is_sha256(&self.environment_sha256) {
+            return Err(ModelContractError::InvalidRuntimeEnvironment);
+        }
+        Ok(())
+    }
 }
 
 const ARCTIC_FILES: &[ModelArtifactDescriptor] = &[
@@ -148,7 +205,7 @@ pub const PRODUCTION_MODEL_CATALOG: [ProductionModelDescriptor; 4] = [
         kind: ModelRoleKind::Reranker,
         repository: "Qwen/Qwen3-Reranker-0.6B",
         revision: "e61197ed45024b0ed8a2d74b80b4d909f1255473",
-        compute_contract: "engine=candle-qwen3-causal-lm;max-tokens=8192;padding=left;truncate-body=right;yes-token=9693;no-token=2152;score=softmax-yes",
+        compute_contract: "mechanism=candle_transformers::models::qwen3::ModelForCausalLM;candle-transformers=0.11.0;candle-core=0.11.0;tokenizers=0.22.2;device=cpu;max-tokens=8192;padding=left;truncate-body=right;yes-token=9693;no-token=2152;score=softmax-yes",
         required_files: QWEN_RERANKER_FILES,
     },
 ];
@@ -171,16 +228,71 @@ impl ProductionModelDescriptor {
 
     #[must_use]
     pub fn manifest_sha256(&self) -> String {
-        let mut canonical = String::new();
-        for artifact in self.required_files {
-            canonical.push_str(artifact.path);
-            canonical.push('\0');
-            canonical.push_str(&artifact.bytes.to_string());
-            canonical.push('\0');
-            canonical.push_str(artifact.sha256);
-            canonical.push('\n');
+        sha256(&RoleArtifactManifest::for_role(self.role).to_json())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredModelArtifact {
+    path: String,
+    bytes: u64,
+    sha256: String,
+}
+
+/// Immutable manifest stored next to one durable readiness marker.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RoleArtifactManifest {
+    schema: u8,
+    role: ProductionModelRole,
+    repository: String,
+    revision: String,
+    artifacts: Vec<StoredModelArtifact>,
+}
+
+impl RoleArtifactManifest {
+    #[must_use]
+    pub fn for_role(role: ProductionModelRole) -> Self {
+        let descriptor = production_model_descriptor(role);
+        Self {
+            schema: MODEL_SET_SCHEMA,
+            role,
+            repository: descriptor.repository.to_owned(),
+            revision: descriptor.revision.to_owned(),
+            artifacts: descriptor
+                .required_files
+                .iter()
+                .map(|artifact| StoredModelArtifact {
+                    path: artifact.path.to_owned(),
+                    bytes: artifact.bytes,
+                    sha256: artifact.sha256.to_owned(),
+                })
+                .collect(),
         }
-        sha256(canonical.as_bytes())
+    }
+
+    fn from_json(bytes: &[u8]) -> Result<Self, ModelContractError> {
+        let manifest: Self =
+            serde_json::from_slice(bytes).map_err(|_| ModelContractError::InvalidJson)?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    fn validate(&self) -> Result<(), ModelContractError> {
+        if self.schema != MODEL_SET_SCHEMA {
+            return Err(ModelContractError::InvalidSchema(self.schema));
+        }
+        let expected = Self::for_role(self.role);
+        if self != &expected {
+            return Err(ModelContractError::DurableManifestMismatch(self.role));
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn to_json(&self) -> Vec<u8> {
+        let mut bytes = serde_json::to_vec_pretty(self).expect("role manifest is serializable");
+        bytes.push(b'\n');
+        bytes
     }
 }
 
@@ -192,9 +304,12 @@ pub enum ModelContractError {
     InvalidDigest,
     MissingRole(ProductionModelRole),
     GenerationMismatch,
-    MarkerMismatch(ProductionModelRole),
     InvalidSchema(u8),
     InvalidJson,
+    UnsupportedRuntime(ProductionModelRole),
+    InvalidRuntimeEnvironment,
+    DurableMarkerMismatch(ProductionModelRole),
+    DurableManifestMismatch(ProductionModelRole),
 }
 
 impl fmt::Display for ModelContractError {
@@ -213,7 +328,7 @@ pub struct RoleReadinessMarker {
     revision: String,
     compute_contract_sha256: String,
     manifest_sha256: String,
-    runtime: String,
+    runtime: ModelRuntimeIdentity,
 }
 
 impl RoleReadinessMarker {
@@ -223,7 +338,7 @@ impl RoleReadinessMarker {
         revision: impl Into<String>,
         compute_contract_sha256: impl Into<String>,
         manifest_sha256: impl Into<String>,
-        runtime: impl Into<String>,
+        runtime: ModelRuntimeIdentity,
     ) -> Result<Self, ModelContractError> {
         let marker = Self {
             schema: MODEL_SET_SCHEMA,
@@ -232,7 +347,7 @@ impl RoleReadinessMarker {
             revision: revision.into(),
             compute_contract_sha256: compute_contract_sha256.into(),
             manifest_sha256: manifest_sha256.into(),
-            runtime: runtime.into(),
+            runtime,
         };
         marker.validate()?;
         Ok(marker)
@@ -256,6 +371,7 @@ impl RoleReadinessMarker {
         if !is_sha256(&self.compute_contract_sha256) || !is_sha256(&self.manifest_sha256) {
             return Err(ModelContractError::InvalidDigest);
         }
+        self.runtime.validate_for_role(self.role)?;
         Ok(())
     }
 
@@ -266,11 +382,21 @@ impl RoleReadinessMarker {
 
     #[must_use]
     pub fn marker_sha256(&self) -> String {
-        sha256(
-            serde_json::to_vec(self)
-                .expect("role marker is serializable")
-                .as_slice(),
-        )
+        sha256(&self.to_json())
+    }
+
+    #[must_use]
+    pub fn to_json(&self) -> Vec<u8> {
+        let mut bytes = serde_json::to_vec_pretty(self).expect("role marker is serializable");
+        bytes.push(b'\n');
+        bytes
+    }
+
+    fn from_json(bytes: &[u8]) -> Result<Self, ModelContractError> {
+        let marker: Self =
+            serde_json::from_slice(bytes).map_err(|_| ModelContractError::InvalidJson)?;
+        marker.validate()?;
+        Ok(marker)
     }
 }
 
@@ -343,46 +469,6 @@ impl ModelSetReadySnapshot {
         Ok(snapshot)
     }
 
-    pub fn validate_current_markers(
-        &self,
-        marker_hashes: &[(ProductionModelRole, String)],
-    ) -> Result<(), ModelContractError> {
-        self.validate()?;
-        let current_roles = marker_hashes
-            .iter()
-            .map(|(role, _)| *role)
-            .collect::<BTreeSet<_>>();
-        if current_roles.len() != marker_hashes.len() {
-            let mut roles = marker_hashes
-                .iter()
-                .map(|(role, _)| *role)
-                .collect::<Vec<_>>();
-            roles.sort_by_key(|role| role_order(*role));
-            let duplicate = roles
-                .windows(2)
-                .find(|pair| pair[0] == pair[1])
-                .map(|pair| pair[0])
-                .expect("a duplicate current role exists");
-            return Err(ModelContractError::DuplicateRole(duplicate));
-        }
-        for role in ProductionModelRole::ALL {
-            if !current_roles.contains(&role) {
-                return Err(ModelContractError::MissingRole(role));
-            }
-        }
-        for expected in &self.roles {
-            let actual = marker_hashes
-                .iter()
-                .find(|(role, _)| *role == expected.role)
-                .map(|(_, hash)| hash.as_str())
-                .ok_or(ModelContractError::MissingRole(expected.role))?;
-            if actual != expected.marker_sha256 {
-                return Err(ModelContractError::MarkerMismatch(expected.role));
-            }
-        }
-        Ok(())
-    }
-
     fn validate(&self) -> Result<(), ModelContractError> {
         if self.schema != MODEL_SET_SCHEMA {
             return Err(ModelContractError::InvalidSchema(self.schema));
@@ -441,7 +527,19 @@ pub fn publish_model_set_snapshot(
     markers: Vec<RoleReadinessMarker>,
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
     with_model_set_lock(model_root, || {
-        let snapshot = ModelSetReadySnapshot::new(markers).map_err(contract_error)?;
+        let snapshot = ModelSetReadySnapshot::new(markers.clone()).map_err(contract_error)?;
+        for marker in markers {
+            let manifest = RoleArtifactManifest::for_role(marker.role());
+            if marker.manifest_sha256 != sha256(&manifest.to_json()) {
+                return Err(contract_error(ModelContractError::DurableManifestMismatch(
+                    marker.role(),
+                )));
+            }
+            let (manifest_path, marker_path) =
+                model_role_paths(model_root, marker.role(), &marker.marker_sha256());
+            atomic_write(&manifest_path, &manifest.to_json())?;
+            atomic_write(&marker_path, &marker.to_json())?;
+        }
         atomic_write(&model_root.join(MODEL_SET_READY_FILE), &snapshot.to_json())?;
         Ok(snapshot)
     })
@@ -450,14 +548,44 @@ pub fn publish_model_set_snapshot(
 /// Reads and verifies one generation and its current role markers under the same lock.
 pub fn read_model_set_snapshot(
     model_root: &Path,
-    marker_hashes: &[(ProductionModelRole, String)],
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
     with_model_set_lock(model_root, || {
         let bytes = fs::read(model_root.join(MODEL_SET_READY_FILE)).map_err(state_error)?;
         let snapshot = ModelSetReadySnapshot::from_json(&bytes).map_err(contract_error)?;
-        snapshot
-            .validate_current_markers(marker_hashes)
-            .map_err(contract_error)?;
+        let mut durable_markers = Vec::with_capacity(snapshot.roles.len());
+        for expected in &snapshot.roles {
+            let (manifest_path, marker_path) =
+                model_role_paths(model_root, expected.role, &expected.marker_sha256);
+            let manifest_bytes = fs::read(manifest_path).map_err(state_error)?;
+            let manifest =
+                RoleArtifactManifest::from_json(&manifest_bytes).map_err(contract_error)?;
+            if manifest.role != expected.role {
+                return Err(contract_error(ModelContractError::DurableManifestMismatch(
+                    expected.role,
+                )));
+            }
+            let marker_bytes = fs::read(marker_path).map_err(state_error)?;
+            let marker = RoleReadinessMarker::from_json(&marker_bytes).map_err(contract_error)?;
+            if marker.role() != expected.role
+                || marker.marker_sha256() != expected.marker_sha256
+                || sha256(&marker_bytes) != expected.marker_sha256
+            {
+                return Err(contract_error(ModelContractError::DurableMarkerMismatch(
+                    expected.role,
+                )));
+            }
+            if marker.manifest_sha256 != sha256(&manifest_bytes) {
+                return Err(contract_error(ModelContractError::DurableManifestMismatch(
+                    expected.role,
+                )));
+            }
+            durable_markers.push(marker);
+        }
+        let durable_snapshot =
+            ModelSetReadySnapshot::new(durable_markers).map_err(contract_error)?;
+        if durable_snapshot != snapshot {
+            return Err(contract_error(ModelContractError::GenerationMismatch));
+        }
         Ok(snapshot)
     })
 }
@@ -483,6 +611,16 @@ fn role_order(role: ProductionModelRole) -> usize {
         .iter()
         .position(|candidate| *candidate == role)
         .expect("every production role has a canonical order")
+}
+
+const fn expected_runtime_mechanism(role: ProductionModelRole) -> ModelRuntimeMechanism {
+    match role {
+        ProductionModelRole::ArcticEmbedLV2 | ProductionModelRole::MultilingualE5Large => {
+            ModelRuntimeMechanism::OnnxRuntimeCpu
+        }
+        ProductionModelRole::NomicEmbedTextV2Moe => ModelRuntimeMechanism::NomicCandleCpu,
+        ProductionModelRole::Qwen3Reranker06B => ModelRuntimeMechanism::Qwen3CausalLmCandleCpu,
+    }
 }
 
 fn generation(roles: &[ModelSetRoleSnapshot]) -> String {
@@ -532,11 +670,28 @@ pub fn model_set_paths(model_root: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+#[must_use]
+pub fn model_role_paths(
+    model_root: &Path,
+    role: ProductionModelRole,
+    marker_sha256: &str,
+) -> (PathBuf, PathBuf) {
+    let directory = model_root
+        .join(MODEL_SET_ROLES_DIRECTORY)
+        .join(role.slug())
+        .join(marker_sha256);
+    (
+        directory.join(ROLE_MANIFEST_FILE),
+        directory.join(ROLE_READY_FILE),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         sync::atomic::{AtomicU64, Ordering},
-        time::SystemTime,
+        thread,
+        time::{Duration, SystemTime},
     };
 
     use super::*;
@@ -576,7 +731,7 @@ mod tests {
                     descriptor.revision,
                     descriptor.compute_contract_sha256(),
                     descriptor.manifest_sha256(),
-                    "windows-x86_64/cpu",
+                    ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
                 )
                 .unwrap()
             })
@@ -608,7 +763,11 @@ mod tests {
                 "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                 qwen.compute_contract_sha256(),
                 qwen.manifest_sha256(),
-                "windows-x86_64/cpu",
+                ModelRuntimeIdentity::qualified(
+                    ProductionModelRole::Qwen3Reranker06B,
+                    "11".repeat(32),
+                )
+                .unwrap(),
             ),
             Err(ModelContractError::IdentityMismatch(_))
         ));
@@ -628,28 +787,6 @@ mod tests {
             ModelSetReadySnapshot::new(duplicate),
             Err(ModelContractError::DuplicateRole(_))
         ));
-
-        let mut hashes = markers()
-            .into_iter()
-            .map(|marker| (marker.role(), marker.marker_sha256()))
-            .collect::<Vec<_>>();
-        hashes[2].1 = "00".repeat(32);
-        assert!(matches!(
-            first.validate_current_markers(&hashes),
-            Err(ModelContractError::MarkerMismatch(
-                ProductionModelRole::NomicEmbedTextV2Moe
-            ))
-        ));
-
-        let mut duplicate_hashes = markers()
-            .into_iter()
-            .map(|marker| (marker.role(), marker.marker_sha256()))
-            .collect::<Vec<_>>();
-        duplicate_hashes[1] = duplicate_hashes[0].clone();
-        assert!(matches!(
-            first.validate_current_markers(&duplicate_hashes),
-            Err(ModelContractError::DuplicateRole(_))
-        ));
     }
 
     #[test]
@@ -667,15 +804,123 @@ mod tests {
     fn aggregate_marker_is_published_and_read_through_one_lock() {
         let root = TempRoot::new();
         let markers = markers();
-        let hashes = markers
-            .iter()
-            .map(|marker| (marker.role(), marker.marker_sha256()))
-            .collect::<Vec<_>>();
         let published = publish_model_set_snapshot(&root.0, markers).unwrap();
-        let observed = read_model_set_snapshot(&root.0, &hashes).unwrap();
+        let observed = read_model_set_snapshot(&root.0).unwrap();
         assert_eq!(observed, published);
         let (lock, ready) = model_set_paths(&root.0);
         assert!(lock.is_file());
         assert!(ready.is_file());
+        for role in &published.roles {
+            let (manifest, marker) = model_role_paths(&root.0, role.role, &role.marker_sha256);
+            assert!(manifest.is_file());
+            assert!(marker.is_file());
+        }
+    }
+
+    #[test]
+    fn missing_corrupt_or_mixed_durable_role_state_is_never_ready() {
+        for failure in [
+            "missing-marker",
+            "corrupt-marker",
+            "reformatted-marker",
+            "missing-manifest",
+            "corrupt-manifest",
+            "mixed-marker",
+        ] {
+            let root = TempRoot::new();
+            let source_markers = markers();
+            let snapshot = publish_model_set_snapshot(&root.0, source_markers.clone()).unwrap();
+            let first = &snapshot.roles[0];
+            let (manifest_path, marker_path) =
+                model_role_paths(&root.0, first.role, &first.marker_sha256);
+            match failure {
+                "missing-marker" => fs::remove_file(&marker_path).unwrap(),
+                "corrupt-marker" => fs::write(&marker_path, b"not-json").unwrap(),
+                "reformatted-marker" => fs::write(
+                    &marker_path,
+                    serde_json::to_vec(&source_markers[0]).unwrap(),
+                )
+                .unwrap(),
+                "missing-manifest" => fs::remove_file(&manifest_path).unwrap(),
+                "corrupt-manifest" => fs::write(&manifest_path, b"{}").unwrap(),
+                "mixed-marker" => fs::write(&marker_path, source_markers[1].to_json()).unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(read_model_set_snapshot(&root.0).is_err(), "{failure}");
+        }
+    }
+
+    #[test]
+    fn reader_observes_role_files_only_after_acquiring_the_common_lock() {
+        let root = TempRoot::new();
+        let snapshot = publish_model_set_snapshot(&root.0, markers()).unwrap();
+        let first = &snapshot.roles[0];
+        let (_, marker_path) = model_role_paths(&root.0, first.role, &first.marker_sha256);
+        let (lock_path, _) = model_set_paths(&root.0);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        let model_root = root.0.clone();
+        let reader = thread::spawn(move || read_model_set_snapshot(&model_root));
+        thread::sleep(Duration::from_millis(100));
+        fs::write(marker_path, b"corrupt-while-reader-waits").unwrap();
+        FileExt::unlock(&lock).unwrap();
+        assert!(reader.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn qwen_runtime_versions_and_mechanism_are_closed_and_generation_bound() {
+        let role = ProductionModelRole::Qwen3Reranker06B;
+        let descriptor = production_model_descriptor(role);
+        for required in [
+            "candle_transformers::models::qwen3::ModelForCausalLM",
+            "candle-transformers=0.11.0",
+            "candle-core=0.11.0",
+            "tokenizers=0.22.2",
+        ] {
+            assert!(descriptor.compute_contract.contains(required));
+        }
+        assert_eq!(
+            ModelRuntimeIdentity::qualified(role, ""),
+            Err(ModelContractError::InvalidRuntimeEnvironment)
+        );
+
+        let marker = markers().pop().unwrap();
+        let mut unsupported_mechanism = serde_json::to_value(&marker).unwrap();
+        unsupported_mechanism["runtime"]["mechanism"] =
+            serde_json::Value::String("onnxruntime-2.0.0-rc.13-fastembed-5.17.4-cpu".to_owned());
+        assert!(matches!(
+            RoleReadinessMarker::from_json(&serde_json::to_vec(&unsupported_mechanism).unwrap()),
+            Err(ModelContractError::UnsupportedRuntime(
+                ProductionModelRole::Qwen3Reranker06B
+            ))
+        ));
+
+        let mut unsupported_version = serde_json::to_value(&marker).unwrap();
+        unsupported_version["runtime"]["mechanism"] = serde_json::Value::String(
+            "candle-transformers-0.12.0-core-0.11.0-tokenizers-0.22.2-qwen3-causal-lm-cpu"
+                .to_owned(),
+        );
+        assert!(matches!(
+            RoleReadinessMarker::from_json(&serde_json::to_vec(&unsupported_version).unwrap()),
+            Err(ModelContractError::InvalidJson)
+        ));
+
+        let first = ModelSetReadySnapshot::new(markers()).unwrap();
+        let mut changed_environment = markers();
+        changed_environment[3] = RoleReadinessMarker::new(
+            role,
+            descriptor.repository,
+            descriptor.revision,
+            descriptor.compute_contract_sha256(),
+            descriptor.manifest_sha256(),
+            ModelRuntimeIdentity::qualified(role, "22".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let second = ModelSetReadySnapshot::new(changed_environment).unwrap();
+        assert_ne!(first.generation(), second.generation());
     }
 }

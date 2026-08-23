@@ -2,7 +2,7 @@ use std::{fs, path::Path, process::Command};
 
 use fastsearch::{
     application::{
-        ModelSetReadySnapshot, PRODUCTION_MODEL_CATALOG, RoleReadinessMarker,
+        ModelRuntimeIdentity, ModelSetReadySnapshot, PRODUCTION_MODEL_CATALOG, RoleReadinessMarker,
         production_model_descriptor,
     },
     domain::ProductionModelRole,
@@ -22,7 +22,7 @@ fn marker(role: ProductionModelRole) -> RoleReadinessMarker {
         descriptor.revision,
         descriptor.compute_contract_sha256(),
         descriptor.manifest_sha256(),
-        "windows-x86_64/cpu",
+        ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
     )
     .unwrap()
 }

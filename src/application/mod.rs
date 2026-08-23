@@ -32,9 +32,11 @@ pub use model_cache::{
     ensure_embedding_model_with_progress, model_descriptor, model_runtime_capabilities,
 };
 pub use model_readiness::{
-    MODEL_SET_LOCK_FILE, MODEL_SET_READY_FILE, MODEL_SET_SCHEMA, ModelArtifactDescriptor,
-    ModelContractError, ModelSetReadySnapshot, ModelSetRoleSnapshot, PRODUCTION_MODEL_CATALOG,
-    ProductionModelDescriptor, RoleReadinessMarker, model_set_paths, production_model_descriptor,
+    MODEL_SET_LOCK_FILE, MODEL_SET_READY_FILE, MODEL_SET_ROLES_DIRECTORY, MODEL_SET_SCHEMA,
+    ModelArtifactDescriptor, ModelContractError, ModelRuntimeIdentity, ModelRuntimeMechanism,
+    ModelRuntimeTarget, ModelSetReadySnapshot, ModelSetRoleSnapshot, PRODUCTION_MODEL_CATALOG,
+    ProductionModelDescriptor, ROLE_MANIFEST_FILE, ROLE_READY_FILE, RoleArtifactManifest,
+    RoleReadinessMarker, model_role_paths, model_set_paths, production_model_descriptor,
     publish_model_set_snapshot, read_model_set_snapshot,
 };
 pub use production::{ModelPartitionMetrics, ProductionConfig, ProductionRuntime};
