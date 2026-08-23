@@ -1,0 +1,500 @@
+{
+  "candidate_binary": {
+    "bytes": 48271360,
+    "path": "D:\\Igor\\Programming\\FastSearch-dt4-b-a\\..\\.cargo-target\\FastSearch\\release\\fastsearch.exe",
+    "sha256": "e3e105790d78c86dc6736e5836b76b3eb733f1884587c3c92105c2c21e764d14"
+  },
+  "details": {
+    "catalog": {
+      "bytes": 3220,
+      "path": "D:\\Igor\\Programming\\FastSearch-dt4-b-a\\evidence/dt4/fixtures/ts-dt4-01/model-manifest.json",
+      "sha256": "3215b8de50c6b9d826c8dab98c78afd4dba6dffba6396d3afc2bd88bb40db3e4"
+    },
+    "commands": [
+      {
+        "exit_code": 0,
+        "label": "initial_prepare",
+        "stderr": "",
+        "stdout_json": {
+          "downloaded_bytes": 0,
+          "duration_ms": 12344,
+          "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+          "kind": "model_set",
+          "ready": true,
+          "roles": [
+            {
+              "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+              "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+              "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+              "role": "arctic-embed-l-v2"
+            },
+            {
+              "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+              "repository": "Qdrant/multilingual-e5-large-onnx",
+              "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+              "role": "multilingual-e5-large"
+            },
+            {
+              "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+              "repository": "nomic-ai/nomic-embed-text-v2-moe",
+              "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+              "role": "nomic-embed-text-v2-moe"
+            },
+            {
+              "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+              "repository": "Qwen/Qwen3-Reranker-0.6B",
+              "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+              "role": "qwen3-reranker-0.6b"
+            }
+          ],
+          "schema_version": 1,
+          "status": "ok"
+        }
+      },
+      {
+        "exit_code": 0,
+        "label": "reopen_status",
+        "stderr": "",
+        "stdout_json": {
+          "downloaded_bytes": 0,
+          "duration_ms": 3643,
+          "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+          "kind": "model_set",
+          "ready": true,
+          "roles": [
+            {
+              "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+              "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+              "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+              "role": "arctic-embed-l-v2"
+            },
+            {
+              "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+              "repository": "Qdrant/multilingual-e5-large-onnx",
+              "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+              "role": "multilingual-e5-large"
+            },
+            {
+              "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+              "repository": "nomic-ai/nomic-embed-text-v2-moe",
+              "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+              "role": "nomic-embed-text-v2-moe"
+            },
+            {
+              "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+              "repository": "Qwen/Qwen3-Reranker-0.6B",
+              "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+              "role": "qwen3-reranker-0.6b"
+            }
+          ],
+          "schema_version": 1,
+          "status": "ok"
+        }
+      }
+    ],
+    "corruption_recovery": [
+      {
+        "artifact": "config.json",
+        "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+        "not_ready": {
+          "exit_code": 1,
+          "label": "status_after_corruption",
+          "stderr": "{\"error\":{\"code\":\"model_readiness_failed\",\"message\":\"MODEL_SET_NOT_READY: model-set preparation: arctic-embed-l-v2 artifact config.json is not exact: model-set preparation: missing, truncated, or digest-mismatched bytes\"},\"schema_version\":1,\"status\":\"error\"}\n",
+          "stdout_json": null
+        },
+        "repair": {
+          "exit_code": 0,
+          "label": "targeted_local_repair",
+          "stderr": "",
+          "stdout_json": {
+            "downloaded_bytes": 0,
+            "duration_ms": 11975,
+            "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+            "kind": "model_set",
+            "ready": true,
+            "roles": [
+              {
+                "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+                "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+                "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+                "role": "arctic-embed-l-v2"
+              },
+              {
+                "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+                "repository": "Qdrant/multilingual-e5-large-onnx",
+                "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+                "role": "multilingual-e5-large"
+              },
+              {
+                "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+                "repository": "nomic-ai/nomic-embed-text-v2-moe",
+                "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+                "role": "nomic-embed-text-v2-moe"
+              },
+              {
+                "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+                "repository": "Qwen/Qwen3-Reranker-0.6B",
+                "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+                "role": "qwen3-reranker-0.6b"
+              }
+            ],
+            "schema_version": 1,
+            "status": "ok"
+          }
+        },
+        "role": "arctic-embed-l-v2",
+        "source_bytes_unchanged": true
+      },
+      {
+        "artifact": "config.json",
+        "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+        "not_ready": {
+          "exit_code": 1,
+          "label": "status_after_corruption",
+          "stderr": "{\"error\":{\"code\":\"model_readiness_failed\",\"message\":\"MODEL_SET_NOT_READY: model-set preparation: multilingual-e5-large artifact config.json is not exact: model-set preparation: missing, truncated, or digest-mismatched bytes\"},\"schema_version\":1,\"status\":\"error\"}\n",
+          "stdout_json": null
+        },
+        "repair": {
+          "exit_code": 0,
+          "label": "targeted_local_repair",
+          "stderr": "",
+          "stdout_json": {
+            "downloaded_bytes": 0,
+            "duration_ms": 11909,
+            "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+            "kind": "model_set",
+            "ready": true,
+            "roles": [
+              {
+                "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+                "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+                "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+                "role": "arctic-embed-l-v2"
+              },
+              {
+                "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+                "repository": "Qdrant/multilingual-e5-large-onnx",
+                "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+                "role": "multilingual-e5-large"
+              },
+              {
+                "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+                "repository": "nomic-ai/nomic-embed-text-v2-moe",
+                "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+                "role": "nomic-embed-text-v2-moe"
+              },
+              {
+                "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+                "repository": "Qwen/Qwen3-Reranker-0.6B",
+                "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+                "role": "qwen3-reranker-0.6b"
+              }
+            ],
+            "schema_version": 1,
+            "status": "ok"
+          }
+        },
+        "role": "multilingual-e5-large",
+        "source_bytes_unchanged": true
+      },
+      {
+        "artifact": "config.json",
+        "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+        "not_ready": {
+          "exit_code": 1,
+          "label": "status_after_corruption",
+          "stderr": "{\"error\":{\"code\":\"model_readiness_failed\",\"message\":\"MODEL_SET_NOT_READY: model-set preparation: nomic-embed-text-v2-moe artifact config.json is not exact: model-set preparation: missing, truncated, or digest-mismatched bytes\"},\"schema_version\":1,\"status\":\"error\"}\n",
+          "stdout_json": null
+        },
+        "repair": {
+          "exit_code": 0,
+          "label": "targeted_local_repair",
+          "stderr": "",
+          "stdout_json": {
+            "downloaded_bytes": 0,
+            "duration_ms": 12031,
+            "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+            "kind": "model_set",
+            "ready": true,
+            "roles": [
+              {
+                "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+                "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+                "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+                "role": "arctic-embed-l-v2"
+              },
+              {
+                "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+                "repository": "Qdrant/multilingual-e5-large-onnx",
+                "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+                "role": "multilingual-e5-large"
+              },
+              {
+                "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+                "repository": "nomic-ai/nomic-embed-text-v2-moe",
+                "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+                "role": "nomic-embed-text-v2-moe"
+              },
+              {
+                "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+                "repository": "Qwen/Qwen3-Reranker-0.6B",
+                "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+                "role": "qwen3-reranker-0.6b"
+              }
+            ],
+            "schema_version": 1,
+            "status": "ok"
+          }
+        },
+        "role": "nomic-embed-text-v2-moe",
+        "source_bytes_unchanged": true
+      },
+      {
+        "artifact": "config.json",
+        "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+        "not_ready": {
+          "exit_code": 1,
+          "label": "status_after_corruption",
+          "stderr": "{\"error\":{\"code\":\"model_readiness_failed\",\"message\":\"MODEL_SET_NOT_READY: model-set preparation: qwen3-reranker-0.6b artifact config.json is not exact: model-set preparation: missing, truncated, or digest-mismatched bytes\"},\"schema_version\":1,\"status\":\"error\"}\n",
+          "stdout_json": null
+        },
+        "repair": {
+          "exit_code": 0,
+          "label": "targeted_local_repair",
+          "stderr": "",
+          "stdout_json": {
+            "downloaded_bytes": 0,
+            "duration_ms": 11919,
+            "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+            "kind": "model_set",
+            "ready": true,
+            "roles": [
+              {
+                "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+                "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+                "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+                "role": "arctic-embed-l-v2"
+              },
+              {
+                "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+                "repository": "Qdrant/multilingual-e5-large-onnx",
+                "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+                "role": "multilingual-e5-large"
+              },
+              {
+                "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+                "repository": "nomic-ai/nomic-embed-text-v2-moe",
+                "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+                "role": "nomic-embed-text-v2-moe"
+              },
+              {
+                "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+                "repository": "Qwen/Qwen3-Reranker-0.6B",
+                "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+                "role": "qwen3-reranker-0.6b"
+              }
+            ],
+            "schema_version": 1,
+            "status": "ok"
+          }
+        },
+        "role": "qwen3-reranker-0.6b",
+        "source_bytes_unchanged": true
+      }
+    ],
+    "isolated_home_cleanup": "scheduled after atomic evidence readback",
+    "oracle_sha256": "0a11ff11c689a6c9a5e5c5ae25faf422595043cf3d1f0400a7db2034a7f498f0",
+    "parallel_reopen": {
+      "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+      "left": {
+        "exit_code": 0,
+        "label": "parallel_status_1",
+        "stderr": "",
+        "stdout_json": {
+          "downloaded_bytes": 0,
+          "duration_ms": 3649,
+          "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+          "kind": "model_set",
+          "ready": true,
+          "roles": [
+            {
+              "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+              "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+              "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+              "role": "arctic-embed-l-v2"
+            },
+            {
+              "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+              "repository": "Qdrant/multilingual-e5-large-onnx",
+              "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+              "role": "multilingual-e5-large"
+            },
+            {
+              "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+              "repository": "nomic-ai/nomic-embed-text-v2-moe",
+              "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+              "role": "nomic-embed-text-v2-moe"
+            },
+            {
+              "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+              "repository": "Qwen/Qwen3-Reranker-0.6B",
+              "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+              "role": "qwen3-reranker-0.6b"
+            }
+          ],
+          "schema_version": 1,
+          "status": "ok"
+        }
+      },
+      "processes": 2,
+      "right": {
+        "exit_code": 0,
+        "label": "parallel_status_2",
+        "stderr": "",
+        "stdout_json": {
+          "downloaded_bytes": 0,
+          "duration_ms": 7299,
+          "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+          "kind": "model_set",
+          "ready": true,
+          "roles": [
+            {
+              "marker_sha256": "18183f29ca690bdfcc7ac00cbaf32001fdc5fb1a54a7718af8a7916c97a83700",
+              "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+              "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+              "role": "arctic-embed-l-v2"
+            },
+            {
+              "marker_sha256": "5716792a1b4ab95a2cf2f44e458b32b8e1ec601192e28edf2777fb8eacf016db",
+              "repository": "Qdrant/multilingual-e5-large-onnx",
+              "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+              "role": "multilingual-e5-large"
+            },
+            {
+              "marker_sha256": "b1651fb2551c1202b50c6bd79e3a6961b29fd86bd8e25f559672d556920a1513",
+              "repository": "nomic-ai/nomic-embed-text-v2-moe",
+              "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+              "role": "nomic-embed-text-v2-moe"
+            },
+            {
+              "marker_sha256": "971ac23362225c1086dc48e2f72ff099c954756525def476ccea33770b871698",
+              "repository": "Qwen/Qwen3-Reranker-0.6B",
+              "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+              "role": "qwen3-reranker-0.6b"
+            }
+          ],
+          "schema_version": 1,
+          "status": "ok"
+        }
+      },
+      "role_marker_roots": 4
+    },
+    "raw_allowlist": {
+      "arctic-embed-l-v2/config.json": {
+        "bytes": 818,
+        "sha256": "706f5d1eb9ddf64b5d3067c562b893b80ad1022db7f68c20eb07ff24d33b6c15"
+      },
+      "arctic-embed-l-v2/onnx/model.onnx": {
+        "bytes": 702280,
+        "sha256": "f74aa79745ccfb1e75daa7e8e6552a78402d4de193eb8ca67a931358d3e0a25e"
+      },
+      "arctic-embed-l-v2/onnx/model.onnx_data": {
+        "bytes": 2266886160,
+        "sha256": "fe7d75ff258fbda10a6bea63c5422df5579d625355b1aca69ba6923c0ba604a9"
+      },
+      "arctic-embed-l-v2/special_tokens_map.json": {
+        "bytes": 964,
+        "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835"
+      },
+      "arctic-embed-l-v2/tokenizer.json": {
+        "bytes": 17083074,
+        "sha256": "39feb9863a378165ab9c5c689047203d789422966c0c58721c5309fd039a8edc"
+      },
+      "arctic-embed-l-v2/tokenizer_config.json": {
+        "bytes": 1339,
+        "sha256": "cb058b4c5c0c08738eb028c2ae82ed55cd84ce8999ece76b13472af80f0f77f1"
+      },
+      "multilingual-e5-large/config.json": {
+        "bytes": 716,
+        "sha256": "1de8c3be1f344c0eefa4962480a006f8639f416dfafaa95a770e3cf4bceae6a4"
+      },
+      "multilingual-e5-large/model.onnx": {
+        "bytes": 545851,
+        "sha256": "1c09780c907c8a91a77a6ab1fd231f79e090d2907ca431223703dfebeed3d36c"
+      },
+      "multilingual-e5-large/model.onnx_data": {
+        "bytes": 2235363328,
+        "sha256": "0cf1883fee81c63819a44e2ba0efa51d4043d9759685a4ebebbde97e0623d15c"
+      },
+      "multilingual-e5-large/special_tokens_map.json": {
+        "bytes": 964,
+        "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835"
+      },
+      "multilingual-e5-large/tokenizer.json": {
+        "bytes": 17082756,
+        "sha256": "f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af"
+      },
+      "multilingual-e5-large/tokenizer_config.json": {
+        "bytes": 1147,
+        "sha256": "f90024142df07163e5e6c5b9a6ad7c8c68b22a9112af11e3db4559a9ff90f737"
+      },
+      "nomic-embed-text-v2-moe/config.json": {
+        "bytes": 2482,
+        "sha256": "4f076b4798fc2ba916f1900e0d10177714ee1aa94e0ef809102e723078d3efd3"
+      },
+      "nomic-embed-text-v2-moe/model.safetensors": {
+        "bytes": 1901187232,
+        "sha256": "097012b27af76d80af74fed4bc2ccc9091245286f776adf03ad1758a24ade9a0"
+      },
+      "nomic-embed-text-v2-moe/tokenizer.json": {
+        "bytes": 17082734,
+        "sha256": "3a56def25aa40facc030ea8b0b87f3688e4b3c39eb8b45d5702b3a1300fe2a20"
+      },
+      "qwen3-reranker-0.6b/config.json": {
+        "bytes": 727,
+        "sha256": "d479c427a9ca5295218063d4f9aca4f297ab4ac27487cca7af42c84643d51ef0"
+      },
+      "qwen3-reranker-0.6b/model.safetensors": {
+        "bytes": 1191588280,
+        "sha256": "27cd75a405b9c1b46b59abfd88aaa209e6fed2a1972cde9b70e7659537c5e65b"
+      },
+      "qwen3-reranker-0.6b/tokenizer.json": {
+        "bytes": 11422654,
+        "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+      }
+    },
+    "source_store_unchanged": true,
+    "transport_fixture": {
+      "fixture_bytes": 16,
+      "prefix_retransmitted": false,
+      "requests": [
+        {
+          "offset": 0,
+          "range": null,
+          "response_body_bytes": 6
+        },
+        {
+          "offset": 6,
+          "range": "Range: bytes=6-",
+          "response_body_bytes": 10
+        }
+      ]
+    },
+    "workspace_and_projections": "not created or addressed by model commands"
+  },
+  "duration_ms": 92641,
+  "environment": {
+    "arch": "x86_64",
+    "network_policy": "full-model commands use an unreachable loopback endpoint",
+    "os": "windows",
+    "seed_policy": "exact raw allowlist only; no refs, markers, state, or locks"
+  },
+  "gate": "G-TS-DT4-02",
+  "oracle": {
+    "bytes": 2994,
+    "path": "D:\\Igor\\Programming\\FastSearch-dt4-b-a\\evidence\\dt4\\fixtures\\ts-dt4-02\\oracle.json",
+    "sha256": "0a11ff11c689a6c9a5e5c5ae25faf422595043cf3d1f0400a7db2034a7f498f0"
+  },
+  "schema": "FASTSEARCH-DT4-MODEL-READINESS-v1",
+  "status": "PASS"
+}

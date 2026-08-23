@@ -272,6 +272,7 @@ fn model_set_not_ready(error: FastSearchError) -> FastSearchError {
 struct ArtifactProvider {
     client: Client,
     endpoint: String,
+    verified_artifact_store: Option<PathBuf>,
     retry_delays: [Duration; 2],
 }
 
@@ -339,6 +340,8 @@ impl ArtifactProvider {
                 .map_err(readiness_error)?,
             endpoint: std::env::var("HF_ENDPOINT")
                 .unwrap_or_else(|_| "https://huggingface.co".to_owned()),
+            verified_artifact_store: std::env::var_os("FASTSEARCH_VERIFIED_ARTIFACT_STORE")
+                .map(PathBuf::from),
             retry_delays: [Duration::from_secs(1), Duration::from_secs(2)],
         })
     }
@@ -380,6 +383,15 @@ impl ArtifactProvider {
         downloaded_bytes: &mut u64,
     ) -> Result<(), FastSearchError> {
         if exact_file(target, expected_bytes, expected_sha256)? {
+            return Ok(());
+        }
+        if self.restore_from_verified_store(
+            descriptor,
+            artifact_path,
+            expected_bytes,
+            expected_sha256,
+            target,
+        )? {
             return Ok(());
         }
         if let Some(parent) = target.parent() {
@@ -455,6 +467,63 @@ impl ArtifactProvider {
             "failed to obtain {}@{} {artifact_path}: {last_error}",
             descriptor.repository, descriptor.revision
         )))
+    }
+
+    fn restore_from_verified_store(
+        &self,
+        descriptor: &ProductionModelDescriptor,
+        artifact_path: &str,
+        expected_bytes: u64,
+        expected_sha256: &str,
+        target: &Path,
+    ) -> Result<bool, FastSearchError> {
+        let Some(store) = &self.verified_artifact_store else {
+            return Ok(false);
+        };
+        let source = store
+            .join("artifacts")
+            .join(descriptor.role.slug())
+            .join("hub")
+            .join(format!(
+                "models--{}",
+                descriptor.repository.replace('/', "--")
+            ))
+            .join("snapshots")
+            .join(descriptor.revision)
+            .join(artifact_path);
+        if !exact_file(&source, expected_bytes, expected_sha256)? {
+            return Err(readiness_error(format!(
+                "verified artifact store does not contain exact {}@{} {artifact_path}",
+                descriptor.repository, descriptor.revision
+            )));
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(readiness_error)?;
+        }
+        let staged = target.with_extension(format!(
+            "{}.fastsearch-local-restore",
+            target
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+        ));
+        if staged.exists() {
+            fs::remove_file(&staged).map_err(readiness_error)?;
+        }
+        fs::copy(&source, &staged).map_err(readiness_error)?;
+        if !exact_file(&staged, expected_bytes, expected_sha256)? {
+            let _ = fs::remove_file(&staged);
+            return Err(readiness_error(format!(
+                "local restore changed bytes for {}@{} {artifact_path}",
+                descriptor.repository, descriptor.revision
+            )));
+        }
+        if target.exists() {
+            atomic_replace_existing(target, &staged).map_err(readiness_error)?;
+        } else {
+            fs::rename(&staged, target).map_err(readiness_error)?;
+        }
+        Ok(true)
     }
 }
 
@@ -956,6 +1025,7 @@ mod tests {
                 .build()
                 .unwrap(),
             endpoint,
+            verified_artifact_store: None,
             retry_delays: [Duration::ZERO, Duration::ZERO],
         }
     }
@@ -1069,6 +1139,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(fs::read(target).unwrap(), BODY);
+        assert_eq!(downloaded, 0);
+    }
+
+    #[test]
+    fn exact_local_store_repairs_only_the_requested_artifact_without_network() {
+        let root = TempTree::new("local-restore");
+        let descriptor = descriptor();
+        let source = root
+            .0
+            .join("store/artifacts/qwen3-reranker-0.6b/hub/models--fixture--repository/snapshots/fixture-revision/artifact.bin");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, BODY).unwrap();
+        let target = root.0.join("target/artifact.bin");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"fedcba9876543210").unwrap();
+        let mut provider = provider("http://127.0.0.1:1".to_owned());
+        provider.verified_artifact_store = Some(root.0.join("store"));
+        let mut downloaded = 0;
+
+        provider
+            .ensure_file(
+                &descriptor,
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap();
+
+        assert_eq!(fs::read(target).unwrap(), BODY);
+        assert_eq!(fs::read(source).unwrap(), BODY);
         assert_eq!(downloaded, 0);
     }
 
