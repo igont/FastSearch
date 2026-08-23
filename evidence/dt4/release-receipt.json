@@ -1,0 +1,89 @@
+{
+  "schema": "FASTSEARCH-DT4-RELEASE-RECEIPT-v1",
+  "task_id": "FASTSEARCH-DT4-B-MODEL-READINESS",
+  "created_at": "2026-08-23T20:23:36+03:00",
+  "technical_integration_revision": "c795c7897ada2de95225132d24dccdb338820699",
+  "documentation_candidate_hash": "02258b5579ac5c0376535c894ff4dc4e229d2353d8233bca6b9b69b84026d261",
+  "documentation_review": {
+    "artifact_id": "FASTSEARCH-DT4-B-DOCS-02258B5-REVIEW-2",
+    "verdict": "DOCS_PASS",
+    "active_findings": [],
+    "path": "evidence/dt4/documentation.review.md",
+    "size_bytes": 17159,
+    "sha256": "695cbfa40dd4dae5bbc312683b3760085d8e0f9693489f654087028eecffb511"
+  },
+  "accepted_branch": {
+    "branch_id": "A",
+    "candidate_revision": "c795c7897ada2de95225132d24dccdb338820699",
+    "verdict_id": "FASTSEARCH-DT4-B-A-C795C78-BRANCH-PASS",
+    "review_path": "D:\\Igor\\Programming\\FastSearch\\.agents\\DT-23-08-2026_12-50-DT4-граница-B-модельная-готовность\\Ветки\\A-Граница-B-модельная-готовность\\Ревью\\A-Вердикт мастер-ревьюера.md",
+    "review_size_bytes": 81408,
+    "review_sha256": "66821cdce10b53127ee16054ce23fc40bc0c1a9e16104c3a0ac3bf1d3ef643d4"
+  },
+  "integration_report": {
+    "path": "D:\\Igor\\Programming\\FastSearch\\.agents\\DT-23-08-2026_12-50-DT4-граница-B-модельная-готовность\\Интеграционный отчет.md",
+    "size_bytes": 6993,
+    "sha256": "a5e00c4d26f50b2fc26113e139e95b8639b34793d05d9b6c9bf7398696ac6398"
+  },
+  "documentation_snapshot": {
+    "schema": "dtree-documentation-snapshot/v1",
+    "manifest_path": "evidence/dt4/documentation.snapshot-r2.md",
+    "manifest_size_bytes": 2244,
+    "manifest_sha256": "f58c4edd69c95a5cdbe59d8497d24e040f10c52d67c76ad4cda9bb570a6f64c3",
+    "canonical_manifest_size_bytes": 1048,
+    "canonical_manifest_sha256": "02258b5579ac5c0376535c894ff4dc4e229d2353d8233bca6b9b69b84026d261",
+    "superseded_manifest_path": "evidence/dt4/documentation.snapshot.md",
+    "superseded_manifest_size_bytes": 1940,
+    "superseded_manifest_sha256": "054ae5e19c11e9e13fff42b168cb843aff4017b8de7a720fc52d5175882b7621"
+  },
+  "author_documents": [
+    {
+      "path": "Obsidian/Docs/Roadmap/00 Roadmap.md",
+      "size_bytes": 2461,
+      "sha256": "465d909b28a49432d4016af242c7dfa6041a0842236887d82f81313d0de54813"
+    },
+    {
+      "path": "Obsidian/Docs/TDR/TDR-FS-2.4 Automatic model provisioning.md",
+      "size_bytes": 21353,
+      "sha256": "44dfecfac34bb8ae0871b411f086b5066ff3bd94a1adf59d74fb011069e7f40d"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 29781,
+      "sha256": "b6b999601b17ca710728adb70d58dee3da029a46348aceafe3c8aa4c1309bb5e"
+    },
+    {
+      "path": "ROADMAP.md",
+      "size_bytes": 38854,
+      "sha256": "6dc13275bd6270e37b3d96b06d173d7a66ad16dcc1ba99a65aff01a157d32a44"
+    },
+    {
+      "path": "evidence/dt4/documentation.sync-input.md",
+      "size_bytes": 2934,
+      "sha256": "a1f5c071d71fa7c0ccad8c4f727977a91d748717b3877e6800f3bad586cef9df"
+    }
+  ],
+  "release_tree_additions": [
+    {
+      "path": "evidence/dt4/documentation.review.md",
+      "size_bytes": 17159,
+      "sha256": "695cbfa40dd4dae5bbc312683b3760085d8e0f9693489f654087028eecffb511"
+    },
+    {
+      "path": "evidence/dt4/documentation.snapshot-r2.md",
+      "size_bytes": 2244,
+      "sha256": "f58c4edd69c95a5cdbe59d8497d24e040f10c52d67c76ad4cda9bb570a6f64c3"
+    },
+    {
+      "path": "evidence/dt4/documentation.snapshot.md",
+      "size_bytes": 1940,
+      "sha256": "054ae5e19c11e9e13fff42b168cb843aff4017b8de7a720fc52d5175882b7621"
+    }
+  ],
+  "bundle": {
+    "artifact_id": "FASTSEARCH-DT4-B-RELEASE-C795C78-02258B5",
+    "path": "D:\\Igor\\Programming\\FastSearch-dtree-artifacts\\FASTSEARCH-DT4-B-MODEL-READINESS\\release.bundle",
+    "retention": "through tree closure and until the coordinator records an explicit cleanup receipt",
+    "sha256_record": "external bundle-metadata.json; omitted here to avoid a circular release-commit dependency"
+  }
+}

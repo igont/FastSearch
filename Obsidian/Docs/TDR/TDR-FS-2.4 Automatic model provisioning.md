@@ -103,7 +103,7 @@ Reranker не получает векторную проекцию и не уч�
 
 [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет пакет. [TDR-FS-2.3](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>) маршрутизирует и представляет команды, а настоящее решение владеет подготовкой и согласованным снимком. [TDR-FS-2.5](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>) использует модельные проекции для исследования. [TDR-FS-2.6](<TDR-FS-2.6 Единый поиск и переранжирование.md>) потребляет готовый производственный набор. [TDR-FS-2.7](<TDR-FS-2.7 MCP stdio и runtime.md>) ограничивает одновременное использование тяжёлой среды исполнения.
 
-Текущий поставщик моделей эмбеддингов находится в [`src/application/model_cache.rs`](../../../src/application/model_cache.rs), каталог идентичностей - в [`src/domain/embedding_model.rs`](../../../src/domain/embedding_model.rs), а вычислительные адаптеры - в [`src/adapters/vector`](../../../src/adapters/vector).
+Подготовка производственного набора находится в [`src/application/model_provisioning.rs`](../../../src/application/model_provisioning.rs), а согласованный снимок готовности - в [`src/application/model_readiness.rs`](../../../src/application/model_readiness.rs). Роли и идентичности принадлежат [`src/domain/model_role.rs`](../../../src/domain/model_role.rs) и [`src/domain/embedding_model.rs`](../../../src/domain/embedding_model.rs). Вычислительные адаптеры разделены между [`src/adapters/vector`](../../../src/adapters/vector) и [`src/adapters/qwen_reranker.rs`](../../../src/adapters/qwen_reranker.rs).
 
 ## Проверка решения
 
