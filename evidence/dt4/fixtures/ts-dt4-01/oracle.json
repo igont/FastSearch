@@ -4,7 +4,7 @@
   "script_sha256": "442771f194446c2d9351b58bf14be8f73df313269d4f7fd7cd2e06951ebfd5c8",
   "requirements_sha256": "bbe4845c8e1ae27ed2d896374eae28e841a1e54082e3d57a02406cbb1684bc98",
   "corpus_manifest_sha256": "51e33448b7e8b86078fb4feb75935695562fe89240a8965241a79138930ceef6",
-  "model_manifest_sha256": "f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637",
+  "model_manifest_sha256": "3215b8de50c6b9d826c8dab98c78afd4dba6dffba6396d3afc2bd88bb40db3e4",
   "query_sha256": "6193e3faddd339b9d6c42c359824514698375d3673c610e68625cdff2fbbd0ca",
   "oracle_contract_sha256": "711795b4ca9e0e6c28f2b9cae080388150c00fd75cb7e7a4653419d961d5fccb",
   "model_revisions": {

@@ -41,7 +41,7 @@ pub const QWEN_INSTRUCTION: &str =
 const PREFIX: &str = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n";
 const SUFFIX: &str = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
 const OFFICIAL_MODEL_MANIFEST_SHA256: &str =
-    "f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637";
+    "3215b8de50c6b9d826c8dab98c78afd4dba6dffba6396d3afc2bd88bb40db3e4";
 const OFFICIAL_ASSETS: &[(&str, u64, &str)] = &[
     (
         "config.json",

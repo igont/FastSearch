@@ -41,8 +41,8 @@ pub use model_readiness::{
     ModelArtifactDescriptor, ModelContractError, ModelRuntimeIdentity, ModelRuntimeMechanism,
     ModelRuntimeTarget, ModelSetReadySnapshot, ModelSetRoleSnapshot, PRODUCTION_MODEL_CATALOG,
     ProductionModelDescriptor, ROLE_MANIFEST_FILE, ROLE_READY_FILE, RoleArtifactManifest,
-    RoleReadinessMarker, model_role_paths, model_set_paths, production_model_descriptor,
-    publish_model_set_snapshot,
+    RoleReadinessMarker, model_role_paths, model_set_identity_sha256, model_set_paths,
+    production_model_descriptor,
 };
 pub use production::{ModelPartitionMetrics, ProductionConfig, ProductionRuntime};
 pub use public_search::{

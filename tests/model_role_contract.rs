@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Command};
 use fastsearch::{
     application::{
         ModelRuntimeIdentity, ModelSetReadySnapshot, PRODUCTION_MODEL_CATALOG, RoleReadinessMarker,
-        production_model_descriptor,
+        model_set_identity_sha256, production_model_descriptor,
     },
     domain::ProductionModelRole,
 };
@@ -16,12 +16,23 @@ fn sha256(path: &Path) -> String {
 
 fn marker(role: ProductionModelRole) -> RoleReadinessMarker {
     let descriptor = production_model_descriptor(role);
+    let runtimes = ProductionModelRole::ALL
+        .into_iter()
+        .map(|role| {
+            (
+                role,
+                ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let set_identity = model_set_identity_sha256(&runtimes).unwrap();
     RoleReadinessMarker::new(
         role,
         descriptor.repository,
         descriptor.revision,
         descriptor.compute_contract_sha256(),
         descriptor.manifest_sha256(),
+        set_identity,
         ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
     )
     .unwrap()
@@ -123,18 +134,14 @@ fn independent_oracle_artifact_is_self_identifying_and_covers_four_probes() {
 }
 
 #[test]
-fn public_model_status_rejects_marker_only_state_without_a_workspace() {
+fn public_model_status_rejects_unprepared_state_without_a_workspace() {
     let binary = env!("CARGO_BIN_EXE_fastsearch");
     let home = std::env::temp_dir().join(format!("fastsearch-model-status-{}", std::process::id()));
     if home.exists() {
         fs::remove_dir_all(&home).unwrap();
     }
     let model_root = home.join("models").join("production");
-    fastsearch::application::publish_model_set_snapshot(
-        &model_root,
-        ProductionModelRole::ALL.into_iter().map(marker).collect(),
-    )
-    .unwrap();
+    fs::create_dir_all(&model_root).unwrap();
 
     let output = Command::new(binary)
         .args(["models", "status", "--json"])

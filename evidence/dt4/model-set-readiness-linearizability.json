@@ -1,8 +1,9 @@
 {
-  "schema": "FASTSEARCH-DT4-MODEL-SET-READINESS-v1",
+  "schema": "FASTSEARCH-DT4-MODEL-SET-READINESS-v2",
   "task_id": "FASTSEARCH-DT4-B-MODEL-READINESS",
   "leaf": "A4",
   "base_revision": "82cc385f7b3543162197c6711a986a18fa199b8f",
+  "rework_base_revision": "4a31111c9e03a2cf25b0d2f89a753500ba644e49",
   "candidate_relation": "the commit containing this evidence is the immutable A4 candidate",
   "date": "2026-08-23",
   "scope": {
@@ -15,13 +16,41 @@
     "writer_lock": "model-set.install.lock covers artifact acquisition, four role probes, role marker publication, and aggregate commit",
     "reader_lock": "models status verifies aggregate marker, exact role marker bytes, manifests, and required artifact size/SHA-256 under the same lock",
     "not_ready": "marker-only, missing, corrupt, mixed, or artifact-invalid state returns MODEL_SET_NOT_READY",
-    "public_boundary": "marker-only filesystem reader is crate-test-only and is not exported as a readiness API"
+    "public_boundary": "marker-only filesystem reader and publisher are crate-test-only and are not exported as readiness APIs",
+    "set_identity": "one SHA-256 identity is causally recomputed from the canonical manifests and all four qualified runtime identities; all markers and the aggregate generation bind it",
+    "runtime_support": "tokenizer_config.json and special_tokens_map.json for Arctic and E5 are canonical required_files, role-manifest inputs, acquisition inputs, and status-verification inputs"
   },
   "deterministic_oracles": {
-    "role_state_matrix": {
+    "role_presence_matrix": {
       "combinations": 16,
       "ready_combinations": 1,
       "rule": "only 4/4 exact role markers are READY"
+    },
+    "old_new_matrix": {
+      "combinations": 16,
+      "ready_combinations": 2,
+      "rule": "only the complete old set and complete new set are READY; all fourteen mixtures fail with MixedSetIdentity"
+    },
+    "writer_stop_points": {
+      "points": [
+        "0/4",
+        "1/4",
+        "2/4",
+        "3/4",
+        "4/4 before aggregate commit"
+      ],
+      "rule": "every interrupted writer leaves the complete old aggregate generation readable"
+    },
+    "runtime_support_failures": {
+      "artifact_types": [
+        "tokenizer_config.json",
+        "special_tokens_map.json"
+      ],
+      "cases_per_type": [
+        "missing",
+        "same-size corrupt digest",
+        "exact local fixture control"
+      ]
     },
     "process_race": {
       "processes": [
@@ -41,7 +70,11 @@
   "verification": [
     {
       "command": "cargo test --lib application::model_readiness::tests -- --nocapture",
-      "result": "PASS: 12 passed, 0 failed"
+      "result": "PASS: 14 passed, 0 failed"
+    },
+    {
+      "command": "cargo test --lib application::model_provisioning::tests -- --nocapture",
+      "result": "PASS: 10 passed, 0 failed"
     },
     {
       "command": "cargo test --test model_role_contract",
@@ -60,6 +93,10 @@
       "result": "PASS: all ordinary workspace tests; pre-existing model/network/release tests remained explicitly ignored"
     }
   ],
+  "review_closure": {
+    "DT4-B-A4-001": "CLOSED by causal set identity, private marker-only publisher, 16 old/new combinations, and 0/4 through 4/4 writer stop points",
+    "DT4-B-A4-002": "CLOSED by moving all four runtime-support files into the canonical role manifests and the common exact-artifact verifier, with missing/corrupt local fixtures for both file types"
+  },
   "deferred_to_a5": [
     "full SHA-256 scans of the four real pinned model copies",
     "per-role real corruption and recovery",

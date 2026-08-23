@@ -4,11 +4,11 @@
   "templates": [
     {"source":"workspace/.fastsearch/workspace.toml","target":"workspace/.fastsearch/workspace.toml","sha256":"bd697c3b41483c3b7d858c007a23b1a8161b5a3d4f11d09d350bebcb3c65ec5a"},
     {"source":"workspace/.fastsearch/local/projection-state.json","target":"workspace/.fastsearch/local/projection-state.json","sha256":"8e1475bf914435db8d01a17004a06a2f304683cf421d74352dd5821edfa3bb66"},
-    {"source":"model-manifest.json","target":"product-home/models/model-manifest.json","sha256":"f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637"}
+    {"source":"model-manifest.json","target":"product-home/models/model-manifest.json","sha256":"3215b8de50c6b9d826c8dab98c78afd4dba6dffba6396d3afc2bd88bb40db3e4"}
   ],
   "inputs": {
     "corpus_manifest_sha256": "51e33448b7e8b86078fb4feb75935695562fe89240a8965241a79138930ceef6",
-    "model_manifest_sha256": "f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637",
+    "model_manifest_sha256": "3215b8de50c6b9d826c8dab98c78afd4dba6dffba6396d3afc2bd88bb40db3e4",
     "query_sha256": "6193e3faddd339b9d6c42c359824514698375d3673c610e68625cdff2fbbd0ca",
     "oracle_contract_sha256": "711795b4ca9e0e6c28f2b9cae080388150c00fd75cb7e7a4653419d961d5fccb"
   },

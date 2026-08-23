@@ -11,7 +11,7 @@
   "script_sha256": "f875837320211af21d6ccfa635711c4b47b85bfde177b1620e4a74177028d0f1",
   "requirements_sha256": "bbe4845c8e1ae27ed2d896374eae28e841a1e54082e3d57a02406cbb1684bc98",
   "cases_sha256": "0c87b972e6166e38e67a52dd5189b41dce1f7943e4b2f9ea85032276dcd77f67",
-  "model_manifest_sha256": "f782f5f6bcb12df743a4e1be9e4a80edeff0dfaa7ed4219cbab4533db3f3f637",
+  "model_manifest_sha256": "3215b8de50c6b9d826c8dab98c78afd4dba6dffba6396d3afc2bd88bb40db3e4",
   "model_revisions": {
     "arctic-embed-l-v2": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
     "multilingual-e5-large": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",

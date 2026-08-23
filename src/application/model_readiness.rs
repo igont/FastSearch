@@ -108,6 +108,16 @@ const ARCTIC_FILES: &[ModelArtifactDescriptor] = &[
         sha256: "39feb9863a378165ab9c5c689047203d789422966c0c58721c5309fd039a8edc",
     },
     ModelArtifactDescriptor {
+        path: "tokenizer_config.json",
+        bytes: 1_339,
+        sha256: "cb058b4c5c0c08738eb028c2ae82ed55cd84ce8999ece76b13472af80f0f77f1",
+    },
+    ModelArtifactDescriptor {
+        path: "special_tokens_map.json",
+        bytes: 964,
+        sha256: "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+    },
+    ModelArtifactDescriptor {
         path: "onnx/model.onnx",
         bytes: 702_280,
         sha256: "f74aa79745ccfb1e75daa7e8e6552a78402d4de193eb8ca67a931358d3e0a25e",
@@ -128,6 +138,16 @@ const E5_LARGE_FILES: &[ModelArtifactDescriptor] = &[
         path: "tokenizer.json",
         bytes: 17_082_756,
         sha256: "f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af",
+    },
+    ModelArtifactDescriptor {
+        path: "tokenizer_config.json",
+        bytes: 1_147,
+        sha256: "f90024142df07163e5e6c5b9a6ad7c8c68b22a9112af11e3db4559a9ff90f737",
+    },
+    ModelArtifactDescriptor {
+        path: "special_tokens_map.json",
+        bytes: 964,
+        sha256: "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
     },
     ModelArtifactDescriptor {
         path: "model.onnx",
@@ -310,6 +330,7 @@ pub enum ModelContractError {
     InvalidRuntimeEnvironment,
     DurableMarkerMismatch(ProductionModelRole),
     DurableManifestMismatch(ProductionModelRole),
+    MixedSetIdentity,
 }
 
 impl fmt::Display for ModelContractError {
@@ -328,6 +349,7 @@ pub struct RoleReadinessMarker {
     revision: String,
     compute_contract_sha256: String,
     manifest_sha256: String,
+    set_identity_sha256: String,
     runtime: ModelRuntimeIdentity,
 }
 
@@ -338,6 +360,7 @@ impl RoleReadinessMarker {
         revision: impl Into<String>,
         compute_contract_sha256: impl Into<String>,
         manifest_sha256: impl Into<String>,
+        set_identity_sha256: impl Into<String>,
         runtime: ModelRuntimeIdentity,
     ) -> Result<Self, ModelContractError> {
         let marker = Self {
@@ -347,6 +370,7 @@ impl RoleReadinessMarker {
             revision: revision.into(),
             compute_contract_sha256: compute_contract_sha256.into(),
             manifest_sha256: manifest_sha256.into(),
+            set_identity_sha256: set_identity_sha256.into(),
             runtime,
         };
         marker.validate()?;
@@ -368,7 +392,10 @@ impl RoleReadinessMarker {
         {
             return Err(ModelContractError::IdentityMismatch(self.role));
         }
-        if !is_sha256(&self.compute_contract_sha256) || !is_sha256(&self.manifest_sha256) {
+        if !is_sha256(&self.compute_contract_sha256)
+            || !is_sha256(&self.manifest_sha256)
+            || !is_sha256(&self.set_identity_sha256)
+        {
             return Err(ModelContractError::InvalidDigest);
         }
         self.runtime.validate_for_role(self.role)?;
@@ -434,6 +461,7 @@ impl ModelSetRoleSnapshot {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModelSetReadySnapshot {
     schema: u8,
+    set_identity_sha256: String,
     generation: String,
     roles: Vec<ModelSetRoleSnapshot>,
 }
@@ -462,6 +490,25 @@ impl ModelSetReadySnapshot {
                 return Err(ModelContractError::MissingRole(role));
             }
         }
+        let set_identities = by_role
+            .iter()
+            .map(|(_, marker)| marker.set_identity_sha256.as_str())
+            .collect::<BTreeSet<_>>();
+        if set_identities.len() != 1 {
+            return Err(ModelContractError::MixedSetIdentity);
+        }
+        let set_identity_sha256 = set_identities
+            .into_iter()
+            .next()
+            .expect("the complete model set has one identity")
+            .to_owned();
+        let runtime_identities = by_role
+            .iter()
+            .map(|(role, marker)| (*role, marker.runtime.clone()))
+            .collect::<Vec<_>>();
+        if model_set_identity_sha256(&runtime_identities)? != set_identity_sha256 {
+            return Err(ModelContractError::MixedSetIdentity);
+        }
         let roles = by_role
             .into_iter()
             .map(|(_, marker)| {
@@ -476,9 +523,10 @@ impl ModelSetReadySnapshot {
                 })
             })
             .collect::<Result<Vec<_>, ModelContractError>>()?;
-        let generation = generation(&roles);
+        let generation = generation(&set_identity_sha256, &roles);
         Ok(Self {
             schema: MODEL_SET_SCHEMA,
+            set_identity_sha256,
             generation,
             roles,
         })
@@ -494,6 +542,9 @@ impl ModelSetReadySnapshot {
     fn validate(&self) -> Result<(), ModelContractError> {
         if self.schema != MODEL_SET_SCHEMA {
             return Err(ModelContractError::InvalidSchema(self.schema));
+        }
+        if !is_sha256(&self.set_identity_sha256) {
+            return Err(ModelContractError::InvalidDigest);
         }
         if self.roles.len() != ProductionModelRole::ALL.len() {
             return Err(ModelContractError::MissingRole(
@@ -518,7 +569,7 @@ impl ModelSetReadySnapshot {
                 return Err(ModelContractError::InvalidDigest);
             }
         }
-        if generation(&self.roles) != self.generation {
+        if generation(&self.set_identity_sha256, &self.roles) != self.generation {
             return Err(ModelContractError::GenerationMismatch);
         }
         Ok(())
@@ -527,6 +578,11 @@ impl ModelSetReadySnapshot {
     #[must_use]
     pub fn generation(&self) -> &str {
         &self.generation
+    }
+
+    #[must_use]
+    pub fn set_identity_sha256(&self) -> &str {
+        &self.set_identity_sha256
     }
 
     #[must_use]
@@ -543,8 +599,41 @@ impl ModelSetReadySnapshot {
     }
 }
 
+pub fn model_set_identity_sha256(
+    runtimes: &[(ProductionModelRole, ModelRuntimeIdentity)],
+) -> Result<String, ModelContractError> {
+    if runtimes.len() != ProductionModelRole::ALL.len() {
+        return Err(ModelContractError::MixedSetIdentity);
+    }
+    let mut canonical = Vec::new();
+    for role in ProductionModelRole::ALL {
+        let matching = runtimes
+            .iter()
+            .filter(|(candidate, _)| *candidate == role)
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(ModelContractError::MixedSetIdentity);
+        }
+        let runtime = &matching[0].1;
+        runtime.validate_for_role(role)?;
+        let descriptor = production_model_descriptor(role);
+        let manifest_sha256 = descriptor.manifest_sha256();
+        let runtime_json = serde_json::to_vec(runtime).expect("runtime identity is serializable");
+        for field in [
+            role.slug().as_bytes(),
+            manifest_sha256.as_bytes(),
+            runtime_json.as_slice(),
+        ] {
+            canonical.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            canonical.extend_from_slice(field);
+        }
+    }
+    Ok(sha256(&canonical))
+}
+
 /// Atomically publishes one generation while holding the shared model-set lock.
-pub fn publish_model_set_snapshot(
+#[cfg(test)]
+pub(crate) fn publish_model_set_snapshot(
     model_root: &Path,
     markers: Vec<RoleReadinessMarker>,
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
@@ -557,15 +646,16 @@ pub(crate) fn publish_model_set_snapshot_locked(
     model_root: &Path,
     markers: Vec<RoleReadinessMarker>,
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
-    publish_model_set_snapshot_locked_with_observer(model_root, markers, |_| {})
+    publish_model_set_snapshot_locked_with_observer(model_root, markers, |_| Ok(()))
 }
 
 fn publish_model_set_snapshot_locked_with_observer(
     model_root: &Path,
     markers: Vec<RoleReadinessMarker>,
-    mut role_published: impl FnMut(usize),
+    mut role_published: impl FnMut(usize) -> Result<(), FastSearchError>,
 ) -> Result<ModelSetReadySnapshot, FastSearchError> {
     let snapshot = ModelSetReadySnapshot::new(markers.clone()).map_err(contract_error)?;
+    role_published(0)?;
     for (index, marker) in markers.into_iter().enumerate() {
         let manifest = RoleArtifactManifest::for_role(marker.role());
         if marker.manifest_sha256 != sha256(&manifest.to_json()) {
@@ -577,7 +667,7 @@ fn publish_model_set_snapshot_locked_with_observer(
             model_role_paths(model_root, marker.role(), &marker.marker_sha256());
         atomic_write(&manifest_path, &manifest.to_json())?;
         atomic_write(&marker_path, &marker.to_json())?;
-        role_published(index + 1);
+        role_published(index + 1)?;
     }
     atomic_write(&model_root.join(MODEL_SET_READY_FILE), &snapshot.to_json())?;
     Ok(snapshot)
@@ -670,8 +760,10 @@ const fn expected_runtime_mechanism(role: ProductionModelRole) -> ModelRuntimeMe
     }
 }
 
-fn generation(roles: &[ModelSetRoleSnapshot]) -> String {
+fn generation(set_identity_sha256: &str, roles: &[ModelSetRoleSnapshot]) -> String {
     let mut canonical = Vec::new();
+    canonical.extend_from_slice(&(set_identity_sha256.len() as u64).to_be_bytes());
+    canonical.extend_from_slice(set_identity_sha256.as_bytes());
     for role in roles {
         for field in [
             role.role.slug(),
@@ -773,9 +865,20 @@ mod tests {
     }
 
     fn markers_for(environment_byte: &str) -> Vec<RoleReadinessMarker> {
-        ProductionModelRole::ALL
+        let runtimes = ProductionModelRole::ALL
             .into_iter()
             .map(|role| {
+                (
+                    role,
+                    ModelRuntimeIdentity::qualified(role, environment_byte.repeat(32)).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let set_identity = model_set_identity_sha256(&runtimes).unwrap();
+        runtimes
+            .into_iter()
+            .map(|role| {
+                let (role, runtime) = role;
                 let descriptor = production_model_descriptor(role);
                 RoleReadinessMarker::new(
                     role,
@@ -783,7 +886,8 @@ mod tests {
                     descriptor.revision,
                     descriptor.compute_contract_sha256(),
                     descriptor.manifest_sha256(),
-                    ModelRuntimeIdentity::qualified(role, environment_byte.repeat(32)).unwrap(),
+                    &set_identity,
+                    runtime,
                 )
                 .unwrap()
             })
@@ -850,6 +954,7 @@ mod tests {
                                 fs::write(signal("midpoint"), b"two-of-four").unwrap();
                                 wait_for(&signal("continue"));
                             }
+                            Ok(())
                         },
                     )
                 })
@@ -889,6 +994,7 @@ mod tests {
                 "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                 qwen.compute_contract_sha256(),
                 qwen.manifest_sha256(),
+                "11".repeat(32),
                 ModelRuntimeIdentity::qualified(
                     ProductionModelRole::Qwen3Reranker06B,
                     "11".repeat(32),
@@ -977,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn model_set_readiness_covers_all_sixteen_role_combinations() {
+    fn model_set_readiness_covers_all_sixteen_role_presence_combinations() {
         for present_mask in 0_u8..16 {
             let root = TempRoot::new();
             let snapshot = publish_model_set_snapshot(&root.0, markers()).unwrap();
@@ -992,6 +1098,61 @@ mod tests {
                 read_model_set_snapshot(&root.0).is_ok(),
                 present_mask == 0b1111,
                 "role mask {present_mask:04b}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_set_readiness_rejects_all_fourteen_mixed_old_new_combinations() {
+        let old = markers_for("11");
+        let new = markers_for("22");
+        for new_mask in 0_u8..16 {
+            let combination = (0..ProductionModelRole::ALL.len())
+                .map(|index| {
+                    if new_mask & (1 << index) == 0 {
+                        old[index].clone()
+                    } else {
+                        new[index].clone()
+                    }
+                })
+                .collect();
+            let result = ModelSetReadySnapshot::new(combination);
+            assert_eq!(
+                result.is_ok(),
+                new_mask == 0 || new_mask == 0b1111,
+                "old/new role mask {new_mask:04b}"
+            );
+            if new_mask != 0 && new_mask != 0b1111 {
+                assert_eq!(result, Err(ModelContractError::MixedSetIdentity));
+            }
+        }
+    }
+
+    #[test]
+    fn model_set_readiness_preserves_the_old_generation_at_every_writer_stop_point() {
+        for stop_after_roles in 0..=ProductionModelRole::ALL.len() {
+            let root = TempRoot::new();
+            let old = publish_model_set_snapshot(&root.0, markers_for("11")).unwrap();
+            let interrupted = with_model_set_lock(&root.0, || {
+                publish_model_set_snapshot_locked_with_observer(
+                    &root.0,
+                    markers_for("22"),
+                    |published| {
+                        if published == stop_after_roles {
+                            Err(state_error(std::io::Error::other(format!(
+                                "writer stopped after {published}/4 roles"
+                            ))))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+            });
+            assert!(interrupted.is_err(), "stop point {stop_after_roles}/4");
+            assert_eq!(
+                read_model_set_snapshot(&root.0).unwrap(),
+                old,
+                "stop point {stop_after_roles}/4"
             );
         }
     }
@@ -1134,10 +1295,15 @@ mod tests {
             descriptor.revision,
             descriptor.compute_contract_sha256(),
             descriptor.manifest_sha256(),
+            first.set_identity_sha256(),
             ModelRuntimeIdentity::qualified(role, "22".repeat(32)).unwrap(),
         )
         .unwrap();
-        let second = ModelSetReadySnapshot::new(changed_environment).unwrap();
+        assert_eq!(
+            ModelSetReadySnapshot::new(changed_environment),
+            Err(ModelContractError::MixedSetIdentity)
+        );
+        let second = ModelSetReadySnapshot::new(markers_for("22")).unwrap();
         assert_ne!(first.generation(), second.generation());
     }
 }

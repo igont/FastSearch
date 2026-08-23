@@ -23,17 +23,18 @@ use crate::{
 };
 
 use super::{
-    ModelRuntimeIdentity, ModelSetReadySnapshot, ProductionModelDescriptor, RoleReadinessMarker,
+    ModelArtifactDescriptor, ModelRuntimeIdentity, ModelSetReadySnapshot,
+    ProductionModelDescriptor, RoleReadinessMarker,
     model_readiness::{
-        publish_model_set_snapshot_locked, read_model_set_snapshot_with_artifacts,
-        with_model_set_lock,
+        model_set_identity_sha256, publish_model_set_snapshot_locked,
+        read_model_set_snapshot_with_artifacts, with_model_set_lock,
     },
     production_model_descriptor,
     workspace::product_home,
 };
 
 #[cfg(test)]
-use super::{model_readiness::read_model_set_snapshot, publish_model_set_snapshot};
+use super::model_readiness::{publish_model_set_snapshot, read_model_set_snapshot};
 
 const OFFICIAL_MANIFEST: &[u8] =
     include_bytes!("../../evidence/dt4/fixtures/ts-dt4-01/model-manifest.json");
@@ -88,41 +89,6 @@ impl ModelSetCommandReport {
         }
     }
 }
-
-#[derive(Clone, Copy)]
-struct SupplementalArtifact {
-    role: ProductionModelRole,
-    path: &'static str,
-    bytes: u64,
-    sha256: &'static str,
-}
-
-const SUPPLEMENTAL_ARTIFACTS: &[SupplementalArtifact] = &[
-    SupplementalArtifact {
-        role: ProductionModelRole::ArcticEmbedLV2,
-        path: "tokenizer_config.json",
-        bytes: 1_339,
-        sha256: "cb058b4c5c0c08738eb028c2ae82ed55cd84ce8999ece76b13472af80f0f77f1",
-    },
-    SupplementalArtifact {
-        role: ProductionModelRole::ArcticEmbedLV2,
-        path: "special_tokens_map.json",
-        bytes: 964,
-        sha256: "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
-    },
-    SupplementalArtifact {
-        role: ProductionModelRole::MultilingualE5Large,
-        path: "tokenizer_config.json",
-        bytes: 1_147,
-        sha256: "f90024142df07163e5e6c5b9a6ad7c8c68b22a9112af11e3db4559a9ff90f737",
-    },
-    SupplementalArtifact {
-        role: ProductionModelRole::MultilingualE5Large,
-        path: "special_tokens_map.json",
-        bytes: 964,
-        sha256: "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
-    },
-];
 
 #[derive(Deserialize)]
 struct OracleDocument {
@@ -201,7 +167,7 @@ pub fn prepare_production_model_set() -> Result<ModelSetCommandReport, FastSearc
     let oracle: Oracle = serde_json::from_slice(ORACLE).map_err(readiness_error)?;
     let cases: OracleCases = serde_json::from_slice(ORACLE_CASES).map_err(readiness_error)?;
     let (snapshot, downloaded_bytes) = with_model_set_lock(&model_root, || {
-        let mut markers = Vec::with_capacity(ProductionModelRole::ALL.len());
+        let mut runtimes = Vec::with_capacity(ProductionModelRole::ALL.len());
         let mut downloaded_bytes = 0;
 
         for role in ProductionModelRole::ALL {
@@ -211,18 +177,25 @@ pub fn prepare_production_model_set() -> Result<ModelSetCommandReport, FastSearc
             verify_role(role, &cache_root, &snapshot_root, &oracle, &cases)?;
             let runtime = ModelRuntimeIdentity::qualified(role, runtime_environment_sha256(role))
                 .map_err(readiness_error)?;
-            markers.push(
+            runtimes.push((role, runtime));
+        }
+        let set_identity_sha256 = model_set_identity_sha256(&runtimes).map_err(readiness_error)?;
+        let markers = runtimes
+            .into_iter()
+            .map(|(role, runtime)| {
+                let descriptor = production_model_descriptor(role);
                 RoleReadinessMarker::new(
                     role,
                     descriptor.repository,
                     descriptor.revision,
                     descriptor.compute_contract_sha256(),
                     descriptor.manifest_sha256(),
+                    &set_identity_sha256,
                     runtime,
                 )
-                .map_err(readiness_error)?,
-            );
-        }
+                .map_err(readiness_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let snapshot = publish_model_set_snapshot_locked(&model_root, markers)?;
         Ok((snapshot, downloaded_bytes))
@@ -264,19 +237,29 @@ fn verify_cached_artifacts(
         .join("snapshots")
         .join(descriptor.revision);
     for artifact in descriptor.required_files {
-        if !exact_file(
-            &snapshot_root.join(artifact.path),
-            artifact.bytes,
-            artifact.sha256,
-        )? {
+        if let Err(error) = verify_exact_artifact(&snapshot_root.join(artifact.path), artifact) {
             return Err(readiness_error(format!(
-                "{} artifact {} is not exact",
+                "{} artifact {} is not exact: {}",
                 role.slug(),
-                artifact.path
+                artifact.path,
+                error.message()
             )));
         }
     }
     Ok(())
+}
+
+fn verify_exact_artifact(
+    path: &Path,
+    artifact: &ModelArtifactDescriptor,
+) -> Result<(), FastSearchError> {
+    if exact_file(path, artifact.bytes, artifact.sha256)? {
+        Ok(())
+    } else {
+        Err(readiness_error(
+            "missing, truncated, or digest-mismatched bytes",
+        ))
+    }
 }
 
 fn model_set_not_ready(error: FastSearchError) -> FastSearchError {
@@ -372,19 +355,6 @@ impl ArtifactProvider {
         ));
         let snapshot = repository_root.join("snapshots").join(descriptor.revision);
         for artifact in descriptor.required_files {
-            self.ensure_file(
-                descriptor,
-                artifact.path,
-                artifact.bytes,
-                artifact.sha256,
-                &snapshot.join(artifact.path),
-                downloaded_bytes,
-            )?;
-        }
-        for artifact in SUPPLEMENTAL_ARTIFACTS
-            .iter()
-            .filter(|artifact| artifact.role == descriptor.role)
-        {
             self.ensure_file(
                 descriptor,
                 artifact.path,
@@ -1003,12 +973,23 @@ mod tests {
 
     fn marker(role: ProductionModelRole) -> RoleReadinessMarker {
         let descriptor = production_model_descriptor(role);
+        let runtimes = ProductionModelRole::ALL
+            .into_iter()
+            .map(|role| {
+                (
+                    role,
+                    ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let set_identity = model_set_identity_sha256(&runtimes).unwrap();
         RoleReadinessMarker::new(
             role,
             descriptor.repository,
             descriptor.revision,
             descriptor.compute_contract_sha256(),
             descriptor.manifest_sha256(),
+            set_identity,
             ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
         )
         .unwrap()
@@ -1346,5 +1327,31 @@ mod tests {
         assert!(!exact_file(&path, BODY.len() as u64, BODY_SHA256).unwrap());
         fs::write(&path, b"fedcba9876543210").unwrap();
         assert!(!exact_file(&path, BODY.len() as u64, BODY_SHA256).unwrap());
+    }
+
+    #[test]
+    fn runtime_support_artifact_types_fail_closed_when_missing_or_corrupt() {
+        for artifact_path in ["tokenizer_config.json", "special_tokens_map.json"] {
+            let root = TempTree::new(artifact_path);
+            let path = root.0.join(artifact_path);
+            let artifact = ModelArtifactDescriptor {
+                path: artifact_path,
+                bytes: BODY.len() as u64,
+                sha256: BODY_SHA256,
+            };
+            assert!(
+                verify_exact_artifact(&path, &artifact).is_err(),
+                "missing {artifact_path}"
+            );
+
+            fs::write(&path, b"fedcba9876543210").unwrap();
+            assert!(
+                verify_exact_artifact(&path, &artifact).is_err(),
+                "corrupt {artifact_path}"
+            );
+
+            fs::write(&path, BODY).unwrap();
+            verify_exact_artifact(&path, &artifact).unwrap();
+        }
     }
 }
