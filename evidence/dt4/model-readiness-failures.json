@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "task_id": "FASTSEARCH-DT4-B-MODEL-READINESS",
+  "plan_version": "PV-1",
+  "branch": "A",
+  "leaf": "A3",
+  "outcome": "PASS",
+  "base_revision": "25e0370dd66128e47d6d357a837441b90744bb6f",
+  "recorded_at": "2026-08-23T17:29:53.9767406+03:00",
+  "network_policy": {
+    "external_network_used": false,
+    "heavy_model_downloads": 0,
+    "heavy_model_compute_runs": 0,
+    "fixture_transport": "loopback HTTP over 16-byte deterministic bodies",
+    "accepted_compute_evidence_reused_read_only": "evidence/dt4/model-readiness-smoke.json",
+    "accepted_compute_evidence_sha256": "f3a51d531a0a3fbf295c41fbc762eb2430045f9ba4d6da633fd631786076b05b"
+  },
+  "transport_matrix": [
+    {
+      "scenario": "interrupted body resumes from durable offset",
+      "requests": ["GET without Range; connection closes after 6/16 bytes", "GET Range: bytes=6-; Content-Range: bytes 6-15/16"],
+      "pass": "final target equals the admitted SHA-256; transferred bytes total 16"
+    },
+    {
+      "scenario": "complete verified partial after process interruption replaces a corrupt target",
+      "requests": [],
+      "pass": "the invalid target is removed and the verified partial is renamed with zero network bytes"
+    },
+    {
+      "scenario": "verified-partial publication failure",
+      "requests": [],
+      "pass": "the verified partial remains recoverable, no target file publishes, and the previous valid generation remains readable"
+    },
+    {
+      "scenario": "wrong Content-Range",
+      "requests": 3,
+      "pass": "bounded retries exhaust; no bytes append; no target publishes; previous valid generation remains readable"
+    },
+    {
+      "scenario": "short response body",
+      "requests": 3,
+      "pass": "15/16 bytes remain only in the non-published partial and the next request asks for bytes=15-"
+    },
+    {
+      "scenario": "wrong SHA-256",
+      "requests": 3,
+      "pass": "each complete invalid partial is removed and no target publishes"
+    },
+    {
+      "scenario": "HTTP failure retry exhaustion",
+      "requests": 3,
+      "pass": "three 503 responses fail closed and no target publishes"
+    }
+  ],
+  "qwen_failure_matrix": [
+    "altered official manifest is rejected",
+    "substituted artifact bytes are rejected by SHA-256",
+    "incomplete and substituted yes/no token IDs are rejected",
+    "non-finite yes/no logits are rejected",
+    "partially acquired Windows handles are released after failed admission",
+    "admitted artifacts deny mutation and replacement for the provider lifetime"
+  ],
+  "checks": [
+    {
+      "command": "cargo test model_provisioning::tests --lib",
+      "outcome": "PASS",
+      "passed": 7,
+      "failed": 0
+    },
+    {
+      "command": "cargo test qwen_reranker::tests --lib",
+      "outcome": "PASS",
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo check --all-targets",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo test --all-targets",
+      "outcome": "PASS",
+      "external_or_heavy_tests_followed_existing_ignore_contracts": true
+    }
+  ],
+  "deferred": [
+    "A4 interprocess publication race and snapshot invalidation",
+    "A5 full clean-state recovery acceptance"
+  ]
+}

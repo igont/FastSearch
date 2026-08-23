@@ -85,9 +85,7 @@ impl QwenReranker {
         let suffix_tokens = tokenizer.encode(SUFFIX, false)?.get_ids().to_vec();
         let yes = tokenizer.encode("yes", false)?.get_ids().to_vec();
         let no = tokenizer.encode("no", false)?.get_ids().to_vec();
-        if yes != [QWEN_YES_TOKEN] || no != [QWEN_NO_TOKEN] {
-            return Err(format!("unexpected yes/no tokens: yes={yes:?}, no={no:?}").into());
-        }
+        verify_answer_token_ids(&yes, &no)?;
         // SAFETY: PinnedQwenArtifacts denies mutation, deletion and replacement
         // of the already verified weights until QwenReranker is dropped.
         let weights = unsafe {
@@ -141,13 +139,28 @@ impl QwenReranker {
             .to_vec1::<f32>()?;
         let yes = logits[QWEN_YES_TOKEN as usize];
         let no = logits[QWEN_NO_TOKEN as usize];
-        if !yes.is_finite() || !no.is_finite() {
-            return Err("Qwen produced non-finite yes/no logits".into());
-        }
-        let shift = yes.max(no);
-        let yes_exp = (yes - shift).exp();
-        Ok(yes_exp / (yes_exp + (no - shift).exp()))
+        yes_probability(yes, no)
     }
+}
+
+fn verify_answer_token_ids(yes: &[u32], no: &[u32]) -> Result<(), QwenError> {
+    if yes != [QWEN_YES_TOKEN] || no != [QWEN_NO_TOKEN] {
+        return Err(format!("unexpected yes/no tokens: yes={yes:?}, no={no:?}").into());
+    }
+    Ok(())
+}
+
+fn yes_probability(yes: f32, no: f32) -> Result<f32, QwenError> {
+    if !yes.is_finite() || !no.is_finite() {
+        return Err("Qwen produced non-finite yes/no logits".into());
+    }
+    let shift = yes.max(no);
+    let yes_exp = (yes - shift).exp();
+    let probability = yes_exp / (yes_exp + (no - shift).exp());
+    if !probability.is_finite() || !(0.0..=1.0).contains(&probability) {
+        return Err("Qwen produced an invalid yes probability".into());
+    }
+    Ok(probability)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -489,5 +502,21 @@ mod tests {
             fixture.0.join("released.safetensors"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn answer_token_contract_rejects_substitution_and_incomplete_ids() {
+        verify_answer_token_ids(&[QWEN_YES_TOKEN], &[QWEN_NO_TOKEN]).unwrap();
+        assert!(verify_answer_token_ids(&[QWEN_YES_TOKEN + 1], &[QWEN_NO_TOKEN]).is_err());
+        assert!(verify_answer_token_ids(&[QWEN_YES_TOKEN], &[]).is_err());
+        assert!(verify_answer_token_ids(&[QWEN_YES_TOKEN, 1], &[QWEN_NO_TOKEN]).is_err());
+    }
+
+    #[test]
+    fn probability_contract_is_stable_and_rejects_non_finite_logits() {
+        let balanced = yes_probability(4.0, 4.0).unwrap();
+        assert!((balanced - 0.5).abs() <= f32::EPSILON);
+        assert!(yes_probability(f32::NAN, 0.0).is_err());
+        assert!(yes_probability(0.0, f32::INFINITY).is_err());
     }
 }

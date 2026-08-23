@@ -1,13 +1,14 @@
 //! Production preparation for the four-role model set.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use reqwest::blocking::Client;
+use reqwest::{StatusCode, header::RANGE};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -231,6 +232,7 @@ pub fn production_model_set_status() -> Result<ModelSetCommandReport, FastSearch
 struct ArtifactProvider {
     client: Client,
     endpoint: String,
+    retry_delays: [Duration; 2],
 }
 
 impl ArtifactProvider {
@@ -245,6 +247,7 @@ impl ArtifactProvider {
                 .map_err(readiness_error)?,
             endpoint: std::env::var("HF_ENDPOINT")
                 .unwrap_or_else(|_| "https://huggingface.co".to_owned()),
+            retry_delays: [Duration::from_secs(1), Duration::from_secs(2)],
         })
     }
 
@@ -310,9 +313,6 @@ impl ArtifactProvider {
                 .and_then(|value| value.to_str())
                 .map_or("", |_| ".")
         ));
-        if partial.exists() {
-            fs::remove_file(&partial).map_err(readiness_error)?;
-        }
         let url = format!(
             "{}/{}/resolve/{}/{}",
             self.endpoint.trim_end_matches('/'),
@@ -322,27 +322,47 @@ impl ArtifactProvider {
         );
         let mut last_error = String::new();
         for attempt in 1..=3 {
-            match self.client.get(&url).send() {
-                Ok(mut response) if response.status().is_success() => {
-                    let mut output = File::create(&partial).map_err(readiness_error)?;
-                    match response.copy_to(&mut output) {
-                        Ok(bytes) => {
-                            output.flush().map_err(readiness_error)?;
-                            *downloaded_bytes = downloaded_bytes.saturating_add(bytes);
-                            if exact_file(&partial, expected_bytes, expected_sha256)? {
-                                fs::rename(&partial, target).map_err(readiness_error)?;
+            let mut offset = partial_offset(&partial, expected_bytes)?;
+            if offset == expected_bytes {
+                if exact_file(&partial, expected_bytes, expected_sha256)? {
+                    publish_verified_partial(&partial, target)?;
+                    return Ok(());
+                }
+                fs::remove_file(&partial).map_err(readiness_error)?;
+                offset = 0;
+            }
+            let mut request = self.client.get(&url);
+            if offset > 0 {
+                request = request.header(RANGE, format!("bytes={offset}-"));
+            }
+            match request.send() {
+                Ok(mut response) => {
+                    if let Err(error) = validate_response_range(&response, offset, expected_bytes) {
+                        last_error = error;
+                    } else {
+                        match append_response(
+                            &mut response,
+                            &partial,
+                            offset,
+                            expected_bytes,
+                            downloaded_bytes,
+                        ) {
+                            Ok(()) if exact_file(&partial, expected_bytes, expected_sha256)? => {
+                                publish_verified_partial(&partial, target)?;
                                 return Ok(());
                             }
-                            last_error = format!("digest or length mismatch for {artifact_path}");
+                            Ok(()) => {
+                                last_error = format!("SHA-256 mismatch for {artifact_path}");
+                                fs::remove_file(&partial).map_err(readiness_error)?;
+                            }
+                            Err(error) => last_error = error,
                         }
-                        Err(error) => last_error = error.to_string(),
                     }
                 }
-                Ok(response) => last_error = format!("HTTP {}", response.status()),
                 Err(error) => last_error = error.to_string(),
             }
             if attempt < 3 {
-                std::thread::sleep(Duration::from_secs(attempt));
+                std::thread::sleep(self.retry_delays[attempt - 1]);
             }
         }
         Err(readiness_error(format!(
@@ -350,6 +370,101 @@ impl ArtifactProvider {
             descriptor.repository, descriptor.revision
         )))
     }
+}
+
+fn publish_verified_partial(partial: &Path, target: &Path) -> Result<(), FastSearchError> {
+    if target.exists() {
+        fs::remove_file(target).map_err(readiness_error)?;
+    }
+    fs::rename(partial, target).map_err(readiness_error)
+}
+
+fn partial_offset(partial: &Path, expected_bytes: u64) -> Result<u64, FastSearchError> {
+    let Ok(metadata) = fs::metadata(partial) else {
+        return Ok(0);
+    };
+    if metadata.len() <= expected_bytes {
+        return Ok(metadata.len());
+    }
+    fs::remove_file(partial).map_err(readiness_error)?;
+    Ok(0)
+}
+
+fn validate_response_range(
+    response: &reqwest::blocking::Response,
+    offset: u64,
+    expected_bytes: u64,
+) -> Result<(), String> {
+    if expected_bytes == 0 {
+        return Err("zero-length model artifacts are not admitted".to_owned());
+    }
+    if offset == 0 {
+        return (response.status() == StatusCode::OK)
+            .then_some(())
+            .ok_or_else(|| format!("expected HTTP 200, got {}", response.status()));
+    }
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return Err(format!(
+            "expected HTTP 206 for Range bytes={offset}-, got {}",
+            response.status()
+        ));
+    }
+    let expected = format!("bytes {offset}-{}/{expected_bytes}", expected_bytes - 1);
+    let actual = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok());
+    if actual != Some(expected.as_str()) {
+        return Err(format!(
+            "unexpected Content-Range: expected {expected}, got {}",
+            actual.unwrap_or("<missing>")
+        ));
+    }
+    Ok(())
+}
+
+fn append_response(
+    response: &mut reqwest::blocking::Response,
+    partial: &Path,
+    offset: u64,
+    expected_bytes: u64,
+    downloaded_bytes: &mut u64,
+) -> Result<(), String> {
+    let mut output = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(offset > 0)
+        .truncate(offset == 0)
+        .open(partial)
+        .map_err(|error| error.to_string())?;
+    let expected_body = expected_bytes - offset;
+    let mut received = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let read = u64::try_from(read).map_err(|error| error.to_string())?;
+        if received.saturating_add(read) > expected_body {
+            return Err("response body exceeds the admitted artifact length".to_owned());
+        }
+        output
+            .write_all(&buffer[..read as usize])
+            .map_err(|error| error.to_string())?;
+        received += read;
+        *downloaded_bytes = downloaded_bytes.saturating_add(read);
+    }
+    output.flush().map_err(|error| error.to_string())?;
+    output.sync_all().map_err(|error| error.to_string())?;
+    if received != expected_body {
+        return Err(format!(
+            "incomplete response body: expected {expected_body} bytes, received {received}"
+        ));
+    }
+    Ok(())
 }
 
 fn verify_role(
@@ -509,4 +624,347 @@ fn readiness_error(error: impl std::fmt::Display) -> FastSearchError {
         ErrorKind::InvalidContent,
         format!("model-set preparation: {error}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{Read as _, Write as _},
+        net::TcpListener,
+        sync::atomic::{AtomicU64, Ordering},
+        thread,
+        time::SystemTime,
+    };
+
+    use super::*;
+
+    const BODY: &[u8] = b"0123456789abcdef";
+    const BODY_SHA256: &str = "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f";
+    const TEST_FILES: &[super::super::ModelArtifactDescriptor] = &[];
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(label: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "fastsearch-provider-{label}-{}-{unique}-{}",
+                std::process::id(),
+                TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct Reply {
+        status: &'static str,
+        headers: Vec<String>,
+        body: Vec<u8>,
+    }
+
+    impl Reply {
+        fn ok(body: &[u8], declared_length: usize) -> Self {
+            Self {
+                status: "200 OK",
+                headers: vec![format!("Content-Length: {declared_length}")],
+                body: body.to_vec(),
+            }
+        }
+
+        fn partial(body: &[u8], content_range: &str) -> Self {
+            Self {
+                status: "206 Partial Content",
+                headers: vec![
+                    format!("Content-Length: {}", body.len()),
+                    format!("Content-Range: {content_range}"),
+                ],
+                body: body.to_vec(),
+            }
+        }
+
+        fn failure() -> Self {
+            Self {
+                status: "503 Service Unavailable",
+                headers: vec!["Content-Length: 0".to_owned()],
+                body: Vec::new(),
+            }
+        }
+    }
+
+    fn serve(replies: Vec<Reply>) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::with_capacity(replies.len());
+            for reply in replies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                let mut response = format!("HTTP/1.1 {}\r\n", reply.status);
+                for header in reply.headers {
+                    response.push_str(&header);
+                    response.push_str("\r\n");
+                }
+                response.push_str("Connection: close\r\n\r\n");
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.write_all(&reply.body).unwrap();
+                stream.flush().unwrap();
+            }
+            requests
+        });
+        (endpoint, handle)
+    }
+
+    fn provider(endpoint: String) -> ArtifactProvider {
+        ArtifactProvider {
+            client: Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            endpoint,
+            retry_delays: [Duration::ZERO, Duration::ZERO],
+        }
+    }
+
+    fn descriptor() -> ProductionModelDescriptor {
+        ProductionModelDescriptor {
+            role: ProductionModelRole::Qwen3Reranker06B,
+            kind: crate::domain::ModelRoleKind::Reranker,
+            repository: "fixture/repository",
+            revision: "fixture-revision",
+            compute_contract: "fixture",
+            required_files: TEST_FILES,
+        }
+    }
+
+    fn marker(role: ProductionModelRole) -> RoleReadinessMarker {
+        let descriptor = production_model_descriptor(role);
+        RoleReadinessMarker::new(
+            role,
+            descriptor.repository,
+            descriptor.revision,
+            descriptor.compute_contract_sha256(),
+            descriptor.manifest_sha256(),
+            ModelRuntimeIdentity::qualified(role, "11".repeat(32)).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn interrupted_transfer_resumes_from_the_durable_partial_offset() {
+        let root = TempTree::new("resume");
+        let target = root.0.join("artifact.bin");
+        let (endpoint, server) = serve(vec![
+            Reply::ok(&BODY[..6], BODY.len()),
+            Reply::partial(&BODY[6..], "bytes 6-15/16"),
+        ]);
+        let mut downloaded = 0;
+
+        provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap();
+
+        let requests = server.join().unwrap();
+        assert!(!requests[0].contains("Range:"));
+        assert!(requests[1].contains("range: bytes=6-") || requests[1].contains("Range: bytes=6-"));
+        assert_eq!(fs::read(&target).unwrap(), BODY);
+        assert_eq!(downloaded, BODY.len() as u64);
+        assert!(!target.with_extension(".download").exists());
+    }
+
+    #[test]
+    fn completed_verified_partial_is_published_without_another_request() {
+        let root = TempTree::new("completed-partial");
+        let target = root.0.join("artifact.bin");
+        fs::write(&target, b"fedcba9876543210").unwrap();
+        fs::write(target.with_extension(".download"), BODY).unwrap();
+        let mut downloaded = 0;
+
+        provider("http://127.0.0.1:1".to_owned())
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap();
+
+        assert_eq!(fs::read(target).unwrap(), BODY);
+        assert_eq!(downloaded, 0);
+    }
+
+    #[test]
+    fn publication_failure_preserves_the_previous_generation_and_verified_partial() {
+        let root = TempTree::new("publication-failure");
+        let target = root.0.join("artifact.bin");
+        fs::create_dir(&target).unwrap();
+        let partial = target.with_extension(".download");
+        fs::write(&partial, BODY).unwrap();
+        let previous = publish_model_set_snapshot(
+            &root.0,
+            ProductionModelRole::ALL.into_iter().map(marker).collect(),
+        )
+        .unwrap();
+        let mut downloaded = 0;
+
+        provider("http://127.0.0.1:1".to_owned())
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+
+        assert!(target.is_dir());
+        assert_eq!(fs::read(partial).unwrap(), BODY);
+        assert_eq!(read_model_set_snapshot(&root.0).unwrap(), previous);
+        assert_eq!(downloaded, 0);
+    }
+
+    #[test]
+    fn wrong_content_range_exhausts_bounded_retries_without_publication() {
+        let root = TempTree::new("wrong-range");
+        let target = root.0.join("artifact.bin");
+        let partial = target.with_extension(".download");
+        fs::write(&partial, &BODY[..4]).unwrap();
+        let replies = (0..3)
+            .map(|_| Reply::partial(&BODY[4..], "bytes 0-11/16"))
+            .collect();
+        let (endpoint, server) = serve(replies);
+        let previous = publish_model_set_snapshot(
+            &root.0,
+            ProductionModelRole::ALL.into_iter().map(marker).collect(),
+        )
+        .unwrap();
+        let mut downloaded = 0;
+
+        let error = provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(error.to_string().contains("unexpected Content-Range"));
+        assert!(!target.exists());
+        assert_eq!(fs::read(&partial).unwrap(), &BODY[..4]);
+        assert_eq!(read_model_set_snapshot(&root.0).unwrap(), previous);
+        assert_eq!(downloaded, 0);
+    }
+
+    #[test]
+    fn wrong_sha_and_http_failures_do_not_publish_a_target() {
+        let root = TempTree::new("negative-matrix");
+        let target = root.0.join("artifact.bin");
+        let wrong = b"fedcba9876543210";
+        let (endpoint, server) = serve((0..3).map(|_| Reply::ok(wrong, wrong.len())).collect());
+        let mut downloaded = 0;
+        let error = provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+        assert!(!target.exists());
+        assert!(!target.with_extension(".download").exists());
+
+        let (endpoint, server) = serve((0..3).map(|_| Reply::failure()).collect());
+        let error = provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(error.to_string().contains("got 503"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn short_response_is_retained_only_as_a_non_published_partial() {
+        let root = TempTree::new("short-response");
+        let target = root.0.join("artifact.bin");
+        let (endpoint, server) = serve(vec![
+            Reply::ok(&BODY[..15], 15),
+            Reply::failure(),
+            Reply::failure(),
+        ]);
+        let mut downloaded = 0;
+
+        provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+
+        let requests = server.join().unwrap();
+        assert!(
+            requests[1].contains("range: bytes=15-") || requests[1].contains("Range: bytes=15-")
+        );
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read(target.with_extension(".download")).unwrap(),
+            &BODY[..15]
+        );
+        assert_eq!(downloaded, 15);
+    }
+
+    #[test]
+    fn exact_file_rejects_wrong_size_and_digest() {
+        let root = TempTree::new("exact-file");
+        let path = root.0.join("artifact.bin");
+        fs::write(&path, &BODY[..15]).unwrap();
+        assert!(!exact_file(&path, BODY.len() as u64, BODY_SHA256).unwrap());
+        fs::write(&path, b"fedcba9876543210").unwrap();
+        assert!(!exact_file(&path, BODY.len() as u64, BODY_SHA256).unwrap());
+    }
 }
