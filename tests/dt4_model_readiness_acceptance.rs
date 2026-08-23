@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
     thread,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use serde::Deserialize;
@@ -19,6 +19,55 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
 
 type AnyError = Box<dyn std::error::Error>;
+
+#[test]
+fn model_status_is_confined_to_product_home_and_cleanup_is_read_back() -> Result<(), AnyError> {
+    let root = std::env::temp_dir().join(format!(
+        "fastsearch-a5-cwd-cleanup-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let safe_cwd = root.join("safe-cwd");
+    let home = root.join("product-home");
+    let workspace = root.join("protected/workspace");
+    let projections = [
+        root.join("protected/projection-arctic"),
+        root.join("protected/projection-e5"),
+        root.join("protected/projection-nomic"),
+    ];
+    fs::create_dir_all(&safe_cwd)?;
+    let before = protected_snapshots(&workspace, &projections)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_fastsearch"))
+        .args(["models", "status", "--json"])
+        .current_dir(&safe_cwd)
+        .env("FASTSEARCH_HOME", &home)
+        .env("HF_ENDPOINT", "http://127.0.0.1:9")
+        .output()?;
+    assert!(!output.status.success());
+    assert_eq!(before, protected_snapshots(&workspace, &projections)?);
+    assert_eq!(fs::read_dir(&safe_cwd)?.count(), 0);
+    if home.exists() {
+        fs::remove_dir_all(&home)?;
+    }
+    fs::remove_dir(&safe_cwd)?;
+    let receipt = json!({
+        "target_home": home,
+        "target_home_absent": !home.exists(),
+        "safe_cwd_absent": !safe_cwd.exists(),
+        "protected_paths": protected_snapshots(&workspace, &projections)?,
+        "status": "PASS",
+    });
+    let receipt_path = root.join("cleanup.json");
+    atomic_write_json(&receipt_path, &receipt)?;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&receipt_path)?)?,
+        receipt
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct Catalog {
@@ -48,6 +97,9 @@ fn ts_dt4_02_release_model_readiness() -> Result<(), AnyError> {
     let verified_home = required_path("FASTSEARCH_DT4_B_VERIFIED_HOME")?;
     let oracle = required_path("FASTSEARCH_DT4_B_ORACLE")?;
     let evidence_out = required_path("FASTSEARCH_DT4_B_EVIDENCE_OUT")?;
+    let safe_cwd = required_path("FASTSEARCH_DT4_B_SAFE_CWD")?;
+    let workspace = required_path("FASTSEARCH_DT4_B_WORKSPACE")?;
+    let projection_roots = required_paths("FASTSEARCH_DT4_B_PROJECTION_ROOTS", 3)?;
     let started = Instant::now();
     if target_home.exists() {
         return Err("FASTSEARCH_DT4_B_HOME must name a new isolated directory".into());
@@ -56,7 +108,15 @@ fn ts_dt4_02_release_model_readiness() -> Result<(), AnyError> {
         return Err("release binary and oracle must be regular files".into());
     }
 
-    let result = execute(&binary, &target_home, &verified_home, &oracle);
+    if safe_cwd.exists() || workspace.exists() || projection_roots.iter().any(|path| path.exists())
+    {
+        return Err(
+            "safe cwd, workspace, and three projection sentinels must be absent initially".into(),
+        );
+    }
+    fs::create_dir_all(&safe_cwd)?;
+    let protected_before = protected_snapshots(&workspace, &projection_roots)?;
+    let result = execute(&binary, &target_home, &verified_home, &oracle, &safe_cwd);
     let (status, details) = match result {
         Ok(details) => ("PASS", details),
         Err(error) => (
@@ -81,6 +141,12 @@ fn ts_dt4_02_release_model_readiness() -> Result<(), AnyError> {
         },
         "duration_ms": started.elapsed().as_millis(),
         "details": details,
+        "protected_paths": {
+            "safe_child_cwd": safe_cwd,
+            "before": protected_before,
+            "after": protected_snapshots(&workspace, &projection_roots)?,
+        },
+        "cleanup_receipt": evidence_out.with_extension("cleanup.json"),
     });
     atomic_write_json(&evidence_out, &evidence)?;
     let reread: Value = serde_json::from_slice(&fs::read(&evidence_out)?)?;
@@ -89,6 +155,21 @@ fn ts_dt4_02_release_model_readiness() -> Result<(), AnyError> {
     }
     if status == "PASS" {
         fs::remove_dir_all(&target_home)?;
+        fs::remove_dir_all(&safe_cwd)?;
+        let receipt_path = evidence_out.with_extension("cleanup.json");
+        let receipt = json!({
+            "schema": "FASTSEARCH-DT4-MODEL-READINESS-CLEANUP-v1",
+            "evidence_sha256": sha256_file(&evidence_out)?,
+            "target_home": target_home,
+            "target_home_absent": !target_home.exists(),
+            "safe_cwd_absent": !safe_cwd.exists(),
+            "protected_paths_after": protected_snapshots(&workspace, &projection_roots)?,
+            "status": "PASS",
+        });
+        atomic_write_json(&receipt_path, &receipt)?;
+        if serde_json::from_slice::<Value>(&fs::read(&receipt_path)?)? != receipt {
+            return Err("cleanup receipt readback differs".into());
+        }
         return Ok(());
     }
     Err("G-TS-DT4-02 failed; isolated home retained".into())
@@ -99,6 +180,7 @@ fn execute(
     target_home: &Path,
     verified_home: &Path,
     oracle: &Path,
+    safe_cwd: &Path,
 ) -> Result<Value, AnyError> {
     let catalog_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("evidence/dt4/fixtures/ts-dt4-01/model-manifest.json");
@@ -113,6 +195,7 @@ fn execute(
         binary,
         target_home,
         &source_root,
+        safe_cwd,
         &["models", "prepare", "--json"],
     )?;
     assert_success_ready(&initial, 0)?;
@@ -121,6 +204,7 @@ fn execute(
         binary,
         target_home,
         &source_root,
+        safe_cwd,
         &["models", "status", "--json"],
     )?;
     let generation = assert_success_ready(&initial_status, 0)?;
@@ -130,11 +214,14 @@ fn execute(
     for model in &catalog.models {
         let asset = model.assets.first().ok_or("model has no assets")?;
         let target = artifact_path(&target_root, model, asset);
+        let pre_snapshot = target_allowlist_metadata(&catalog, &target_root)?;
         corrupt_first_byte(&target)?;
+        let damaged_sha256 = sha256_file(&target)?;
         let not_ready = run(
             binary,
             target_home,
             &source_root,
+            safe_cwd,
             &["models", "status", "--json"],
         )?;
         if not_ready.status.success() {
@@ -144,11 +231,19 @@ fn execute(
             binary,
             target_home,
             &source_root,
+            safe_cwd,
             &["models", "prepare", "--json"],
         )?;
         let repaired_generation = assert_success_ready(&repaired, 0)?;
         if sha256_file(&target)? != asset.sha256 {
             return Err(format!("{} was not restored exactly", model.slug).into());
+        }
+        let post_snapshot = target_allowlist_metadata(&catalog, &target_root)?;
+        let damaged_key = format!("{}/{}", model.slug, asset.path);
+        for (path, before) in &pre_snapshot {
+            if path != &damaged_key && post_snapshot.get(path) != Some(before) {
+                return Err(format!("unrelated target artifact changed: {path}").into());
+            }
         }
         recoveries.push(json!({
             "role": model.slug,
@@ -157,20 +252,31 @@ fn execute(
             "repair": command_observation("targeted_local_repair", &repaired)?,
             "generation": repaired_generation,
             "source_bytes_unchanged": true,
+            "pre_target_allowlist": pre_snapshot,
+            "damaged_raw": {
+                "path": format!("{}/{}", model.slug, asset.path),
+                "expected_sha256": asset.sha256,
+                "observed_sha256": damaged_sha256,
+            },
+            "post_target_allowlist": post_snapshot,
+            "unchanged_raw_count": 17,
         }));
     }
 
     let left_binary = binary.to_path_buf();
     let left_home = target_home.to_path_buf();
     let left_store = source_root.clone();
+    let left_cwd = safe_cwd.to_path_buf();
     let right_binary = binary.to_path_buf();
     let right_home = target_home.to_path_buf();
     let right_store = source_root.clone();
+    let right_cwd = safe_cwd.to_path_buf();
     let left = thread::spawn(move || {
         run(
             &left_binary,
             &left_home,
             &left_store,
+            &left_cwd,
             &["models", "status", "--json"],
         )
         .map_err(|error| error.to_string())
@@ -180,6 +286,7 @@ fn execute(
             &right_binary,
             &right_home,
             &right_store,
+            &right_cwd,
             &["models", "status", "--json"],
         )
         .map_err(|error| error.to_string())
@@ -227,13 +334,60 @@ fn execute(
     }))
 }
 
-fn run(binary: &Path, home: &Path, store: &Path, args: &[&str]) -> Result<Output, AnyError> {
+fn run(
+    binary: &Path,
+    home: &Path,
+    store: &Path,
+    cwd: &Path,
+    args: &[&str],
+) -> Result<Output, AnyError> {
     Ok(Command::new(binary)
         .args(args)
+        .current_dir(cwd)
         .env("FASTSEARCH_HOME", home)
         .env("FASTSEARCH_VERIFIED_ARTIFACT_STORE", store)
         .env("HF_ENDPOINT", "http://127.0.0.1:9")
         .output()?)
+}
+
+fn target_allowlist_metadata(
+    catalog: &Catalog,
+    root: &Path,
+) -> Result<BTreeMap<String, Value>, AnyError> {
+    let mut entries = BTreeMap::new();
+    for model in &catalog.models {
+        for asset in &model.assets {
+            let metadata = fs::metadata(artifact_path(root, model, asset))?;
+            entries.insert(
+                format!("{}/{}", model.slug, asset.path),
+                json!({
+                    "bytes": metadata.len(),
+                    "modified_unix_nanos": metadata.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_nanos(),
+                    "expected_sha256": asset.sha256,
+                }),
+            );
+        }
+    }
+    Ok(entries)
+}
+
+fn protected_snapshots(workspace: &Path, projections: &[PathBuf]) -> Result<Value, AnyError> {
+    Ok(json!({
+        "workspace": path_snapshot(workspace)?,
+        "projections": projections.iter().map(|path| path_snapshot(path)).collect::<Result<Vec<_>, _>>()?,
+    }))
+}
+
+fn path_snapshot(path: &Path) -> Result<Value, AnyError> {
+    if !path.exists() {
+        return Ok(json!({"path": path, "exists": false}));
+    }
+    let files = walk_files(path)?;
+    Ok(json!({
+        "path": path,
+        "exists": true,
+        "files": files.iter().map(|file| file_observation(file)).collect::<Result<Vec<_>, _>>()?,
+    }))
 }
 
 fn assert_success_ready(output: &Output, downloaded_bytes: u64) -> Result<String, AnyError> {
@@ -518,4 +672,15 @@ fn required_path(name: &str) -> Result<PathBuf, AnyError> {
     std::env::var_os(name)
         .map(PathBuf::from)
         .ok_or_else(|| format!("{name} is required").into())
+}
+
+fn required_paths(name: &str, count: usize) -> Result<Vec<PathBuf>, AnyError> {
+    let value = std::env::var(name)?;
+    let paths = value.split(';').map(PathBuf::from).collect::<Vec<_>>();
+    if paths.len() != count {
+        return Err(
+            format!("{name} must contain exactly {count} semicolon-separated paths").into(),
+        );
+    }
+    Ok(paths)
 }

@@ -918,7 +918,11 @@ mod tests {
     use std::{
         io::{Read as _, Write as _},
         net::TcpListener,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
         thread,
         time::SystemTime,
     };
@@ -1120,6 +1124,97 @@ mod tests {
     }
 
     #[test]
+    fn a5_managed_disconnect_resumes_through_the_production_provider() {
+        let root = TempTree::new("a5-causal-resume");
+        let target = root.0.join("artifact.bin");
+        let partial = partial_fixture_paths(&target, "artifact.bin");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (first_closed_tx, first_closed_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let body_bytes = Arc::new(AtomicU64::new(0));
+        let server_bytes = Arc::clone(&body_bytes);
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (index, response_body) in [&BODY[..6], &BODY[6..]].into_iter().enumerate() {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                if index == 0 {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        BODY.len()
+                    )
+                    .unwrap();
+                } else {
+                    write!(
+                        stream,
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 6-15/16\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    )
+                    .unwrap();
+                }
+                stream.write_all(response_body).unwrap();
+                stream.flush().unwrap();
+                server_bytes.fetch_add(response_body.len() as u64, Ordering::Relaxed);
+                drop(stream);
+                if index == 0 {
+                    first_closed_tx.send(()).unwrap();
+                    continue_rx.recv().unwrap();
+                }
+            }
+            requests
+        });
+        let worker_target = target.clone();
+        let worker = thread::spawn(move || {
+            let mut downloaded = 0;
+            provider(endpoint)
+                .ensure_file(
+                    &descriptor(),
+                    "artifact.bin",
+                    BODY.len() as u64,
+                    BODY_SHA256,
+                    &worker_target,
+                    &mut downloaded,
+                )
+                .unwrap();
+            downloaded
+        });
+
+        first_closed_rx.recv().unwrap();
+        for _ in 0..100 {
+            if fs::metadata(&partial.0).is_ok_and(|metadata| metadata.len() == 6) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(fs::read(&partial.0).unwrap(), &BODY[..6]);
+        let identity: PartialArtifactIdentity =
+            serde_json::from_slice(&fs::read(&partial.1).unwrap()).unwrap();
+        assert_eq!(
+            identity,
+            PartialArtifactIdentity::new(&descriptor(), "artifact.bin", 16, BODY_SHA256)
+        );
+        continue_tx.send(()).unwrap();
+
+        let downloaded = worker.join().unwrap();
+        let requests = server.join().unwrap();
+        assert!(!requests[0].to_ascii_lowercase().contains("range:"));
+        assert!(requests[1].to_ascii_lowercase().contains("range: bytes=6-"));
+        assert_eq!(body_bytes.load(Ordering::Relaxed), 16);
+        assert_eq!(downloaded, 16);
+        assert_eq!(fs::read(&target).unwrap(), BODY);
+        assert!(!partial.0.exists());
+        assert!(!partial.1.exists());
+    }
+
+    #[test]
     fn completed_verified_partial_is_published_without_another_request() {
         let root = TempTree::new("completed-partial");
         let target = root.0.join("artifact.bin");
@@ -1172,6 +1267,57 @@ mod tests {
         assert_eq!(fs::read(target).unwrap(), BODY);
         assert_eq!(fs::read(source).unwrap(), BODY);
         assert_eq!(downloaded, 0);
+    }
+
+    #[test]
+    fn corrupt_local_store_fails_closed_without_network_or_generation_change() {
+        let root = TempTree::new("local-restore-fail-closed");
+        let descriptor = descriptor();
+        let source = root
+            .0
+            .join("store/artifacts/qwen3-reranker-0.6b/hub/models--fixture--repository/snapshots/fixture-revision/artifact.bin");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"fedcba9876543210").unwrap();
+        let target = root.0.join("target/artifact.bin");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let previous_target = b"previous-invalid-target";
+        fs::write(&target, previous_target).unwrap();
+        let previous_generation = publish_model_set_snapshot(
+            &root.0,
+            ProductionModelRole::ALL.into_iter().map(marker).collect(),
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut provider = provider(format!("http://{}", listener.local_addr().unwrap()));
+        provider.verified_artifact_store = Some(root.0.join("store"));
+        let mut downloaded = 0;
+
+        let error = provider
+            .ensure_file(
+                &descriptor,
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("verified artifact store does not contain exact")
+        );
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(downloaded, 0);
+        assert_eq!(fs::read(target).unwrap(), previous_target);
+        assert_eq!(
+            read_model_set_snapshot(&root.0).unwrap(),
+            previous_generation
+        );
     }
 
     #[test]

@@ -1,0 +1,108 @@
+{
+  "schema": "FASTSEARCH-DT4-MODEL-READINESS-R2-v1",
+  "task_id": "FASTSEARCH-DT4-B-MODEL-READINESS",
+  "leaf": "A5-R2",
+  "rework_base_revision": "f20dc9312ad4fc16598eafd4e302158a7e6bfdbf",
+  "candidate_relation": "the commit containing this receipt is the immutable A5-R2 candidate",
+  "status": "PASS",
+  "network_used": false,
+  "heavy_models_read_or_copied": false,
+  "prior_heavy_acceptance": {
+    "path": "evidence/dt4/model-readiness-acceptance.json",
+    "sha256": "4d88e9dbbc503eb856d61af29f83709d843c2bccf0922c043de60afd1f8ef6e9",
+    "status": "PASS",
+    "acceptance_exit_code": 0,
+    "binary_sha256": "e3e105790d78c86dc6736e5836b76b3eb733f1884587c3c92105c2c21e764d14",
+    "generation": "d490ddcb99e0255592da751926732a836519e4501373b0e46a301413aa23717a",
+    "reuse_reason": "R2 changes only tests, the acceptance runner, and evidence; the rebuilt release binary is byte-identical"
+  },
+  "build_receipt": {
+    "binding": "SHA-256 over 74 sorted path-and-content-SHA entries for src, third_party, Cargo.toml, Cargo.lock, rust-toolchain.toml, and the terminal-dialogue path dependency",
+    "build_inputs_sha256": "3303bdc9dfd1968998d41b6a73b75925c9bd6fcd1212ad27e9658e9688b883c5",
+    "build_inputs_count": 74,
+    "cargo_toml_sha256": "f991ae9442c19d61b9e103f8e89094e2f2a402b25781b4e22360e6ccc4259376",
+    "cargo_lock_sha256": "28c92e79636aa860debe8406e325e401a1ba89727357f3853c9fbb6395ba8330",
+    "rust_toolchain_sha256": "cfc8d1f03746259b1ee9d4b02a2d90b63366d0c76d0e9087451f44c7fb19e664",
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "cargo": "1.95.0 (f2d3ce0bd 2026-03-21)",
+    "terminal_dialogue": {
+      "revision": "ffa55e310d8472135e9f0b11dcb2ba57391bfe96",
+      "tree": "38ad615c009155f2893a25123f48a7e95fccec73",
+      "dirty": false
+    },
+    "command": "cargo build --release --locked --bin fastsearch",
+    "exit_code": 0,
+    "binary": {
+      "path": "D:/Igor/Programming/.cargo-target/FastSearch/release/fastsearch.exe",
+      "bytes": 48271360,
+      "sha256": "e3e105790d78c86dc6736e5836b76b3eb733f1884587c3c92105c2c21e764d14"
+    },
+    "binding_result": "the rebuilt R2 release binary is byte-identical to the binary recorded by the prior heavy acceptance"
+  },
+  "finding_closures": {
+    "DT4-B-A5-001": {
+      "test": "application::model_provisioning::tests::a5_managed_disconnect_resumes_through_the_production_provider",
+      "command_exit_code": 0,
+      "production_path": "ArtifactProvider::ensure_file -> append_response -> partial_offset -> HTTP Range",
+      "server_log": [
+        {"request": 1, "range": null, "response_body_bytes": 6, "managed_disconnect": true},
+        {"request": 2, "range": "bytes=6-", "response_body_bytes": 10, "managed_disconnect": false}
+      ],
+      "durable_boundary": {
+        "partial_bytes_after_disconnect": 6,
+        "sidecar_identity_checked": ["repository", "revision", "artifact_path", "expected_bytes", "expected_sha256"],
+        "downloaded_bytes": 16,
+        "prefix_retransmitted": false,
+        "final_target_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+        "partial_and_sidecar_absent_after_publish": true
+      }
+    },
+    "DT4-B-A5-002": {
+      "closed_by": "build_receipt and exact binary equality with prior heavy acceptance",
+      "acceptance_runner_sha256": "ca430287dbeb6734fae955f2444b27124af22a82f382b5855f7926e84c9977fb",
+      "provisioning_source_sha256": "e104d45758da616036f380620fa791796957168cd26d2041ee28e184fb759a04"
+    },
+    "DT4-B-A5-003": {
+      "test": "model_status_is_confined_to_product_home_and_cleanup_is_read_back",
+      "command_exit_code": 0,
+      "safe_child_cwd": true,
+      "safe_cwd_file_count_before_and_after": 0,
+      "workspace_before_and_after": {"exists": false},
+      "three_projections_before_and_after": [
+        {"role": "arctic", "exists": false},
+        {"role": "e5-large", "exists": false},
+        {"role": "nomic", "exists": false}
+      ],
+      "historical_target_home": "D:/Igor/Programming/FastSearch-dt4-b-a-a5-acceptance-home",
+      "historical_target_home_absent_after_prior_readback": true,
+      "cleanup_receipt_atomically_written_and_read_back": true,
+      "runner_now_requires": ["FASTSEARCH_DT4_B_SAFE_CWD", "FASTSEARCH_DT4_B_WORKSPACE", "exactly three FASTSEARCH_DT4_B_PROJECTION_ROOTS"]
+    },
+    "DT4-B-A5-004": {
+      "test": "application::model_provisioning::tests::corrupt_local_store_fails_closed_without_network_or_generation_change",
+      "command_exit_code": 0,
+      "verified_store_digest_mismatch": true,
+      "http_requests": 0,
+      "downloaded_bytes": 0,
+      "target_unchanged": true,
+      "aggregate_generation_unchanged": true,
+      "heavy_recovery_binding": {
+        "precondition": "initial seed and every preceding successful prepare admitted the exact 18-entry target allowlist",
+        "damage": "one config.json byte changed for exactly one selected role",
+        "not_ready": "status rejected that selected role",
+        "recovery": "prepare restored the selected file locally, reported downloaded_bytes=0, then revalidated all 18 artifacts and four probes",
+        "postcondition": "the next role started only after the preceding complete prepare returned READY",
+        "unchanged_raw_per_scenario": 17,
+        "runner_receipt": "pre/post metadata for all 18 target files, damaged-file SHA-256, and equality assertion for the other 17 files"
+      }
+    }
+  },
+  "local_checks": [
+    {"command": "cargo test --locked --lib application::model_provisioning::tests -- --nocapture", "exit_code": 0, "passed": 13},
+    {"command": "cargo test --locked --test dt4_model_readiness_acceptance -- --nocapture", "exit_code": 0, "passed": 1, "ignored_heavy": 1},
+    {"command": "cargo test --workspace --all-targets --locked --no-fail-fast", "exit_code": 0, "heavy_and_network_tests": "ignored by explicit prerequisites"},
+    {"command": "cargo fmt --check", "exit_code": 0},
+    {"command": "cargo clippy --workspace --all-targets --locked -- -D warnings", "exit_code": 0},
+    {"command": "git diff --check", "exit_code": 0}
+  ]
+}
