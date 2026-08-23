@@ -1,11 +1,8 @@
 ---
-tdr_id: "TDR-FS-2.2"
-title: "Namespace .fastsearch и migration"
-status: "принято"
-implementation_stage: "запланированное"
-parent_tdr_id: "TDR-FS-2"
-child_tdr_ids: []
-updated: "2026-08-16"
+TDR: TDR-FS-2
+project_scope: general
+document_status: actual
+Индексация: true
 ---
 # TDR-FS-2.2 — Namespace `.fastsearch` и migration
 

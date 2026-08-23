@@ -1,11 +1,8 @@
 ---
-tdr_id: "TDR-FS-2.1"
-title: "Каталог и admission рабочей области"
-status: "принято"
-implementation_stage: "текущее"
-parent_tdr_id: "TDR-FS-2"
-child_tdr_ids: []
-updated: "2026-08-16"
+TDR: TDR-FS-2; TDR-FS-3
+project_scope: current
+document_status: actual
+Индексация: true
 ---
 # TDR-FS-2.1 — Каталог и admission рабочей области
 

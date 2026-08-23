@@ -1,5 +1,7 @@
 ---
 TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.4; TDR-FS-2.5; TDR-FS-2.7
+project_scope: future
+document_status: actual
 Индексация: true
 ---
 # TDR-FS-2.6 - Единый поиск и переранжирование

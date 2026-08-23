@@ -1,5 +1,7 @@
 ---
-TDR: TDR-FS-2; TDR-FS-2.4; TDR-FS-2.6
+TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.4; TDR-FS-2.6
+project_scope: future
+document_status: actual
 Индексация: true
 ---
 # TDR-FS-2.5 - Режим сравнения embedding-моделей
@@ -73,7 +75,7 @@ FastSearch сохраняет исследовательский режим дл
 
 ## Связи и основания
 
-[TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет пакет. [TDR-FS-2.4](<TDR-FS-2.4 Automatic model provisioning.md>) поставляет модельные артефакты. [TDR-FS-2.6](<TDR-FS-2.6 Единый поиск и переранжирование.md>) определяет независимый производственный поток.
+[TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет пакет. [TDR-FS-2.3](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>) отделяет подтверждённое обновление проекций сравнения от обычного поиска. [TDR-FS-2.4](<TDR-FS-2.4 Automatic model provisioning.md>) поставляет модельные артефакты. [TDR-FS-2.6](<TDR-FS-2.6 Единый поиск и переранжирование.md>) определяет независимый производственный поток.
 
 Векторные проекции координируются в [`src/application/comparison.rs`](../../../src/application/comparison.rs), а терминальное представление находится в [`src/application/console/comparison.rs`](../../../src/application/console/comparison.rs).
 
