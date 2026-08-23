@@ -1,7 +1,7 @@
 //! Production preparation for the four-role model set.
 
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -11,6 +11,11 @@ use reqwest::blocking::Client;
 use reqwest::{StatusCode, header::RANGE};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
 
 use crate::{
     adapters::{qwen_reranker::QwenReranker, vector::observe_embedding_model},
@@ -235,6 +240,58 @@ struct ArtifactProvider {
     retry_delays: [Duration; 2],
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PartialArtifactIdentity {
+    schema: u8,
+    repository: String,
+    revision: String,
+    artifact_path: String,
+    expected_bytes: u64,
+    expected_sha256: String,
+}
+
+impl PartialArtifactIdentity {
+    fn new(
+        descriptor: &ProductionModelDescriptor,
+        artifact_path: &str,
+        expected_bytes: u64,
+        expected_sha256: &str,
+    ) -> Self {
+        Self {
+            schema: 1,
+            repository: descriptor.repository.to_owned(),
+            revision: descriptor.revision.to_owned(),
+            artifact_path: artifact_path.to_owned(),
+            expected_bytes,
+            expected_sha256: expected_sha256.to_owned(),
+        }
+    }
+
+    fn sha256(&self) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(self).expect("partial identity is serializable"))
+        )
+    }
+}
+
+#[derive(Debug)]
+enum ResponseBodyError {
+    Oversize,
+    Other(String),
+}
+
+impl std::fmt::Display for ResponseBodyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Oversize => {
+                formatter.write_str("response body exceeds the admitted artifact length")
+            }
+            Self::Other(error) => formatter.write_str(error),
+        }
+    }
+}
+
 impl ArtifactProvider {
     fn new() -> Result<Self, FastSearchError> {
         Ok(Self {
@@ -306,13 +363,13 @@ impl ArtifactProvider {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(readiness_error)?;
         }
-        let partial = target.with_extension(format!(
-            "{}download",
-            target
-                .extension()
-                .and_then(|value| value.to_str())
-                .map_or("", |_| ".")
-        ));
+        let identity = PartialArtifactIdentity::new(
+            descriptor,
+            artifact_path,
+            expected_bytes,
+            expected_sha256,
+        );
+        let (partial, partial_identity) = partial_state_paths(target, &identity)?;
         let url = format!(
             "{}/{}/resolve/{}/{}",
             self.endpoint.trim_end_matches('/'),
@@ -322,13 +379,14 @@ impl ArtifactProvider {
         );
         let mut last_error = String::new();
         for attempt in 1..=3 {
-            let mut offset = partial_offset(&partial, expected_bytes)?;
+            let mut offset =
+                partial_offset(&partial, &partial_identity, &identity, expected_bytes)?;
             if offset == expected_bytes {
                 if exact_file(&partial, expected_bytes, expected_sha256)? {
-                    publish_verified_partial(&partial, target)?;
+                    publish_verified_partial(&partial, &partial_identity, target)?;
                     return Ok(());
                 }
-                fs::remove_file(&partial).map_err(readiness_error)?;
+                remove_partial_state(&partial, &partial_identity)?;
                 offset = 0;
             }
             let mut request = self.client.get(&url);
@@ -343,19 +401,25 @@ impl ArtifactProvider {
                         match append_response(
                             &mut response,
                             &partial,
+                            &partial_identity,
+                            &identity,
                             offset,
                             expected_bytes,
                             downloaded_bytes,
                         ) {
                             Ok(()) if exact_file(&partial, expected_bytes, expected_sha256)? => {
-                                publish_verified_partial(&partial, target)?;
+                                publish_verified_partial(&partial, &partial_identity, target)?;
                                 return Ok(());
                             }
                             Ok(()) => {
                                 last_error = format!("SHA-256 mismatch for {artifact_path}");
-                                fs::remove_file(&partial).map_err(readiness_error)?;
+                                remove_partial_state(&partial, &partial_identity)?;
                             }
-                            Err(error) => last_error = error,
+                            Err(ResponseBodyError::Oversize) => {
+                                last_error = ResponseBodyError::Oversize.to_string();
+                                remove_partial_state(&partial, &partial_identity)?;
+                            }
+                            Err(error) => last_error = error.to_string(),
                         }
                     }
                 }
@@ -372,22 +436,139 @@ impl ArtifactProvider {
     }
 }
 
-fn publish_verified_partial(partial: &Path, target: &Path) -> Result<(), FastSearchError> {
-    if target.exists() {
-        fs::remove_file(target).map_err(readiness_error)?;
+fn publish_verified_partial(
+    partial: &Path,
+    partial_identity: &Path,
+    target: &Path,
+) -> Result<(), FastSearchError> {
+    publish_verified_partial_with(partial, target, atomic_replace_existing)?;
+    if partial_identity.exists() {
+        let _ = fs::remove_file(partial_identity);
     }
-    fs::rename(partial, target).map_err(readiness_error)
+    Ok(())
 }
 
-fn partial_offset(partial: &Path, expected_bytes: u64) -> Result<u64, FastSearchError> {
+fn publish_verified_partial_with(
+    partial: &Path,
+    target: &Path,
+    replace_existing: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), FastSearchError> {
+    if target.exists() {
+        replace_existing(target, partial).map_err(readiness_error)
+    } else {
+        fs::rename(partial, target).map_err(readiness_error)
+    }
+}
+
+#[cfg(windows)]
+fn atomic_replace_existing(target: &Path, replacement: &Path) -> std::io::Result<()> {
+    let target = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replacement = replacement
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both buffers are live, NUL-terminated UTF-16 paths. ReplaceFileW
+    // is the single Windows replacement operation; failure leaves the old
+    // target name in place instead of exposing a delete/rename gap.
+    let replaced = unsafe {
+        ReplaceFileW(
+            target.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn atomic_replace_existing(target: &Path, replacement: &Path) -> std::io::Result<()> {
+    fs::rename(replacement, target)
+}
+
+fn partial_state_paths(
+    target: &Path,
+    identity: &PartialArtifactIdentity,
+) -> Result<(PathBuf, PathBuf), FastSearchError> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| readiness_error("model artifact target has no parent"))?;
+    let file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| readiness_error("model artifact target has no UTF-8 file name"))?;
+    let partial = parent.join(format!(
+        ".{file_name}.fastsearch-{}.download",
+        identity.sha256()
+    ));
+    let partial_identity = partial.with_extension("download.identity.json");
+    Ok((partial, partial_identity))
+}
+
+fn partial_offset(
+    partial: &Path,
+    partial_identity: &Path,
+    expected_identity: &PartialArtifactIdentity,
+    expected_bytes: u64,
+) -> Result<u64, FastSearchError> {
     let Ok(metadata) = fs::metadata(partial) else {
+        if partial_identity.exists() {
+            fs::remove_file(partial_identity).map_err(readiness_error)?;
+        }
         return Ok(0);
     };
+    let identity_matches = fs::read(partial_identity)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PartialArtifactIdentity>(&bytes).ok())
+        .is_some_and(|identity| identity == *expected_identity);
+    if !identity_matches {
+        remove_partial_state(partial, partial_identity)?;
+        return Ok(0);
+    }
     if metadata.len() <= expected_bytes {
         return Ok(metadata.len());
     }
-    fs::remove_file(partial).map_err(readiness_error)?;
+    remove_partial_state(partial, partial_identity)?;
     Ok(0)
+}
+
+fn remove_partial_state(partial: &Path, partial_identity: &Path) -> Result<(), FastSearchError> {
+    if partial.exists() {
+        fs::remove_file(partial).map_err(readiness_error)?;
+    }
+    if partial_identity.exists() {
+        fs::remove_file(partial_identity).map_err(readiness_error)?;
+    }
+    Ok(())
+}
+
+fn ensure_partial_identity(
+    partial_identity: &Path,
+    identity: &PartialArtifactIdentity,
+) -> Result<(), ResponseBodyError> {
+    if partial_identity.exists() {
+        return Ok(());
+    }
+    let bytes = serde_json::to_vec_pretty(identity)
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
+    let mut file = File::create(partial_identity)
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
+    file.write_all(&bytes)
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
+    file.flush()
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
+    file.sync_all()
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))
 }
 
 fn validate_response_range(
@@ -426,43 +607,58 @@ fn validate_response_range(
 fn append_response(
     response: &mut reqwest::blocking::Response,
     partial: &Path,
+    partial_identity: &Path,
+    identity: &PartialArtifactIdentity,
     offset: u64,
     expected_bytes: u64,
     downloaded_bytes: &mut u64,
-) -> Result<(), String> {
+) -> Result<(), ResponseBodyError> {
+    ensure_partial_identity(partial_identity, identity)?;
     let mut output = OpenOptions::new()
         .create(true)
         .write(true)
         .append(offset > 0)
         .truncate(offset == 0)
         .open(partial)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
     let expected_body = expected_bytes - offset;
     let mut received = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+        let read = match response.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) => {
+                output
+                    .flush()
+                    .and_then(|()| output.sync_all())
+                    .map_err(|sync_error| ResponseBodyError::Other(sync_error.to_string()))?;
+                return Err(ResponseBodyError::Other(error.to_string()));
+            }
+        };
         if read == 0 {
             break;
         }
-        let read = u64::try_from(read).map_err(|error| error.to_string())?;
+        let read =
+            u64::try_from(read).map_err(|error| ResponseBodyError::Other(error.to_string()))?;
         if received.saturating_add(read) > expected_body {
-            return Err("response body exceeds the admitted artifact length".to_owned());
+            return Err(ResponseBodyError::Oversize);
         }
         output
             .write_all(&buffer[..read as usize])
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
         received += read;
         *downloaded_bytes = downloaded_bytes.saturating_add(read);
     }
-    output.flush().map_err(|error| error.to_string())?;
-    output.sync_all().map_err(|error| error.to_string())?;
+    output
+        .flush()
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
+    output
+        .sync_all()
+        .map_err(|error| ResponseBodyError::Other(error.to_string()))?;
     if received != expected_body {
-        return Err(format!(
+        return Err(ResponseBodyError::Other(format!(
             "incomplete response body: expected {expected_body} bytes, received {received}"
-        ));
+        )));
     }
     Ok(())
 }
@@ -766,6 +962,29 @@ mod tests {
         .unwrap()
     }
 
+    fn partial_fixture_paths(target: &Path, artifact_path: &str) -> (PathBuf, PathBuf) {
+        let identity = PartialArtifactIdentity::new(
+            &descriptor(),
+            artifact_path,
+            BODY.len() as u64,
+            BODY_SHA256,
+        );
+        partial_state_paths(target, &identity).unwrap()
+    }
+
+    fn seed_partial(target: &Path, artifact_path: &str, bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let identity = PartialArtifactIdentity::new(
+            &descriptor(),
+            artifact_path,
+            BODY.len() as u64,
+            BODY_SHA256,
+        );
+        let paths = partial_state_paths(target, &identity).unwrap();
+        fs::write(&paths.0, bytes).unwrap();
+        fs::write(&paths.1, serde_json::to_vec_pretty(&identity).unwrap()).unwrap();
+        paths
+    }
+
     #[test]
     fn interrupted_transfer_resumes_from_the_durable_partial_offset() {
         let root = TempTree::new("resume");
@@ -792,7 +1011,9 @@ mod tests {
         assert!(requests[1].contains("range: bytes=6-") || requests[1].contains("Range: bytes=6-"));
         assert_eq!(fs::read(&target).unwrap(), BODY);
         assert_eq!(downloaded, BODY.len() as u64);
-        assert!(!target.with_extension(".download").exists());
+        let partial = partial_fixture_paths(&target, "artifact.bin");
+        assert!(!partial.0.exists());
+        assert!(!partial.1.exists());
     }
 
     #[test]
@@ -800,7 +1021,7 @@ mod tests {
         let root = TempTree::new("completed-partial");
         let target = root.0.join("artifact.bin");
         fs::write(&target, b"fedcba9876543210").unwrap();
-        fs::write(target.with_extension(".download"), BODY).unwrap();
+        seed_partial(&target, "artifact.bin", BODY);
         let mut downloaded = 0;
 
         provider("http://127.0.0.1:1".to_owned())
@@ -822,39 +1043,35 @@ mod tests {
     fn publication_failure_preserves_the_previous_generation_and_verified_partial() {
         let root = TempTree::new("publication-failure");
         let target = root.0.join("artifact.bin");
-        fs::create_dir(&target).unwrap();
-        let partial = target.with_extension(".download");
+        fs::write(&target, b"previous-accepted").unwrap();
+        let partial = root.0.join("verified.download");
         fs::write(&partial, BODY).unwrap();
         let previous = publish_model_set_snapshot(
             &root.0,
             ProductionModelRole::ALL.into_iter().map(marker).collect(),
         )
         .unwrap();
-        let mut downloaded = 0;
+        let error = publish_verified_partial_with(&partial, &target, |old, replacement| {
+            assert_eq!(fs::read(old).unwrap(), b"previous-accepted");
+            assert_eq!(fs::read(replacement).unwrap(), BODY);
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected replacement-boundary failure",
+            ))
+        })
+        .unwrap_err();
 
-        provider("http://127.0.0.1:1".to_owned())
-            .ensure_file(
-                &descriptor(),
-                "artifact.bin",
-                BODY.len() as u64,
-                BODY_SHA256,
-                &target,
-                &mut downloaded,
-            )
-            .unwrap_err();
-
-        assert!(target.is_dir());
-        assert_eq!(fs::read(partial).unwrap(), BODY);
+        assert!(error.to_string().contains("replacement-boundary failure"));
+        assert_eq!(fs::read(&target).unwrap(), b"previous-accepted");
+        assert_eq!(fs::read(&partial).unwrap(), BODY);
         assert_eq!(read_model_set_snapshot(&root.0).unwrap(), previous);
-        assert_eq!(downloaded, 0);
     }
 
     #[test]
     fn wrong_content_range_exhausts_bounded_retries_without_publication() {
         let root = TempTree::new("wrong-range");
         let target = root.0.join("artifact.bin");
-        let partial = target.with_extension(".download");
-        fs::write(&partial, &BODY[..4]).unwrap();
+        let (partial, _) = seed_partial(&target, "artifact.bin", &BODY[..4]);
         let replies = (0..3)
             .map(|_| Reply::partial(&BODY[4..], "bytes 0-11/16"))
             .collect();
@@ -887,6 +1104,115 @@ mod tests {
     }
 
     #[test]
+    fn cross_artifact_partial_identity_never_drives_a_range_request() {
+        let root = TempTree::new("cross-artifact");
+        let onnx_target = root.0.join("model.onnx");
+        let data_target = root.0.join("model.onnx_data");
+        let onnx_identity = PartialArtifactIdentity::new(
+            &descriptor(),
+            "model.onnx",
+            BODY.len() as u64,
+            BODY_SHA256,
+        );
+        let data_identity = PartialArtifactIdentity::new(
+            &descriptor(),
+            "model.onnx_data",
+            BODY.len() as u64,
+            BODY_SHA256,
+        );
+        let onnx_paths = partial_state_paths(&onnx_target, &onnx_identity).unwrap();
+        let data_paths = partial_state_paths(&data_target, &data_identity).unwrap();
+        assert_ne!(onnx_paths.0, data_paths.0);
+        assert!(
+            onnx_paths
+                .0
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("model.onnx.fastsearch-")
+        );
+        assert!(
+            data_paths
+                .0
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("model.onnx_data.fastsearch-")
+        );
+
+        // Simulate stale bytes placed under the intended path but carrying the
+        // other official ONNX artifact identity.
+        fs::write(&data_paths.0, &BODY[..4]).unwrap();
+        fs::write(
+            &data_paths.1,
+            serde_json::to_vec_pretty(&onnx_identity).unwrap(),
+        )
+        .unwrap();
+        let (endpoint, server) = serve(vec![Reply::ok(BODY, BODY.len())]);
+        let mut downloaded = 0;
+
+        provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "model.onnx_data",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &data_target,
+                &mut downloaded,
+            )
+            .unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].contains("Range:"));
+        assert_eq!(fs::read(data_target).unwrap(), BODY);
+        assert_eq!(downloaded, BODY.len() as u64);
+    }
+
+    #[test]
+    fn oversize_http_bodies_are_discarded_and_never_publish() {
+        let root = TempTree::new("oversize");
+        let target = root.0.join("artifact.bin");
+        let previous = publish_model_set_snapshot(
+            &root.0,
+            ProductionModelRole::ALL.into_iter().map(marker).collect(),
+        )
+        .unwrap();
+        let mut oversize = BODY.to_vec();
+        oversize.push(b'x');
+        let (endpoint, server) = serve(
+            (0..3)
+                .map(|_| Reply::ok(&oversize, oversize.len()))
+                .collect(),
+        );
+        let mut downloaded = 0;
+
+        let error = provider(endpoint)
+            .ensure_file(
+                &descriptor(),
+                "artifact.bin",
+                BODY.len() as u64,
+                BODY_SHA256,
+                &target,
+                &mut downloaded,
+            )
+            .unwrap_err();
+
+        assert_eq!(server.join().unwrap().len(), 3);
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds the admitted artifact length")
+        );
+        let partial = partial_fixture_paths(&target, "artifact.bin");
+        assert!(!target.exists());
+        assert!(!partial.0.exists());
+        assert!(!partial.1.exists());
+        assert_eq!(read_model_set_snapshot(&root.0).unwrap(), previous);
+        assert_eq!(downloaded, 0);
+    }
+
+    #[test]
     fn wrong_sha_and_http_failures_do_not_publish_a_target() {
         let root = TempTree::new("negative-matrix");
         let target = root.0.join("artifact.bin");
@@ -906,7 +1232,9 @@ mod tests {
         server.join().unwrap();
         assert!(error.to_string().contains("SHA-256 mismatch"));
         assert!(!target.exists());
-        assert!(!target.with_extension(".download").exists());
+        let partial = partial_fixture_paths(&target, "artifact.bin");
+        assert!(!partial.0.exists());
+        assert!(!partial.1.exists());
 
         let (endpoint, server) = serve((0..3).map(|_| Reply::failure()).collect());
         let error = provider(endpoint)
@@ -952,7 +1280,7 @@ mod tests {
         );
         assert!(!target.exists());
         assert_eq!(
-            fs::read(target.with_extension(".download")).unwrap(),
+            fs::read(partial_fixture_paths(&target, "artifact.bin").0).unwrap(),
             &BODY[..15]
         );
         assert_eq!(downloaded, 15);

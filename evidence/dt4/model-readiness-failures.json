@@ -1,12 +1,18 @@
 {
-  "schema": 1,
+  "schema": 2,
   "task_id": "FASTSEARCH-DT4-B-MODEL-READINESS",
   "plan_version": "PV-1",
   "branch": "A",
   "leaf": "A3",
   "outcome": "PASS",
+  "rework_findings": {
+    "DT4-B-A3-001": "one-operation Windows replacement and injected replacement-boundary failure PASS",
+    "DT4-B-A3-002": "collision-free full-filename partial path and exact identity validation before Range PASS",
+    "DT4-B-A3-003": "three-attempt oversize loopback matrix and fail-closed cleanup PASS"
+  },
   "base_revision": "25e0370dd66128e47d6d357a837441b90744bb6f",
   "recorded_at": "2026-08-23T17:29:53.9767406+03:00",
+  "rework_recorded_at": "2026-08-23T17:55:17.4363860+03:00",
   "network_policy": {
     "external_network_used": false,
     "heavy_model_downloads": 0,
@@ -29,7 +35,14 @@
     {
       "scenario": "verified-partial publication failure",
       "requests": [],
-      "pass": "the verified partial remains recoverable, no target file publishes, and the previous valid generation remains readable"
+      "replacement": "existing targets use one ReplaceFileW call with REPLACEFILE_WRITE_THROUGH; no delete-before-rename gap",
+      "pass": "an injected failure at the replacement boundary leaves the previous target bytes and verified partial unchanged; the previous valid generation remains readable"
+    },
+    {
+      "scenario": "cross-artifact stale partial for model.onnx and model.onnx_data",
+      "requests": 1,
+      "partial_identity": ["repository", "revision", "full artifact path", "expected bytes", "expected SHA-256"],
+      "pass": "the full filenames and identity SHA-256 produce distinct partial paths; a mismatched identity sidecar is discarded before the request, which is sent without Range"
     },
     {
       "scenario": "wrong Content-Range",
@@ -45,6 +58,13 @@
       "scenario": "wrong SHA-256",
       "requests": 3,
       "pass": "each complete invalid partial is removed and no target publishes"
+    },
+    {
+      "scenario": "oversize HTTP response body",
+      "requests": 3,
+      "body_bytes_per_attempt": 17,
+      "admitted_bytes": 16,
+      "pass": "all three attempts reject before writing overflow bytes; partial and identity sidecar are removed, target remains absent, downloaded_bytes is 0, and the previous valid generation remains readable"
     },
     {
       "scenario": "HTTP failure retry exhaustion",
@@ -64,7 +84,7 @@
     {
       "command": "cargo test model_provisioning::tests --lib",
       "outcome": "PASS",
-      "passed": 7,
+      "passed": 9,
       "failed": 0
     },
     {
