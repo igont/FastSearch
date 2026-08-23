@@ -4,7 +4,7 @@
 
 ## Статус supersession
 
-Этот файл сохраняет исторический DT3 product handoff на `5b25f5bf235309761f4376dc4143b246c8409c66`. Прежняя planning revision `23ed8773f9830bf6762f058255b17cbb1fe7ad46` и отсутствующий локальный PV-6 не используются как текущее исполнительное основание. При конфликте действуют [ROADMAP.md](../ROADMAP.md), TDR-FS-2.4, TDR-FS-2.6, TDR-FS-2.7 и план `FASTSEARCH-DT4-FOUNDATION-22-08-2026`, `PV-1`, в `.agents/DT-22-08-2026_11-14-Единый-агентский-поиск-FastSearch`. Execution revision появляется только после `G-EXECUTION-BASE`; реализация DT4 не начата.
+Этот файл сохраняет исторический DT3 product handoff на `5b25f5bf235309761f4376dc4143b246c8409c66`. Прежняя planning revision `23ed8773f9830bf6762f058255b17cbb1fe7ad46` и отсутствующий локальный PV-6 не используются как текущее исполнительное основание. При конфликте действуют [ROADMAP.md](../ROADMAP.md), TDR-FS-2.4, TDR-FS-2.6 и TDR-FS-2.7. Локальный план `FASTSEARCH-DT4-FOUNDATION-22-08-2026`, `PV-1`, отсутствует; актуальное состояние DT4 определяют принятые результаты последующих границ. Execution revision появляется только после `G-EXECUTION-BASE`; реализация DT4 не начата.
 
 ## Точный baseline
 
