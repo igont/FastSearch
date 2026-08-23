@@ -60,6 +60,54 @@ pub fn prepare_embedding_model(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct EmbeddingProbeObservation {
+    pub dimension: usize,
+    pub norm: f32,
+    pub components: Vec<f32>,
+    pub scores: Vec<f32>,
+}
+
+/// Runs the exact model-readiness query and document computation without
+/// reading workspace content or creating a projection.
+pub(crate) fn observe_embedding_model(
+    model_id: EmbeddingModelId,
+    cache_root: &Path,
+    query: &str,
+    documents: &[String],
+) -> Result<EmbeddingProbeObservation, FastSearchError> {
+    let mut provider = VerifiedProvider::acquire(cache_root, model_id, false, true)?;
+    let query_vector = provider.embed_query(query)?;
+    validate_probe_vector(model_id, "readiness query", &query_vector)?;
+    let document_vectors = provider.embed_passages_for_probe(documents)?;
+    if document_vectors.len() != documents.len() {
+        return Err(FastSearchError::new(
+            ErrorKind::ProjectionFailure,
+            "readiness probe returned an incomplete document batch",
+        ));
+    }
+    let scores = document_vectors
+        .iter()
+        .map(|document| {
+            query_vector
+                .iter()
+                .zip(document)
+                .map(|(left, right)| left * right)
+                .sum::<f32>()
+        })
+        .collect();
+    Ok(EmbeddingProbeObservation {
+        dimension: query_vector.len(),
+        norm: query_vector
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt(),
+        components: query_vector.iter().take(8).copied().collect(),
+        scores,
+    })
+}
+
 /// Probes one concrete execution device without reading workspace content.
 pub fn probe_embedding_model_device(
     model_id: EmbeddingModelId,

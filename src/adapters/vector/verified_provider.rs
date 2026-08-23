@@ -313,6 +313,29 @@ impl VerifiedProvider {
         self.embed_query(passage)
     }
 
+    pub(super) fn embed_passages_for_probe(
+        &mut self,
+        passages: &[String],
+    ) -> Result<Vec<Vec<f32>>, FastSearchError> {
+        let formatted = passages
+            .iter()
+            .map(|passage| match self.model_id {
+                EmbeddingModelId::MultilingualE5Small
+                | EmbeddingModelId::MultilingualE5Base
+                | EmbeddingModelId::MultilingualE5Large => format!("passage: {passage}"),
+                EmbeddingModelId::NomicEmbedTextV2Moe => {
+                    format!("search_document: {passage}")
+                }
+                EmbeddingModelId::SnowflakeArcticEmbedLV2
+                | EmbeddingModelId::GteMultilingualBase
+                | EmbeddingModelId::BgeM3
+                | EmbeddingModelId::JinaEmbeddingsV3
+                | EmbeddingModelId::Qwen3Embedding06B => passage.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.embed_formatted(&formatted, None)
+    }
+
     /// Resident strict providers keep verified handles pinned. Rechecking the
     /// small directory layout detects added paths without rereading model bytes
     /// or reconstructing the inference runtime.

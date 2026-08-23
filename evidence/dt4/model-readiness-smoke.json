@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "gate": "G-TS-DT4-02-SMOKE",
+  "outcome": "PASS",
+  "started_at": "2026-08-23T14:24:10+03:00",
+  "environment": {
+    "os": "Windows x86_64",
+    "device": "cpu",
+    "source": "official Hugging Face pinned revisions",
+    "fastsearch_home": "D:\\Igor\\Programming\\FastSearch-dt4-b-a-smoke-home",
+    "fastsearch_home_was_new": true,
+    "free_disk_gib_before": 35.58,
+    "free_physical_memory_gib_before": 26.93,
+    "total_physical_memory_gib": 31.84,
+    "minimum_free_disk_gib": 20,
+    "minimum_free_physical_memory_gib": 12,
+    "request_timeout_minutes": 30,
+    "overall_watchdog_hours": 6,
+    "probes_were_sequential": true
+  },
+  "binary": {
+    "path": "D:\\Igor\\Programming\\.cargo-target\\FastSearch\\release\\fastsearch.exe",
+    "sha256": "c0356003752dc6d10bff56d702a5cc36203b57277fcb404bbb50fd2b7cba3ea5",
+    "build": "cargo build --release --bin fastsearch"
+  },
+  "oracle": {
+    "path": "evidence/dt4/fixtures/ts-dt4-02/oracle.json",
+    "sha256": "f517d106450b07b7ae3d3e3d5bec54cde9660c144adb81e24449bf1e4f0cb9c1",
+    "cases_sha256": "0c87b972e6166e38e67a52dd5189b41dce1f7943e4b2f9ea85032276dcd77f67",
+    "script_sha256": "f875837320211af21d6ccfa635711c4b47b85bfde177b1620e4a74177028d0f1",
+    "matched_embedding_dimensions_components_norms_scores_and_order": true,
+    "matched_qwen_probabilities_and_order": true
+  },
+  "prepare": {
+    "command": "fastsearch.exe models prepare --json",
+    "exit_code": 0,
+    "duration_ms": 2995106,
+    "downloaded_bytes": 7658953506,
+    "ready": true,
+    "generation": "0d3a38b40d8011f1c42bddebb3529a16dd4d04cf6bb18cddfeae5ca7bdf1e5f2",
+    "roles": [
+      {
+        "role": "arctic-embed-l-v2",
+        "repository": "Snowflake/snowflake-arctic-embed-l-v2.0",
+        "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+        "marker_sha256": "8b7c52afa9b17bf7143a9684da9550bdaf260fe225a78ded4e10d8f91f34a743"
+      },
+      {
+        "role": "multilingual-e5-large",
+        "repository": "Qdrant/multilingual-e5-large-onnx",
+        "revision": "66076b8dc6e367337e3e90e6fb309fb0f3addaf6",
+        "marker_sha256": "a588fe3998e727a7c1f09ba8ecb5592554f4c208f0291aed3dbd53454dead8b0"
+      },
+      {
+        "role": "nomic-embed-text-v2-moe",
+        "repository": "nomic-ai/nomic-embed-text-v2-moe",
+        "revision": "1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+        "marker_sha256": "8f891b4c0e95f9374a66b0a70341cd90025fb1a069dc281ed9a45d54b7fd3b54"
+      },
+      {
+        "role": "qwen3-reranker-0.6b",
+        "repository": "Qwen/Qwen3-Reranker-0.6B",
+        "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+        "marker_sha256": "30c5ee7a3fd3d7860e23399d5712928aea00e886475ecb31c93ebfaaba531f82"
+      }
+    ]
+  },
+  "restart_status": {
+    "command": "fastsearch.exe models status --json",
+    "exit_code": 0,
+    "wall_clock_ms": 24,
+    "reported_duration_ms": 1,
+    "downloaded_bytes": 0,
+    "ready": true,
+    "generation": "0d3a38b40d8011f1c42bddebb3529a16dd4d04cf6bb18cddfeae5ca7bdf1e5f2"
+  },
+  "isolation": {
+    "catalog_json_created": false,
+    "workspace_directory_created": false,
+    "projection_or_index_files_created": 0
+  },
+  "deferred_to_later_leaves": [
+    "transport interruption and resume",
+    "corruption and addressable recovery",
+    "two-process publication race",
+    "full TS-DT4-02 acceptance matrix"
+  ]
+}

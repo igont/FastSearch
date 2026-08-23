@@ -409,6 +409,28 @@ pub struct ModelSetRoleSnapshot {
     marker_sha256: String,
 }
 
+impl ModelSetRoleSnapshot {
+    #[must_use]
+    pub const fn role(&self) -> ProductionModelRole {
+        self.role
+    }
+
+    #[must_use]
+    pub fn repository(&self) -> &str {
+        &self.repository
+    }
+
+    #[must_use]
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+
+    #[must_use]
+    pub fn marker_sha256(&self) -> &str {
+        &self.marker_sha256
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModelSetReadySnapshot {
     schema: u8,

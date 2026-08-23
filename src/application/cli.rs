@@ -1,5 +1,8 @@
 use crate::{
-    application::{ProductionConfig, ProductionRuntime, RealRuntime, ensure_e5_model},
+    application::{
+        ModelSetCommandReport, ProductionConfig, ProductionRuntime, RealRuntime, ensure_e5_model,
+        prepare_production_model_set, production_model_set_status,
+    },
     domain::{
         BackendKind, CanonicalRecord, Capability, CapabilityState, CapabilityStatus, ErrorKind,
         FastSearchError, IndexFreshness, LifecycleStatus, RecordKind, RelatedQuery,
@@ -128,6 +131,7 @@ pub(super) enum CommandAction {
 
 #[derive(Clone, Debug)]
 pub(super) enum CommandOutcome {
+    Models(ModelSetCommandReport),
     Status {
         status: LifecycleStatus,
         capabilities: Vec<CapabilityStatus>,
@@ -342,16 +346,17 @@ fn record_action(command: &str, id: &str) -> CommandAction {
 /// Executes one private CLI command. It deliberately stays below the public application surface.
 pub(super) fn execute_command(command: Command) -> Result<CommandOutcome, CliError> {
     match command {
-        Command::Models { action } => Err(CliError::Runtime {
-            code: "model_readiness_pending",
-            message: format!(
-                "{} contract is available; artifact execution belongs to DT4 leaf A2",
-                match action {
-                    ModelsAction::Prepare => "models prepare",
-                    ModelsAction::Status => "models status",
-                }
-            ),
-        }),
+        Command::Models { action } => {
+            let report = match action {
+                ModelsAction::Prepare => prepare_production_model_set(),
+                ModelsAction::Status => production_model_set_status(),
+            }
+            .map_err(|error| CliError::Runtime {
+                code: "model_readiness_failed",
+                message: error.message().to_owned(),
+            })?;
+            Ok(CommandOutcome::Models(report))
+        }
         Command::Production { config, action } => execute_production_command(config, action),
         Command::Compatibility {
             source,
@@ -545,6 +550,11 @@ impl TerminalDocument for HumanOutcomeDocument {
 
 pub(super) fn human_outcome_document(outcome: &CommandOutcome) -> HumanOutcomeDocument {
     match outcome {
+        CommandOutcome::Models(report) => HumanOutcomeDocument::Report(
+            ReportDocument::new().with_section(ReportSection::new("Готовность моделей").with_line(
+                serde_json::to_string_pretty(report).expect("model-set report is serializable"),
+            )),
+        ),
         CommandOutcome::Status {
             status,
             capabilities,
@@ -672,6 +682,9 @@ pub(super) mod presenters {
         format: OutputFormat,
     ) -> String {
         match outcome {
+            CommandOutcome::Models(report) => {
+                serde_json::to_string_pretty(&report).expect("model-set report is serializable")
+            }
             CommandOutcome::Status {
                 status,
                 capabilities,

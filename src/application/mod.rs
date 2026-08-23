@@ -8,6 +8,7 @@ mod console;
 pub mod fusion;
 mod inspection;
 mod model_cache;
+mod model_provisioning;
 mod model_readiness;
 mod production;
 mod public_search;
@@ -30,6 +31,10 @@ pub use model_cache::{
     EmbeddingModelDescriptor, MODEL_CATALOG, ModelProvisionProgress, ModelRuntimeCapabilities,
     embedding_model_cache_status, ensure_e5_model, ensure_embedding_model,
     ensure_embedding_model_with_progress, model_descriptor, model_runtime_capabilities,
+};
+pub use model_provisioning::{
+    ModelSetCommandReport, ModelSetCommandRole, prepare_production_model_set,
+    production_model_set_status,
 };
 pub use model_readiness::{
     MODEL_SET_LOCK_FILE, MODEL_SET_READY_FILE, MODEL_SET_ROLES_DIRECTORY, MODEL_SET_SCHEMA,
