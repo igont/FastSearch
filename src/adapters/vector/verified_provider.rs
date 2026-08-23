@@ -31,12 +31,14 @@ use windows_sys::Win32::{
 };
 
 use candle_core::{DType, Device};
+use candle_nn::VarBuilder;
 use fastembed::{
-    EmbeddingModel, InitOptionsUserDefined, NomicV2MoeTextEmbedding, Pooling, Qwen3TextEmbedding,
-    TextEmbedding, TextInitOptions, TokenizerFiles, UserDefinedEmbeddingModel,
+    EmbeddingModel, InitOptionsUserDefined, Pooling, Qwen3TextEmbedding, TextEmbedding,
+    TextInitOptions, TokenizerFiles, UserDefinedEmbeddingModel,
 };
 use sha2::{Digest, Sha256};
 
+use crate::adapters::nomic_v2_moe::{NomicBertModel, NomicConfig, NomicV2MoeTextEmbedding};
 use crate::application::model_descriptor;
 use crate::domain::{
     CanonicalRecord, Capability, EmbeddingModelId, ErrorKind, ExecutionDevice, FastSearchError,
@@ -188,15 +190,7 @@ impl VerifiedProvider {
                 )
             }
             EmbeddingModelId::NomicEmbedTextV2Moe if device == ExecutionDevice::Cpu => {
-                ProviderRuntime::Nomic(
-                    NomicV2MoeTextEmbedding::from_hf(
-                        "nomic-ai/nomic-embed-text-v2-moe",
-                        &Device::Cpu,
-                        DType::F32,
-                        512,
-                    )
-                    .map_err(provider_error)?,
-                )
+                ProviderRuntime::Nomic(local_nomic_v2_moe(root)?)
             }
             EmbeddingModelId::Qwen3Embedding06B | EmbeddingModelId::NomicEmbedTextV2Moe => {
                 return Err(provider_error(
@@ -439,6 +433,53 @@ fn user_defined_catalog_onnx(
     }
     TextEmbedding::try_new_from_user_defined(model, user_defined_options(device)?)
         .map_err(provider_error)
+}
+
+fn local_nomic_v2_moe(root: &Path) -> Result<NomicV2MoeTextEmbedding, FastSearchError> {
+    use tokenizers::{PaddingParams, PaddingStrategy, TruncationParams};
+
+    let repository = hf_hub::Cache::new(root.to_path_buf()).model(
+        model_descriptor(EmbeddingModelId::NomicEmbedTextV2Moe)
+            .repository
+            .to_owned(),
+    );
+    let locate = |name: &str| {
+        repository
+            .get(name)
+            .ok_or_else(|| provider_error(format!("catalog Nomic model is missing {name}")))
+    };
+    let config_path = locate("config.json")?;
+    let config: NomicConfig =
+        serde_json::from_slice(&fs::read(config_path).map_err(provider_error)?)
+            .map_err(provider_error)?;
+    let weights_path = locate("model.safetensors")?;
+    // SAFETY: the role provider has already checked the exact byte length and
+    // SHA-256 of the pinned immutable snapshot before this local admission.
+    let weights = unsafe {
+        VarBuilder::from_mmaped_safetensors(
+            std::slice::from_ref(&weights_path),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .map_err(provider_error)?
+    };
+    let model = NomicBertModel::new(config.clone(), weights).map_err(provider_error)?;
+    let mut tokenizer =
+        tokenizers::Tokenizer::from_file(locate("tokenizer.json")?).map_err(provider_error)?;
+    tokenizer.with_padding(Some(PaddingParams {
+        strategy: PaddingStrategy::BatchLongest,
+        direction: tokenizers::PaddingDirection::Right,
+        pad_id: config.pad_token_id as u32,
+        pad_token: "<pad>".to_owned(),
+        ..Default::default()
+    }));
+    tokenizer
+        .with_truncation(Some(TruncationParams {
+            max_length: 512,
+            ..Default::default()
+        }))
+        .map_err(provider_error)?;
+    Ok(NomicV2MoeTextEmbedding::new(model, tokenizer))
 }
 
 const fn onnx_index_batch_size(model: EmbeddingModelId, device: ExecutionDevice) -> usize {
