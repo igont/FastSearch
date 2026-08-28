@@ -7,13 +7,13 @@ updated: "2026-08-15"
 ---
 # DT10. Graph query surface и dtree integration
 
-Этап заменён инкрементными профилями GraphProvider FastGraph и последующей интеграцией dtree R6. [Передача графового контура](<../FastGraph.md>) объясняет владельцев результатов.
+Этап заменён инкрементными профилями GraphProvider FastGraph и последующей интеграцией dtree P7. [Передача графового контура](<../FastGraph.md>) объясняет владельцев результатов.
 
 [← Roadmap](<00 Roadmap.md>)
 
 ## Producer
 
-DT10 требует complete graph contracts DT5–DT9 и принятую DT4 application/protocol composition. Dtree adapter materializes against its own R6 producer gate; FastSearch remains independently usable through CLI/MCP.
+DT10 требует complete graph contracts DT5–DT9 и принятую DT4 application/protocol composition. Dtree adapter materializes against its own P7 producer gate; FastSearch remains independently usable through CLI/MCP.
 
 ## Наблюдаемый результат
 
@@ -55,7 +55,7 @@ Agent получает initial impact subgraph, затем самостояте�
 - Truncated response exposes frontier/continuation; stale continuation typed.
 - Exact revision never silently switches to latest.
 - Partial language/provider status survives adapters.
-- Dtree R6 conformance reads graph without duplicating FastSearch storage.
+- Dtree P7 conformance reads graph without duplicating FastSearch storage.
 
 ## Связи
 
