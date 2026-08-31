@@ -1,5 +1,5 @@
 ---
-TDR: TDR-FS-2; TDR-FS-3
+TDR: TDR-FS-2; TDR-FS-2.8; TDR-FS-3
 project_scope: current
 document_status: actual
 Индексация: true
@@ -10,7 +10,7 @@ document_status: actual
 
 - [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) — parent package.
 - [TDR-FS-3](<TDR-FS-3 Поставщик снимков источников.md>) - заменённое решение о публичной передаче снимка; текущий FastGraph не является потребителем.
-- [PAR-FS-011](<../../Paradigms/Архитектура/Рабочие области и интерфейс/01 Рабочая область и два контура источников.md>) — product boundary.
+- [Рабочая область и два контура источников](<../../Paradigms/Архитектура/Рабочие области и интерфейс/01 Рабочая область и два контура источников.md>) - продуктовая граница.
 
 ## Входы и результат
 
@@ -49,6 +49,8 @@ Discovery создаёт предложения. Admission происходит 
 ## Связь с кодом и проверки
 
 Typed `WorkspaceProfile`, два закрытых `SourceContour`, stable `SourceRoot`, `WorkspaceCatalog` и bounded `DiscoveryReport` реализованы в `src/application/workspace.rs`. Contract suite покрывает 0/1/2 contours, multiple roots, catalog recovery, deepest nested workspace resolution, containment и duplicate relative locators через rooted IDs. Moved workspace обрабатывается как unavailable catalog entry с повторным подключением canonical root; disk-wide recovery отсутствует.
+
+Каноническая передача профиля в устойчивое хранилище и производственную конфигурацию оформлена контрактом [BC-FS-WORKSPACE-ADMISSION](<../Contracts/BC-FS-WORKSPACE-ADMISSION.md>). [TDR-FS-2.8](<TDR-FS-2.8 Модульные границы и контракты.md>) определяет её место в одном крейте и условие формальной приёмки.
 
 ## Состояние реализации
 

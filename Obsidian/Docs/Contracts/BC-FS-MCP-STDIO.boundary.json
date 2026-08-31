@@ -1,0 +1,106 @@
+{
+  "$schema": "https://codex.local/schemas/boundary-contract-v1.schema.json",
+  "schema": "boundary-contract/v1",
+  "contract_id": "BC-FS-MCP-STDIO",
+  "contract_version": "1",
+  "status": "DRAFT",
+  "human_contract": "BC-FS-MCP-STDIO.md",
+  "producer": {"module": "adapters::mcp", "responsibility": "Обслужить MCP stdio и передать PublicSearchResponse без изменения смысла"},
+  "execution_scope": {
+    "platform_strategy": "CURRENT_ONLY",
+    "current_environments": ["Windows local process"],
+    "deferred_environments": [
+      {"environment": "Linux local process", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"},
+      {"environment": "macOS local process", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"}
+    ],
+    "ports": [
+      {"id": "PORT-MCP-STDIO", "owner": "rmcp", "capabilities": ["прочитать MCP из stdin", "записать только MCP в stdout", "завершиться по EOF"], "required_now": true, "implementation_status": "IMPLEMENTED"}
+    ]
+  },
+  "consumers": ["external MCP client"],
+  "machine_contracts": [
+    {"kind": "source-interface", "path": "../../../src/adapters/mcp.rs", "symbol": "ThinMcpServer, run_stdio"},
+    {"kind": "source-interface", "path": "../../../src/application/public_search.rs", "symbol": "PublicSearchRequest, PublicSearchResponse, PublicSearchError"}
+  ],
+  "inputs": [
+    {
+      "id": "IN-MCP-CALL",
+      "meaning": "Инициализированный MCP-вызов инструмента search",
+      "required": true,
+      "producer": "external MCP client",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "../../../src/adapters/mcp.rs#ServerHandler", "sha256": "ac85ed822d8376a7d862bf7ad23ade2c0884ba6a3cec64ea06119a72164940e7"},
+      "format": "MCP 2025-11-25 call_tool",
+      "schema_ref": "../../../src/adapters/mcp.rs#list_tools",
+      "version": "2025-11-25",
+      "identity": "MCP request identity",
+      "units": "bytes",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 call",
+      "constraints": ["tool name search", "query required", "unknown fields forbidden"]
+    },
+    {
+      "id": "IN-PUBLIC-SEARCH-OUTCOME",
+      "meaning": "Общий публичный поисковый ответ или безопасная ошибка",
+      "required": true,
+      "producer": "application::public_search",
+      "authority": {"kind": "DERIVED", "source_ref": "../../../src/application/public_search.rs#PublicSearchResponse", "sha256": "1c105e14197c5e0a51efe6a446de20982e20821cbaba9dc726f52e9d78097c45"},
+      "format": "BC-FS-PUBLIC-SEARCH v1",
+      "schema_ref": "BC-FS-PUBLIC-SEARCH.boundary.json",
+      "version": "1",
+      "identity": "Исходный запрос и rank результатов либо код ошибки",
+      "units": "bytes",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 outcome"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "OUT-MCP-TOOL-RESULT",
+      "meaning": "Структурированный MCP-результат search или протокольная ошибка",
+      "producer": "adapters::mcp",
+      "format": "MCP CallToolResult",
+      "schema_ref": "../../../src/adapters/mcp.rs#call_tool",
+      "version": "2025-11-25",
+      "identity": "Идентичность вызова MCP",
+      "units": "bytes",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "0..1 response; 0 after cancellation",
+      "creation_condition": "Цикл MCP согласован, вызов допущен и не отменён",
+      "lineage": ["TR-ENCODE-MCP-RESULT"]
+    }
+  ],
+  "transformations": [
+    {"id": "TR-ENCODE-MCP-RESULT", "owner": "adapters::mcp", "kind": "ENCODE", "input_ids": ["IN-MCP-CALL", "IN-PUBLIC-SEARCH-OUTCOME"], "output_ids": ["OUT-MCP-TOOL-RESULT"], "rule": "Проверить вызов, сериализовать общий DTO либо error и подавить отменённый ответ", "loss": "NONE"}
+  ],
+  "handoffs": [
+    {
+      "id": "HO-MCP-TO-CLIENT",
+      "from": "adapters::mcp",
+      "to": "external MCP client",
+      "through": ["rmcp stdio transport"],
+      "surface": "stdin/stdout MCP 2025-11-25",
+      "data_ids": ["OUT-MCP-TOOL-RESULT"],
+      "preconditions": ["initialize завершён", "notifications/initialized получено", "workspace задан абсолютным путём"],
+      "consumer_obligations": ["Остановить соединение при несовместимой версии", "Обрабатывать retryable только по публичному признаку"],
+      "success": "Клиент получает один структурированный результат без постороннего stdout",
+      "failures": ["BUSY", "TIMEOUT", "ошибка протокола", "подавление отменённого ответа"],
+      "acceptance_refs": ["tests/dt4_mcp_thin_slice.rs"],
+      "unblocks": ["USR-FS-03 после приёмки DT4-C и DT4-D"]
+    }
+  ],
+  "flow_edges": [
+    {"from": "external MCP client", "to": "adapters::mcp", "data_ids": ["IN-MCP-CALL"]},
+    {"from": "application::public_search", "to": "adapters::mcp", "data_ids": ["IN-PUBLIC-SEARCH-OUTCOME"]},
+    {"from": "adapters::mcp", "to": "rmcp stdio transport", "data_ids": ["OUT-MCP-TOOL-RESULT"], "transformation_id": "TR-ENCODE-MCP-RESULT"},
+    {"from": "rmcp stdio transport", "to": "external MCP client", "data_ids": ["OUT-MCP-TOOL-RESULT"]}
+  ],
+  "evidence": {
+    "integration_decision": {"status": "REQUIRED", "reason": "Контракт пересекает физическую границу дочернего процесса и MCP-клиента", "authority_ref": {"path": "BC-FS-MCP-STDIO.md", "sha256": "bbe4130ee59b64e2067d92f7d4091c0f53dafac857b70dd3c150a4429ecff7e1"}},
+    "contract_tests": [{"path": "../../../tests/dt4_mcp_thin_slice.rs", "status": "PLANNED"}],
+    "integration_tests": [{"path": "../../../tests/dt4_mcp_thin_slice.rs", "status": "PLANNED"}]
+  },
+  "blockers": []
+}

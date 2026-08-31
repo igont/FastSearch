@@ -1,0 +1,144 @@
+{
+  "$schema": "https://codex.local/schemas/boundary-contract-v1.schema.json",
+  "schema": "boundary-contract/v1",
+  "contract_id": "BC-FS-MODEL-READINESS",
+  "contract_version": "1",
+  "status": "BLOCKED",
+  "human_contract": "BC-FS-MODEL-READINESS.md",
+  "producer": {"module": "application::model_provisioning", "responsibility": "Проверить четыре роли и атомарно опубликовать единый снимок готовности модельного набора"},
+  "execution_scope": {
+    "platform_strategy": "CURRENT_ONLY",
+    "current_environments": ["Windows x86-64 CPU"],
+    "deferred_environments": [
+      {"environment": "Linux CPU", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"},
+      {"environment": "Windows GPU", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"}
+    ],
+    "ports": [
+      {"id": "PORT-MODEL-ARTIFACT-STORE", "owner": "application::model_provisioning", "capabilities": ["получить закреплённые артефакты", "проверить SHA-256", "заблокировать публикацию", "атомарно записать JSON"], "required_now": true, "implementation_status": "IMPLEMENTED"}
+    ]
+  },
+  "consumers": ["application::model_provisioning::production_model_set_status", "application::thin_search (NOT_IMPLEMENTED; DT4-C)"],
+  "machine_contracts": [
+    {"kind": "source-interface", "path": "../../../src/application/model_readiness.rs", "symbol": "PRODUCTION_MODEL_CATALOG, ModelSetReadySnapshot"},
+    {"kind": "source-interface", "path": "../../../src/application/model_provisioning.rs", "symbol": "prepare_production_model_set, production_model_set_status"}
+  ],
+  "inputs": [
+    {
+      "id": "IN-PRODUCTION-MODEL-CATALOG",
+      "meaning": "Закрытый набор четырёх ролей, редакций, файлов и вычислительных договоров",
+      "required": true,
+      "producer": "application::model_readiness",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "../../../src/application/model_readiness.rs#PRODUCTION_MODEL_CATALOG", "sha256": "6bc13a45a5cdb6b71e7a57e30d1ff4a4fc3fe776d58c399ee68baf64467b0fcd"},
+      "format": "ProductionModelDescriptor[4]",
+      "schema_ref": "../../../src/application/model_readiness.rs#ProductionModelDescriptor",
+      "version": "1",
+      "identity": "ProductionModelRole and pinned revision",
+      "units": "bytes and SHA-256",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "4 roles"
+    },
+    {
+      "id": "IN-QUALIFIED-ROLE-MARKERS",
+      "meaning": "Четыре проверенных маркера артефактов и среды выполнения",
+      "required": true,
+      "producer": "model role qualification",
+      "authority": {"kind": "DERIVED", "source_ref": "../../../src/application/model_provisioning.rs#prepare_production_model_set", "sha256": "1dd766eccdc8ea66c831b8ef46bffb5067b61a833007e56eccf6c817b4a6cfbb"},
+      "format": "RoleReadinessMarker[4]",
+      "schema_ref": "../../../src/application/model_readiness.rs#RoleReadinessMarker",
+      "version": "1",
+      "identity": "role, revision, compute contract and runtime environment",
+      "units": "SHA-256",
+      "precision": "EXACT",
+      "order": "UNORDERED",
+      "cardinality": "exactly 4 unique roles"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "OUT-MODEL-SET-READY",
+      "meaning": "Единый проверяемый снимок готовности четырёх модельных ролей",
+      "producer": "application::model_provisioning",
+      "format": "model-set.ready.json",
+      "schema_ref": "../../../src/application/model_readiness.rs#ModelSetReadySnapshot",
+      "version": "1",
+      "identity": "set_identity_sha256 and generation",
+      "units": "SHA-256",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 snapshot with 4 roles",
+      "creation_condition": "Все роли полны, уникальны, относятся к одному набору и прошли квалификацию",
+      "lineage": ["TR-PUBLISH-MODEL-SET"]
+    }
+  ],
+  "transformations": [
+    {
+      "id": "TR-PUBLISH-MODEL-SET",
+      "owner": "application::model_provisioning",
+      "kind": "AGGREGATE",
+      "input_ids": ["IN-PRODUCTION-MODEL-CATALOG", "IN-QUALIFIED-ROLE-MARKERS"],
+      "output_ids": ["OUT-MODEL-SET-READY"],
+      "rule": "Проверить полноту и идентичность, упорядочить роли, вычислить поколение и атомарно опубликовать единый снимок",
+      "loss": "DECLARED",
+      "lost_data": ["перечень и размер каждого файла модели"],
+      "loss_justification": "Потребитель проверяет снимок вместе с тем же закреплённым каталогом; выход сохраняет хэши вычислительного договора и маркера роли, а файловая детализация не дублируется",
+      "loss_evidence_refs": [
+        {"path": "../../../src/application/model_readiness.rs", "sha256": "6bc13a45a5cdb6b71e7a57e30d1ff4a4fc3fe776d58c399ee68baf64467b0fcd"}
+      ]
+    }
+  ],
+  "handoffs": [
+    {
+      "id": "HO-MODEL-SET-TO-STATUS",
+      "from": "application::model_provisioning",
+      "to": "application::model_provisioning::production_model_set_status",
+      "through": ["model-set.ready.json", "read_model_set_snapshot_with_artifacts"],
+      "surface": "src/application/model_readiness.rs#ModelSetReadySnapshot",
+      "data_ids": ["OUT-MODEL-SET-READY"],
+      "preconditions": ["Снимок опубликован атомарно", "Все артефакты доступны в штатном корне моделей"],
+      "consumer_obligations": ["Полностью проверять снимок и артефакты при запросе состояния", "Не выводить готовность из отдельных файлов"],
+      "success": "Команда состояния получает одну согласованную идентичность и поколение набора",
+      "failures": ["NOT_READY при отсутствующем, повреждённом или смешанном снимке"],
+      "acceptance_refs": ["src/application/model_readiness.rs#[cfg(test)]", "evidence/dt4/release-receipt.json"],
+      "unblocks": ["Наблюдаемость готовности модельного набора"]
+    },
+    {
+      "id": "HO-MODEL-SET-TO-SEARCH-DT4C",
+      "from": "application::model_provisioning",
+      "to": "application::thin_search (NOT_IMPLEMENTED; DT4-C)",
+      "through": ["model-set.ready.json", "ModelSetReadySnapshot verification"],
+      "surface": "src/application/model_readiness.rs#ModelSetReadySnapshot",
+      "data_ids": ["OUT-MODEL-SET-READY"],
+      "preconditions": ["DT4-C реализовал чтение снимка координатором"],
+      "consumer_obligations": ["Проверять снимок и артефакты перед каждым принятым запросом", "Повторять проверку после восстановления"],
+      "success": "Координатор допускает поиск только по единому готовому поколению",
+      "failures": ["NOT_READY при отсутствующем, повреждённом или смешанном снимке"],
+      "acceptance_refs": ["ROADMAP.md#DT4-C", "planned contract test for ThinSearchCoordinator model admission"],
+      "unblocks": ["Проверку SEARCH_READY в DT4-C"]
+    }
+  ],
+  "flow_edges": [
+    {"from": "application::model_readiness", "to": "application::model_provisioning", "data_ids": ["IN-PRODUCTION-MODEL-CATALOG"]},
+    {"from": "model role qualification", "to": "application::model_provisioning", "data_ids": ["IN-QUALIFIED-ROLE-MARKERS"]},
+    {"from": "application::model_provisioning", "to": "model-set.ready.json", "data_ids": ["OUT-MODEL-SET-READY"], "transformation_id": "TR-PUBLISH-MODEL-SET"},
+    {"from": "model-set.ready.json", "to": "read_model_set_snapshot_with_artifacts", "data_ids": ["OUT-MODEL-SET-READY"]},
+    {"from": "read_model_set_snapshot_with_artifacts", "to": "application::model_provisioning::production_model_set_status", "data_ids": ["OUT-MODEL-SET-READY"]},
+    {"from": "model-set.ready.json", "to": "ModelSetReadySnapshot verification", "data_ids": ["OUT-MODEL-SET-READY"]},
+    {"from": "ModelSetReadySnapshot verification", "to": "application::thin_search (NOT_IMPLEMENTED; DT4-C)", "data_ids": ["OUT-MODEL-SET-READY"]}
+  ],
+  "evidence": {
+    "integration_decision": {"status": "BLOCKED", "reason": "Публикация и команда состояния реализованы, но обязательное чтение снимка поисковым координатором отсутствует до DT4-C", "authority_ref": {"path": "BC-FS-MODEL-READINESS.md", "sha256": "a584ca4c5718cafd525366217404fdd49320a41d81e40306996f6179df0ecc13"}},
+    "contract_tests": [{"path": "../../../src/application/model_readiness.rs", "status": "PLANNED"}],
+    "integration_tests": [{"path": "../../../evidence/dt4/release-receipt.json", "status": "PLANNED"}]
+  },
+  "blockers": [
+    {
+      "id": "BL-DT4C-MODEL-ADMISSION",
+      "unknown": "ThinSearchCoordinator не читает и не проверяет ModelSetReadySnapshot перед поиском",
+      "owner": "DT4-C",
+      "required_evidence": "Контрактный тест координатора для готового, отсутствующего, повреждённого и восстановленного снимка",
+      "resolution_condition": "ThinSearchCoordinator проверяет снимок и его артефакты перед каждым принятым запросом и видит восстановление на следующем вызове",
+      "blocked_consumers": ["application::thin_search"]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 ---
-TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.4; TDR-FS-2.5; TDR-FS-2.7
+TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.4; TDR-FS-2.5; TDR-FS-2.7; TDR-FS-2.8
 project_scope: future
 document_status: actual
 Индексация: true
@@ -124,7 +124,9 @@ MCP предоставляет один инструмент `search` с пол�
 
 [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет общий пакет. [TDR-FS-2.3](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>) строит консольное представление. [TDR-FS-2.4](<TDR-FS-2.4 Automatic model provisioning.md>) поставляет четыре обязательные роли. [TDR-FS-2.5](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>) сохраняет отдельный экспериментальный режим. [TDR-FS-2.7](<TDR-FS-2.7 MCP stdio и runtime.md>) определяет протокольное представление, ошибки и владение средой исполнения.
 
-Канонические метаданные принадлежат [`CanonicalRecord`](../../../src/domain/record.rs), текущий запрос - [`src/domain/search.rs`](../../../src/domain/search.rs), а модельные проекции координируются через [`src/application/comparison.rs`](../../../src/application/comparison.rs). MCP-адаптер и общий публичный DTO появляются в DT4.
+Каноническая передача прикладного результата машинным адаптерам оформлена контрактом [BC-FS-PUBLIC-SEARCH](<../Contracts/BC-FS-PUBLIC-SEARCH.md>). [TDR-FS-2.8](<TDR-FS-2.8 Модульные границы и контракты.md>) определяет его место в модульной структуре.
+
+Канонические метаданные принадлежат [`CanonicalRecord`](../../../src/domain/record.rs), внутренний запрос - [`src/domain/search.rs`](../../../src/domain/search.rs), публичный DTO - [`src/application/public_search.rs`](../../../src/application/public_search.rs), а производственный координатор - [`src/application/thin_search.rs`](../../../src/application/thin_search.rs). Их наличие в коде не заменяет приёмку этапов DT4-C и DT4-D.
 
 ## Проверка решения
 

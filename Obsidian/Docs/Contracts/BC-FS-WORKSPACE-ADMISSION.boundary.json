@@ -1,0 +1,90 @@
+{
+  "$schema": "https://codex.local/schemas/boundary-contract-v1.schema.json",
+  "schema": "boundary-contract/v1",
+  "contract_id": "BC-FS-WORKSPACE-ADMISSION",
+  "contract_version": "1",
+  "status": "DRAFT",
+  "human_contract": "BC-FS-WORKSPACE-ADMISSION.md",
+  "producer": {"module": "application::workspace", "responsibility": "Создать, атомарно сохранить и повторно проверить переносимый профиль рабочей области"},
+  "execution_scope": {
+    "platform_strategy": "CURRENT_ONLY",
+    "current_environments": ["Windows local filesystem"],
+    "deferred_environments": [
+      {"environment": "Linux local filesystem", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"},
+      {"environment": "macOS local filesystem", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"}
+    ],
+    "ports": [
+      {"id": "PORT-WORKSPACE-FILESYSTEM", "owner": "application::workspace", "capabilities": ["канонизировать каталоги", "атомарно записать UTF-8 TOML", "повторно прочитать профиль"], "required_now": true, "implementation_status": "IMPLEMENTED"}
+    ]
+  },
+  "consumers": ["WorkspaceStore::production_config"],
+  "machine_contracts": [
+    {"kind": "source-interface", "path": "../../../src/application/workspace.rs", "symbol": "WorkspaceProfile, WorkspaceStore"},
+    {"kind": "format-specification", "path": "../../../src/application/workspace.rs", "symbol": "WORKSPACE_SCHEMA=1 and serde TOML layout"}
+  ],
+  "inputs": [
+    {
+      "id": "IN-CONFIRMED-WORKSPACE-ROOTS",
+      "meaning": "Подтверждённый корень области и выбранные корни documentation и code",
+      "required": true,
+      "producer": "FastSearch user admission flow",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "../../../src/application/workspace.rs#WorkspaceProfile::from_roots", "sha256": "1fde90cd765bcead8853ea4e37f35c5f84b06c3febd3b1a05c55ab86f990558b"},
+      "format": "Existing directories and display name",
+      "schema_ref": "../../../src/application/workspace.rs#WorkspaceProfile::from_roots",
+      "version": "1",
+      "identity": "Канонический корень рабочей области",
+      "units": "filesystem paths",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 workspace, 0..N roots per contour"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "OUT-WORKSPACE-PROFILE",
+      "meaning": "Проверенный переносимый профиль рабочей области",
+      "producer": "application::workspace",
+      "format": ".fastsearch/workspace.toml",
+      "schema_ref": "../../../src/application/workspace.rs#WorkspaceProfile",
+      "version": "1",
+      "identity": "workspace id and rooted source ids",
+      "units": "relative paths",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 profile",
+      "creation_condition": "Все каталоги канонизированы, находятся в области и имеют уникальные root_id",
+      "lineage": ["TR-ADMIT-WORKSPACE"]
+    }
+  ],
+  "transformations": [
+    {"id": "TR-ADMIT-WORKSPACE", "owner": "application::workspace", "kind": "NORMALIZE", "input_ids": ["IN-CONFIRMED-WORKSPACE-ROOTS"], "output_ids": ["OUT-WORKSPACE-PROFILE"], "rule": "Канонизировать корень, сохранить источники относительными путями и вычислить устойчивые идентификаторы по контуру", "loss": "NONE"}
+  ],
+  "handoffs": [
+    {
+      "id": "HO-WORKSPACE-TO-PRODUCTION",
+      "from": "application::workspace",
+      "to": "WorkspaceStore::production_config",
+      "through": [".fastsearch/workspace.toml", "WorkspaceStore::open"],
+      "surface": "src/application/workspace.rs#WorkspaceStore::production_config",
+      "data_ids": ["OUT-WORKSPACE-PROFILE"],
+      "preconditions": ["Профиль повторно прошёл validate_profile"],
+      "consumer_obligations": ["Разрешать только допущенные корни", "Не считать ноль контуров готовностью поиска"],
+      "success": "Производственная конфигурация получает те же корни и идентичность",
+      "failures": ["Неизвестная версия", "повреждённый TOML", "недоступный или внешний корень"],
+      "acceptance_refs": ["tests/workspace_runtime.rs"],
+      "unblocks": ["Открытие производственной поисковой среды"]
+    }
+  ],
+  "flow_edges": [
+    {"from": "FastSearch user admission flow", "to": "application::workspace", "data_ids": ["IN-CONFIRMED-WORKSPACE-ROOTS"]},
+    {"from": "application::workspace", "to": ".fastsearch/workspace.toml", "data_ids": ["OUT-WORKSPACE-PROFILE"], "transformation_id": "TR-ADMIT-WORKSPACE"},
+    {"from": ".fastsearch/workspace.toml", "to": "WorkspaceStore::open", "data_ids": ["OUT-WORKSPACE-PROFILE"]},
+    {"from": "WorkspaceStore::open", "to": "WorkspaceStore::production_config", "data_ids": ["OUT-WORKSPACE-PROFILE"]}
+  ],
+  "evidence": {
+    "integration_decision": {"status": "REQUIRED", "reason": "Профиль пересекает устойчивую файловую границу и повторно читается потребителем", "authority_ref": {"path": "BC-FS-WORKSPACE-ADMISSION.md", "sha256": "6071aeb179430256cb87d21ddccb7757df7af0c6d9266a3621e460010b598039"}},
+    "contract_tests": [{"path": "../../../tests/workspace_runtime.rs", "status": "PLANNED"}],
+    "integration_tests": [{"path": "../../../tests/workspace_runtime.rs", "status": "PLANNED"}]
+  },
+  "blockers": []
+}

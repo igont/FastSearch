@@ -1,5 +1,5 @@
 ---
-TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.5; TDR-FS-2.6; TDR-FS-2.7
+TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.5; TDR-FS-2.6; TDR-FS-2.7; TDR-FS-2.8
 project_scope: future
 document_status: actual
 Индексация: true
@@ -102,6 +102,8 @@ Reranker не получает векторную проекцию и не уч�
 ## Связи и основания
 
 [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет пакет. [TDR-FS-2.3](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>) маршрутизирует и представляет команды, а настоящее решение владеет подготовкой и согласованным снимком. [TDR-FS-2.5](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>) использует модельные проекции для исследования. [TDR-FS-2.6](<TDR-FS-2.6 Единый поиск и переранжирование.md>) потребляет готовый производственный набор. [TDR-FS-2.7](<TDR-FS-2.7 MCP stdio и runtime.md>) ограничивает одновременное использование тяжёлой среды исполнения.
+
+Публикация единого снимка готовности оформлена контрактом [BC-FS-MODEL-READINESS](<../Contracts/BC-FS-MODEL-READINESS.md>), а правила его состояния определяет [TDR-FS-2.8](<TDR-FS-2.8 Модульные границы и контракты.md>).
 
 Подготовка производственного набора находится в [`src/application/model_provisioning.rs`](../../../src/application/model_provisioning.rs), а согласованный снимок готовности - в [`src/application/model_readiness.rs`](../../../src/application/model_readiness.rs). Роли и идентичности принадлежат [`src/domain/model_role.rs`](../../../src/domain/model_role.rs) и [`src/domain/embedding_model.rs`](../../../src/domain/embedding_model.rs). Вычислительные адаптеры разделены между [`src/adapters/vector`](../../../src/adapters/vector) и [`src/adapters/qwen_reranker.rs`](../../../src/adapters/qwen_reranker.rs).
 

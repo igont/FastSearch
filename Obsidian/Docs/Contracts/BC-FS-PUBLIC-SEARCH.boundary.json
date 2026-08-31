@@ -1,0 +1,176 @@
+{
+  "$schema": "https://codex.local/schemas/boundary-contract-v1.schema.json",
+  "schema": "boundary-contract/v1",
+  "contract_id": "BC-FS-PUBLIC-SEARCH",
+  "contract_version": "1",
+  "status": "DRAFT",
+  "human_contract": "BC-FS-PUBLIC-SEARCH.md",
+  "producer": {
+    "module": "application::thin_search",
+    "responsibility": "Проверить публичный запрос, выполнить поиск и через схему application::public_search создать ограниченный безопасный результат или типизированную ошибку"
+  },
+  "execution_scope": {
+    "platform_strategy": "NOT_APPLICABLE",
+    "current_environments": ["FastSearch process"],
+    "deferred_environments": [],
+    "ports": []
+  },
+  "consumers": ["adapters::mcp"],
+  "machine_contracts": [
+    {
+      "kind": "source-interface",
+      "path": "../../../src/application/public_search.rs",
+      "symbol": "PublicSearchRequest, PublicSearchResponse, PublicSearchError"
+    },
+    {
+      "kind": "source-interface",
+      "path": "../../../src/application/thin_search.rs",
+      "symbol": "ThinSearchCoordinator::search"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "IN-PUBLIC-REQUEST",
+      "meaning": "Публичный текст запроса и необязательные фильтры",
+      "required": true,
+      "producer": "machine-facing caller",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "../../../src/application/public_search.rs#PublicSearchRequest",
+        "sha256": "1c105e14197c5e0a51efe6a446de20982e20821cbaba9dc726f52e9d78097c45"
+      },
+      "format": "PublicSearchRequest v1",
+      "schema_ref": "../../../src/application/public_search.rs#PublicSearchRequest",
+      "version": "1",
+      "identity": "Исходный запрос после проверки сохраняется в ответе",
+      "units": "Unicode scalar values",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "1",
+      "constraints": ["query после trim непустой", "query не длиннее 1024 символов Unicode"]
+    },
+    {
+      "id": "IN-RANKED-SEARCH",
+      "meaning": "Внутренний порядок кандидатов и разрешённые безопасные пути внутри ThinSearchCoordinator",
+      "required": true,
+      "producer": "application::thin_search",
+      "authority": {
+        "kind": "DERIVED",
+        "source_ref": "../../../src/application/thin_search.rs#ThinSearchCoordinator::search",
+        "sha256": "7c55cd35768d19beb11d17a9d25a4c0b1d32b74d04c590efc1582afa2a370be1"
+      },
+      "format": "ranked canonical candidates or PublicSearchError",
+      "schema_ref": "../../../src/application/thin_search.rs#ThinSearchCoordinator::search",
+      "version": "1",
+      "identity": "Устойчивый идентификатор канонической записи",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "0..N"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "OUT-PUBLIC-RESPONSE",
+      "meaning": "Безопасный публичный поисковый ответ до шести результатов",
+      "producer": "application::thin_search",
+      "format": "PublicSearchResponse v1",
+      "schema_ref": "../../../src/application/public_search.rs#PublicSearchResponse",
+      "version": "1",
+      "identity": "Путь исходного файла и последовательный rank",
+      "units": "bytes for serialized limit",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "0..6 results",
+      "creation_condition": "Запрос и внутренний результат прошли полную проверку, а JSON не превышает 131072 байта",
+      "lineage": ["TR-BUILD-PUBLIC-RESPONSE"]
+    },
+    {
+      "id": "OUT-PUBLIC-ERROR",
+      "meaning": "Безопасный типизированный отказ без внутренней причины",
+      "producer": "application::thin_search",
+      "format": "PublicSearchError v1",
+      "schema_ref": "../../../src/application/public_search.rs#PublicSearchError",
+      "version": "1",
+      "identity": "Код ошибки",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1",
+      "creation_condition": "Проверка входа, готовности или ограничения завершилась отказом",
+      "lineage": ["TR-BUILD-PUBLIC-ERROR"]
+    }
+  ],
+  "transformations": [
+    {
+      "id": "TR-BUILD-PUBLIC-RESPONSE",
+      "owner": "application::thin_search",
+      "kind": "FILTER",
+      "input_ids": ["IN-PUBLIC-REQUEST", "IN-RANKED-SEARCH"],
+      "output_ids": ["OUT-PUBLIC-RESPONSE"],
+      "rule": "Применить явные фильтры, разрешить безопасные пути и вызвать PublicSearchResponse::from_ranked_results с итоговым порядком",
+      "loss": "DECLARED",
+      "lost_data": ["модельные оценки", "исходные позиции кандидатов", "результаты после шестой позиции"],
+      "loss_justification": "Публичное обещание содержит только общий итоговый порядок до шести результатов",
+      "loss_evidence_refs": [
+        {
+          "path": "../../../tests/dt4_public_search_contract.rs",
+          "sha256": "8618d17b0d4f3713befbf05e31635975a3ae1329eeab3c00ae6ed25c9fb8edcd"
+        }
+      ]
+    },
+    {
+      "id": "TR-BUILD-PUBLIC-ERROR",
+      "owner": "application::thin_search",
+      "kind": "REDACT",
+      "input_ids": ["IN-PUBLIC-REQUEST", "IN-RANKED-SEARCH"],
+      "output_ids": ["OUT-PUBLIC-ERROR"],
+      "rule": "Сопоставить отказ с публичным кодом, безопасным сообщением и признаком повтора",
+      "loss": "DECLARED",
+      "lost_data": ["внутренняя причина", "служебные пути", "стек и соседние записи"],
+      "loss_justification": "Диагностические сведения не входят в публичный договор и могут раскрыть локальное состояние",
+      "loss_evidence_refs": [
+        {
+          "path": "../../../tests/dt4_public_search_contract.rs",
+          "sha256": "8618d17b0d4f3713befbf05e31635975a3ae1329eeab3c00ae6ed25c9fb8edcd"
+        }
+      ]
+    }
+  ],
+  "handoffs": [
+    {
+      "id": "HO-PUBLIC-TO-MCP",
+      "from": "application::thin_search",
+      "to": "adapters::mcp",
+      "through": [],
+      "surface": "src/application/public_search.rs#PublicSearchResponse",
+      "data_ids": ["OUT-PUBLIC-RESPONSE", "OUT-PUBLIC-ERROR"],
+      "preconditions": ["Результат создан публичным конструктором"],
+      "consumer_obligations": ["Не менять поля, порядок и смысл ошибок"],
+      "success": "MCP получает общий DTO или безопасный отказ",
+      "failures": ["Сериализация не должна раскрывать domain_cause"],
+      "acceptance_refs": ["tests/dt4_public_search_contract.rs", "tests/dt4_mcp_thin_slice.rs"],
+      "unblocks": ["BC-FS-MCP-STDIO"]
+    }
+  ],
+  "flow_edges": [
+    {"from": "machine-facing caller", "to": "application::thin_search", "data_ids": ["IN-PUBLIC-REQUEST"]},
+    {"from": "ranked candidates within application::thin_search", "to": "application::thin_search", "data_ids": ["IN-RANKED-SEARCH"]},
+    {"from": "application::thin_search", "to": "adapters::mcp", "data_ids": ["OUT-PUBLIC-RESPONSE"], "transformation_id": "TR-BUILD-PUBLIC-RESPONSE"},
+    {"from": "application::thin_search", "to": "adapters::mcp", "data_ids": ["OUT-PUBLIC-ERROR"], "transformation_id": "TR-BUILD-PUBLIC-ERROR"}
+  ],
+  "evidence": {
+    "integration_decision": {
+      "status": "REQUIRED",
+      "reason": "Публичный DTO физически передаётся действующему MCP-адаптеру; CLI/JSON остаётся целевым потребителем DT4-D",
+      "authority_ref": {"path": "BC-FS-PUBLIC-SEARCH.md", "sha256": "9a60c0b2aa18875e4662d71339b6b9f9c9ca516793c92cf04e62add58327ba0a"}
+    },
+    "contract_tests": [
+      {"path": "../../../tests/dt4_public_search_contract.rs", "status": "PLANNED"}
+    ],
+    "integration_tests": [
+      {"path": "../../../tests/dt4_mcp_thin_slice.rs", "status": "PLANNED"}
+    ]
+  },
+  "blockers": []
+}

@@ -1,5 +1,5 @@
 ---
-TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.4; TDR-FS-2.6
+TDR: TDR-FS-2; TDR-FS-2.3; TDR-FS-2.4; TDR-FS-2.6; TDR-FS-2.8
 project_scope: future
 document_status: actual
 Индексация: true
@@ -79,7 +79,9 @@ FastSearch должен предоставить один локальный MCP
 
 [TDR-FS-2](<TDR-FS-2 Workspaces и terminal UX.md>) определяет пакет. [TDR-FS-2.3](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>) отделяет машинное представление. [TDR-FS-2.4](<TDR-FS-2.4 Automatic model provisioning.md>) задаёт готовность моделей. [TDR-FS-2.6](<TDR-FS-2.6 Единый поиск и переранжирование.md>) задаёт вход и публичный ответ.
 
-Владельцем прикладной границы станет новый модуль публичного поиска в `src/application`, а MCP-адаптер будет размещён в `src/adapters`. Точка входа `src/main.rs` выбирает режим, но не содержит логику инструмента.
+Транспортная граница оформлена контрактом [BC-FS-MCP-STDIO](<../Contracts/BC-FS-MCP-STDIO.md>), вложенный прикладной DTO - контрактом [BC-FS-PUBLIC-SEARCH](<../Contracts/BC-FS-PUBLIC-SEARCH.md>). Их расположение и состояния определяет [TDR-FS-2.8](<TDR-FS-2.8 Модульные границы и контракты.md>).
+
+Владельцем прикладной границы является [`src/application/public_search.rs`](../../../src/application/public_search.rs), а MCP-адаптер расположен в [`src/adapters/mcp.rs`](../../../src/adapters/mcp.rs). Точка входа [`src/main.rs`](../../../src/main.rs) выбирает режим, но не содержит логику инструмента. Наличие этой реализации не объявляет пользовательские этапы DT4-C и DT4-D принятыми.
 
 ## Проверка решения
 

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://codex.local/schemas/boundary-contract-v1.schema.json",
+  "schema": "boundary-contract/v1",
+  "contract_id": "BC-FS-TERMINAL-DIALOGUE",
+  "contract_version": "1",
+  "status": "DRAFT",
+  "human_contract": "BC-FS-TERMINAL-DIALOGUE.md",
+  "producer": {"module": "application", "responsibility": "Создать типизированный терминальный документ без владения оформлением и вводом; реализации находятся в application::cli и application::console"},
+  "execution_scope": {
+    "platform_strategy": "CURRENT_ONLY",
+    "current_environments": ["Windows terminal"],
+    "deferred_environments": [
+      {"environment": "Linux terminal", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"},
+      {"environment": "macOS terminal", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"}
+    ],
+    "ports": [
+      {"id": "PORT-TERMINAL-IO", "owner": "terminal-dialogue", "capabilities": ["отрисовать DialogueDocument", "прочитать ввод", "обработать отмену и EOF"], "required_now": true, "implementation_status": "IMPLEMENTED"}
+    ]
+  },
+  "consumers": ["terminal-dialogue"],
+  "machine_contracts": [
+    {"kind": "source-interface", "path": "../../../../terminal-dialogue/src/lib.rs", "symbol": "TerminalDocument, DialogueDocument and public document types"}
+  ],
+  "inputs": [
+    {
+      "id": "IN-APPLICATION-OUTCOME",
+      "meaning": "Типизированный результат, ошибка, подсказка или прогресс прикладного сценария",
+      "required": true,
+      "producer": "application::execute_cli_formatted and application::run_interactive",
+      "authority": {"kind": "DERIVED", "source_ref": "../../../src/application/mod.rs#execute_cli_formatted, run_interactive", "sha256": "6e49074ffa9efc16d993044085e9d94819069e287870f365e08cdb9bb3d2185f"},
+      "format": "FastSearch typed application presentation state",
+      "schema_ref": "../../../../terminal-dialogue/src/lib.rs#TerminalDocument",
+      "version": "1",
+      "identity": "Текущий пользовательский сценарий",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 document"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "OUT-TERMINAL-DOCUMENT",
+      "meaning": "Типизированный документ для отрисовки terminal-dialogue",
+      "producer": "application",
+      "format": "terminal_dialogue::DialogueDocument",
+      "schema_ref": "../../../../terminal-dialogue/src/lib.rs#DialogueDocument",
+      "version": "path dependency",
+      "identity": "Текущий пользовательский сценарий",
+      "units": "terminal cells",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "1 document",
+      "creation_condition": "Прикладной исход преобразован реализацией TerminalDocument",
+      "lineage": ["TR-MAP-TERMINAL-DOCUMENT"]
+    }
+  ],
+  "transformations": [
+    {"id": "TR-MAP-TERMINAL-DOCUMENT", "owner": "application", "kind": "NORMALIZE", "input_ids": ["IN-APPLICATION-OUTCOME"], "output_ids": ["OUT-TERMINAL-DOCUMENT"], "rule": "Реализации application::cli и application::console преобразуют смысловые поля FastSearch в публичные типы документов terminal-dialogue без ручного оформления", "loss": "NONE"}
+  ],
+  "handoffs": [
+    {
+      "id": "HO-DOCUMENT-TO-TERMINAL-DIALOGUE",
+      "from": "application",
+      "to": "terminal-dialogue",
+      "through": [],
+      "surface": "terminal_dialogue::TerminalDocument",
+      "data_ids": ["OUT-TERMINAL-DOCUMENT"],
+      "preconditions": ["Документ создан реализацией публичного TerminalDocument или публичным типом документа terminal-dialogue"],
+      "consumer_obligations": ["Владеть оформлением, вводом, отменой и записью в терминал"],
+      "success": "Терминал показывает смысловой результат FastSearch по общим правилам",
+      "failures": ["Ошибка ввода-вывода", "отмена", "конец ввода"],
+      "acceptance_refs": ["tests/terminal_dialogue_boundary.rs", "tests/cli_ux.rs"],
+      "unblocks": ["Человекочитаемое представление FastSearch"]
+    }
+  ],
+  "flow_edges": [
+    {"from": "application::execute_cli_formatted and application::run_interactive", "to": "application", "data_ids": ["IN-APPLICATION-OUTCOME"]},
+    {"from": "application", "to": "terminal-dialogue", "data_ids": ["OUT-TERMINAL-DOCUMENT"], "transformation_id": "TR-MAP-TERMINAL-DOCUMENT"}
+  ],
+  "evidence": {
+    "integration_decision": {"status": "REQUIRED", "reason": "Передача пересекает границу отдельного path-крейта", "authority_ref": {"path": "BC-FS-TERMINAL-DIALOGUE.md", "sha256": "218a5023debf9a8c1803740ad4574c4eb72d4ddc43815a005a4a663bf3ac4b75"}},
+    "contract_tests": [{"path": "../../../tests/terminal_dialogue_boundary.rs", "status": "PLANNED"}],
+    "integration_tests": [{"path": "../../../tests/cli_ux.rs", "status": "PLANNED"}]
+  },
+  "blockers": []
+}
