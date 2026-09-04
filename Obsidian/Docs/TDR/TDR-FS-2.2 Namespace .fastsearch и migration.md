@@ -56,7 +56,7 @@ Migration выполняется явно и идемпотентно:
 2. Проверить ownership и совместимую schema/provenance.
 3. Сформировать preview с источниками, целями и конфликтами.
 4. Импортировать совместимую конфигурацию и поисковые эксперименты без графовых данных FastGraph.
-5. Перестроить disposable local state в `.fastsearch/local`.
+5. Перестроить disposable local state в `.fastsearch/local`. Для перехода DT13-A отдельный `FS_SOURCE_PROVENANCE_REBUILD` под единственным writer lock атомарно публикует `schema_marker + canonical generation + records + provenance index`; затем lexical и векторные проекции перестраиваются для этого поколения.
 6. Оставить legacy data нетронутыми до подтверждённого parity и отдельной cleanup operation.
 
 ## Ошибки и граничные случаи
@@ -73,6 +73,7 @@ Migration выполняется явно и идемпотентно:
 - FastSearch не использует CF-prefixed target directory.
 - Удаление `.fastsearch/local` не удаляет конфигурацию рабочей области или поисковые эксперименты.
 - Unknown schema не импортируется частично.
+- Crash до source/provenance commit сохраняет прежний bundle; crash после commit оставляет поиск `NOT_READY` до согласованных проекций, но не создаёт смешанное принятое поколение.
 - Generated index, embeddings, candidates и runtime locks не требуют Git versioning.
 - Удаление partition одной модели не изменяет shared state, lexical index или partitions других моделей.
 - Portable paths внутри workspace сохраняются относительно canonical root.

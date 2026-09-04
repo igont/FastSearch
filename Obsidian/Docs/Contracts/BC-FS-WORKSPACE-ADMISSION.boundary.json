@@ -44,7 +44,7 @@
       "id": "OUT-WORKSPACE-PROFILE",
       "meaning": "Проверенный переносимый профиль рабочей области",
       "producer": "application::workspace",
-      "format": ".fastsearch/workspace.toml",
+      "format": "WorkspaceProfile v1 persisted as .fastsearch/workspace.toml",
       "schema_ref": "../../../src/application/workspace.rs#WorkspaceProfile",
       "version": "1",
       "identity": "workspace id and rooted source ids",

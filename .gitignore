@@ -4,6 +4,7 @@
 .agents/archive/*
 !.agents/archive/*.zip
 /.dtree/
+/.code-review-graph/
 
 # Rust build output
 /target/
@@ -12,6 +13,8 @@
 # Python helper output
 __pycache__/
 *.py[cod]
+*.tmp
+*.log
 
 # Locally compiled Windows binaries
 /*.exe
@@ -21,6 +24,7 @@ __pycache__/
 
 # FastSearch disposable local state
 /.cfknowledge/
+/Obsidian/.fastsearch/local/
 
 # Local configuration and secrets
 /.env
@@ -30,6 +34,8 @@ __pycache__/
 # IDE and operating-system files
 /.idea/
 /.vscode/
+/Obsidian/.obsidian/workspace.json
+/Obsidian/.obsidian/workspace-mobile.json
 *.iml
 .DS_Store
 Thumbs.db

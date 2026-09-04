@@ -1,0 +1,1013 @@
+{
+  "$schema": "https://codex.local/schemas/boundary-contract-v1.schema.json",
+  "schema": "boundary-contract/v1",
+  "contract_id": "BC-FS-SEARCH-SOURCE-ANCHOR",
+  "contract_version": "1",
+  "status": "BLOCKED",
+  "human_contract": "BC-FS-SEARCH-SOURCE-ANCHOR.md",
+  "producer": {
+    "module": "application::public_search",
+    "responsibility": "Собрать изолированные provisional payload, получить authority-backed acquire outcome и передать только FinalizedAnchorAssembly либо один pre-lease abort/failure/termination без прямого wire handoff"
+  },
+  "execution_scope": {
+    "platform_strategy": "CURRENT_ONLY",
+    "current_environments": ["local Windows process"],
+    "deferred_environments": [
+      {
+        "environment": "Linux local",
+        "architecture_status": "EXTENSION_POINT_DEFINED",
+        "implementation_status": "NOT_IMPLEMENTED"
+      },
+      {
+        "environment": "macOS local",
+        "architecture_status": "EXTENSION_POINT_DEFINED",
+        "implementation_status": "NOT_IMPLEMENTED"
+      }
+    ],
+    "ports": [
+      {
+        "id": "PORT-FS-ANCHOR-SOURCE-PROVENANCE",
+        "owner": "application::public_search",
+        "capabilities": [
+          "повторно открыть допущенный WorkspaceProfile",
+          "разрешить нормализованный относительный путь без раскрытия машинного корня",
+          "атомарно получить contour, root_id, locator и raw SHA-256 исходных байтов по record_id + state_generation",
+          "получить typed acquire outcome от generation coordinator; release lifecycle принадлежит отдельному lease-контракту"
+        ],
+        "required_now": false,
+        "implementation_status": "NOT_IMPLEMENTED"
+      }
+    ]
+  },
+  "consumers": ["FastSearch source/state generation coordinator", "application::thin_search response assembler", "FastSearch runtime supervisor"],
+  "machine_contracts": [
+    {
+      "kind": "source-interface",
+      "path": "../../../src/domain/record.rs",
+      "symbol": "RootedSourceLocator, CanonicalRecord, SourceSnapshot"
+    },
+    {
+      "kind": "other",
+      "path": "BC-FS-GENERATION-PUBLICATION-LEASE.md",
+      "symbol": "GenerationPublicationLeaseRequest and GenerationPublicationLeaseOutcome v1"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "IN-SEARCH-RECORD",
+      "meaning": "Итоговая каноническая запись с относительным локатором, полным payload селектора, record identity и content hash; типизированный root в запись не входит",
+      "required": true,
+      "producer": "FastSearch canonical source pipeline",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "../../../src/domain/record.rs#CanonicalRecord",
+        "sha256": "a2b6fb0748649c4a403c5f080f702be928779a5cb750bf827946e00244e57101"
+      },
+      "format": "CanonicalRecord",
+      "schema_ref": "../../../src/domain/record.rs#CanonicalRecord",
+      "version": "current source interface",
+      "identity": "CanonicalRecord::id; root определяется только отдельным provenance lookup",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "1"
+    },
+    {
+      "id": "IN-SEARCH-GENERATION",
+      "meaning": "Неизменяемое поколение, захваченное поисковым вызовом до выбора кандидатов и повторно проверенное перед публикацией полного ответа",
+      "required": true,
+      "producer": "application::thin_search",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+        "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"
+      },
+      "format": "CapturedSearchGeneration v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "state_generation одного принятого поискового вызова",
+      "units": "unsigned generation",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "1",
+      "constraints": ["equals captured state_generation in IN-RANKED-CANONICAL-BUNDLE before INIT, lookup or lease request"]
+    },
+    {
+      "id": "IN-WORKSPACE-PROFILE",
+      "meaning": "Повторно открытый допущенный профиль рабочей области, определяющий workspace_id и множество допустимых contour/root_id, но не выбирающий root записи",
+      "required": true,
+      "producer": "application::workspace",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "BC-FS-WORKSPACE-ADMISSION.boundary.json#OUT-WORKSPACE-PROFILE",
+        "sha256": "6c49477828129eed012271b40dfa9da6b91adf04524047a901d69a349d747548"
+      },
+      "format": "WorkspaceProfile v1 persisted as .fastsearch/workspace.toml",
+      "schema_ref": "../../../src/application/workspace.rs#WorkspaceProfile",
+      "version": "1",
+      "identity": "workspace id and rooted source ids",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "1"
+    },
+    {
+      "id": "IN-SOURCE-ANCHOR-PROVENANCE",
+      "meaning": "Обязательный атомарный lookup при построении ответа по record_id + захваченный state_generation: contour, root_id, относительный locator с полным selector payload и raw SHA-256 исходных байтов либо типизированная причина",
+      "required": true,
+      "producer": "FastSearch source/state provenance lookup",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+        "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"
+      },
+      "format": "SourceAnchorProvenanceLookupOutcome v1 NOT_IMPLEMENTED; lookup выполняется до публикации PublicSearchResult v2",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "Идентичность попытки lookup по record_id + state_generation; при успехе также contour + root_id + relative_path + selector + raw_source_sha256",
+      "units": "bytes hash and unsigned generation",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "1"
+    },
+    {
+      "id": "IN-RANKED-CANONICAL-BUNDLE",
+      "meaning": "Контекст всей explicit-v2 сборки: response_assembly_id, исходный query, captured state_generation и полный упорядоченный набор ожидаемых position_id + record_id",
+      "required": true,
+      "producer": "application::thin_search ranking pipeline",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "BC-FS-PUBLIC-SEARCH-V2.md#Входные-данные-и-источники-истины",
+        "sha256": "2e35f50989fc6fd6b298b8d525229e7e338d4e0ca524568c2da85e8c6698e57d"
+      },
+      "format": "RankedCanonicalResultBundle v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-PUBLIC-SEARCH-V2.md#Входные-данные-и-источники-истины",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + query + captured state_generation + ordered opaque position_id + record_id pairs",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "exactly 1 per explicit-v2 response assembly",
+      "constraints": ["query is the exact query retained for outer response assembly", "each position_id is opaque and unique within response_assembly_id", "position_id is not rank and is never emitted in public wire", "captured state_generation equals IN-SEARCH-GENERATION before per-record work"]
+    },
+    {
+      "id": "IN-OWNER-PROCESS-IDENTITY",
+      "meaning": "Авторитетная identity локального Windows process, владеющего response assembly и будущим lease",
+      "required": true,
+      "producer": "FastSearch Windows process identity provider",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"},
+      "format": "ProcessOwnerIdentity v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "PID + process_start_time",
+      "units": "platform process identity",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 per response assembly",
+      "constraints": ["PID alone is forbidden", "identity is captured before acquire request", "reused PID with another start time is another owner"]
+    },
+    {
+      "id": "IN-GENERATION-PUBLICATION-LEASE-OUTCOME",
+      "meaning": "Авторитетный ответ generation coordinator: ACTIVE_ACQUIRED, REPLAYED_TERMINAL, REPLAYED_PROCESS_DIED, CHANGED либо FAILED",
+      "required": false,
+      "producer": "FastSearch source/state generation coordinator",
+      "authority": {
+        "kind": "SOURCE_OF_TRUTH",
+        "source_ref": "BC-FS-GENERATION-PUBLICATION-LEASE.md#Acquire",
+        "sha256": "8a59f9bc52854000bdb22155612f6c13f463a38ea2da488d362e1426f64fa828"
+      },
+      "format": "GenerationPublicationLeaseOutcome v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-GENERATION-PUBLICATION-LEASE.boundary.json#OUT-LEASE-ACQUIRE-OUTCOME",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + captured state_generation + ACTIVE_ACQUIRED(lease_id, observed, state_revision) | REPLAYED_TERMINAL(lease_id, committed_terminal_identity, terminal_journal_ref, terminal_record_digest, released_revision) | REPLAYED_PROCESS_DIED(lease_id, owner identity, cleanup revision) | CHANGED(observed, state_revision) | FAILED(stage, cause)",
+      "units": "unsigned generation",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1 per OUT-GENERATION-PUBLICATION-LEASE-REQUEST; exactly 1 only when the same coordinator decision has neither commit-recovery status nor state-access block",
+      "constraints": ["response_assembly_id and captured generation exactly equal the request", "mutually exclusive with IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS and IN-ACQUIRE-GENERATION-LEASE-STATE-ACCESS-BLOCKED for the same decision", "ACTIVE_ACQUIRED iff coordinator proves the exact durable active lease", "REPLAYED_TERMINAL preserves lease_id, committed_terminal_identity, terminal_journal_ref, terminal_record_digest and released_revision byte-for-byte from OUT-LEASE-ACQUIRE-OUTCOME", "REPLAYED_TERMINAL and REPLAYED_PROCESS_DIED never create a new permit", "CHANGED iff observed generation differs and no lease exists", "FAILED carries exact stage and cause and creates no lease", "active set, replay state and writer admission are authoritative only in BC-FS-GENERATION-PUBLICATION-LEASE"]
+    },
+    {
+      "id": "IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS",
+      "meaning": "Typed control outcome недоказанной записи exact ACQUIRE без usable lease outcome",
+      "required": false,
+      "producer": "FastSearch source/state generation coordinator",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "BC-FS-GENERATION-PUBLICATION-LEASE.boundary.json#OUT-LEASE-COMMIT-RECOVERY-STATUS", "sha256": "ece2067cbc450dc6a6aa98194dc09744bc82815dfb36b7f3c0905f7207493693"},
+      "format": "GenerationLeaseCommitRecoveryStatus v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-GENERATION-PUBLICATION-LEASE.boundary.json#OUT-LEASE-COMMIT-RECOVERY-STATUS",
+      "version": "1",
+      "identity": "workspace identity + operation_kind + operation_identity + proposal revision/digest + NOT_COMMITTED_RETRY(previous_revision) | COMMIT_READBACK_REQUIRED(lookup_attempt_identity + stage + cause + attempt_number + deadline) | COMMIT_RECOVERY_BLOCKED(last_lookup_attempt_identity + stage + cause + evidence_ref)",
+      "units": "unsigned revision, attempt and deadline",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1 current status per acquire decision; exactly 1 only when the same decision has neither lease domain outcome nor state-access block",
+      "constraints": ["operation_kind is ACQUIRE", "complete acquire identity, proposal revision/digest and variant payload are preserved byte-for-byte from OUT-LEASE-COMMIT-RECOVERY-STATUS", "a status for an earlier proposal cannot advance or block a later proposal", "mutually exclusive with IN-GENERATION-PUBLICATION-LEASE-OUTCOME and IN-ACQUIRE-GENERATION-LEASE-STATE-ACCESS-BLOCKED for the same decision", "status never proves lease absence or presence", "no status creates permit, finalized assembly, public terminal or release"]
+    },
+    {
+      "id": "IN-ACQUIRE-GENERATION-LEASE-STATE-ACCESS-BLOCKED",
+      "meaning": "Typed terminal block exact ACQUIRE, когда authoritative generation ledger потерян, повреждён либо недоступен",
+      "required": false,
+      "producer": "FastSearch source/state generation coordinator",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "BC-FS-GENERATION-PUBLICATION-LEASE.boundary.json#OUT-LEASE-STATE-ACCESS-BLOCKED", "sha256": "ece2067cbc450dc6a6aa98194dc09744bc82815dfb36b7f3c0905f7207493693"},
+      "format": "GenerationLeaseStateAccessBlocked v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-GENERATION-PUBLICATION-LEASE.boundary.json#OUT-LEASE-STATE-ACCESS-BLOCKED",
+      "version": "1",
+      "identity": "workspace identity + operation_kind + operation_identity + lookup attempt identity + optional retained proposal revision/digest + optional lookup revision + MISSING_PREVIOUS|CORRUPT|UNAVAILABLE(stage + cause)",
+      "units": "unsigned revision when available",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1 per acquire decision; exactly 1 only when the same decision has neither lease domain outcome nor commit-recovery status",
+      "constraints": ["operation_kind is ACQUIRE", "complete acquire identity, lookup evidence and optional retained proposal identity are preserved byte-for-byte from OUT-LEASE-STATE-ACCESS-BLOCKED", "mutually exclusive with IN-GENERATION-PUBLICATION-LEASE-OUTCOME and IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS for the same decision", "creates no proposal, permit, finalized assembly, public terminal or release", "does not claim that a lease is absent"]
+    },
+    {
+      "id": "IN-ASSEMBLY-TERMINATION-REQUEST",
+      "meaning": "Correlated CANCELLED либо TIMEOUT request, поступивший до FinalizedAnchorAssembly и ещё не разрешённый CAS относительно ASSEMBLING, LEASE_PENDING или FINALIZED",
+      "required": false,
+      "producer": "application::thin_search response lifecycle",
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"},
+      "format": "ResponseAssemblyTerminationRequest v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + CANCELLED|TIMEOUT + exact stage + cause",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1 logical termination per response assembly; exact replay returns the same lifecycle decision",
+      "constraints": ["ASSEMBLING winner creates no acquire request", "LEASE_PENDING records termination and waits authoritative acquire outcome", "pending plus ACTIVE_ACQUIRED becomes post-permit termination for the same lease", "pending plus CHANGED or FAILED creates a no-lease terminal", "pending replay reads prior terminal or process-death recovery without new permit", "FINALIZED is handled only by post-permit lifecycle"]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "OUT-SEARCH-SOURCE-ANCHOR",
+      "meaning": "Закрытая платформенно нейтральная поисковая привязка с явной версией и полным selector payload к точному исходному материалу без graph node identity",
+      "producer": "application::public_search",
+      "format": "SearchSourceAnchor v1",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Выходные-данные-и-формат",
+      "version": "1",
+      "identity": "contract_id + contract_version + producer_id + workspace_id + contour + root_id + relative_path + полный tagged-union selector + record_id + record_content_hash + raw_source_sha256 + state_generation",
+      "units": "UTF-8 strings, SHA-256 and unsigned generation",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 provisional payload for each READY ranked position; published only through finalized OUT-SOURCE-ANCHOR-OUTCOME",
+      "creation_condition": "Все обязательные per-record источники относятся к одной записи и captured generation; иначе привязка не создаётся",
+      "lineage": ["TR-BUILD-SEARCH-SOURCE-ANCHOR"],
+      "constraints": [
+        "contract_id is exactly fastsearch.search-source-anchor and contract_version is exactly 1",
+        "producer_id is exactly fastsearch",
+        "contour is documentation or code",
+        "relative_path is normalized UTF-8 with slash separators and is never absolute",
+        "selector is a closed tagged union: markdown_heading has heading_path plus start_byte/end_byte; registry_row has positive row plus start_byte/end_byte; code_symbol has language/symbol_kind/qualified_name plus start_byte/end_byte; whole_file has no payload",
+        "every byte range is zero-based half-open over exact original bytes and satisfies 0 <= start_byte < end_byte <= raw_file_length",
+        "the internal language:kind:name:start_byte adapter string is not a wire format and must be decomposed into typed fields",
+        "selector preserves UTF-8 code points, case, whitespace and heading order exactly as admitted; no Unicode, case or whitespace renormalization is allowed in v1",
+        "missing, extra, empty or kind-incompatible selector payload is rejected as UNSUPPORTED_SOURCE_ANCHOR",
+        "record_content_hash declares its algorithm and version",
+        "raw_source_sha256 is exactly 64 lowercase hexadecimal characters computed before BOM or newline normalization",
+        "state_generation is the authoritative generation used by the search result",
+        "absolute paths, SQLite keys, model scores and FastGraph node IDs are forbidden"
+      ]
+    },
+    {
+      "id": "OUT-SOURCE-ANCHOR-ERROR",
+      "meaning": "Типизированный отказ создать точную привязку без ослабления происхождения",
+      "producer": "application::public_search",
+      "format": "SearchSourceAnchorError v1",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "error code + affected record_id + captured state_generation",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 provisional payload for each BLOCKED ranked position; published only through finalized OUT-SOURCE-ANCHOR-OUTCOME",
+      "creation_condition": "Происхождение захваченного поколения или формат отдельной записи не позволяют создать точную привязку",
+      "lineage": ["TR-REJECT-SEARCH-SOURCE-ANCHOR"],
+      "constraints": ["state_generation is always present and equals IN-SEARCH-GENERATION", "record_id is present for every per-result producer failure"]
+    },
+    {
+      "id": "OUT-PROVISIONAL-ANCHOR-PAYLOAD",
+      "meaning": "Внутренняя оболочка одного READY/BLOCKED payload, изолированная identity конкретной response assembly и позиции",
+      "producer": "application::public_search",
+      "format": "ProvisionalAnchorPayload v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + position_id + record_id + captured state_generation + READY(anchor) | BLOCKED(error)",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 per completed ranked position; 0 for an empty bundle",
+      "creation_condition": "Expected position produces exactly one provisional anchor or error",
+      "lineage": ["TR-BUILD-SEARCH-SOURCE-ANCHOR", "TR-REJECT-SEARCH-SOURCE-ANCHOR"],
+      "constraints": ["both and neither are forbidden", "assembly, position, record and captured generation equal IN-RANKED-CANONICAL-BUNDLE", "wrapper is never serialized to a public consumer"]
+    },
+    {
+      "id": "OUT-SOURCE-ANCHOR-OUTCOME",
+      "meaning": "Закрытый exactly-one union результата производства привязки для одной записи и одного поколения",
+      "producer": "application::public_search",
+      "format": "SearchSourceAnchorOutcome v1",
+      "schema_ref": "BC-FS-PUBLIC-SEARCH-V2.md#Выходной-формат",
+      "version": "1",
+      "identity": "record_id + captured state_generation + status + exactly one anchor or error payload",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 per expected ranked position when assembly is complete and lease is ACTIVE_ACQUIRED; 0 is valid for empty success and all terminal failure branches",
+      "creation_condition": "TR-FINALIZE-ANCHOR-ASSEMBLY confirms complete ordered state and ACTIVE_ACQUIRED lease; READY contains anchor only, BLOCKED contains error only",
+      "lineage": ["TR-FINALIZE-ANCHOR-ASSEMBLY", "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["both and neither are forbidden", "record_id and state_generation equal the ranked canonical input in both branches", "outcome is embedded only in FinalizedAnchorAssembly and never handed directly to serializer or external consumer", "success assembly, abort, failure and pre-permit termination are mutually exclusive for one response_assembly_id"]
+    },
+    {
+      "id": "OUT-ANCHOR-ASSEMBLY-INITIAL-STATE",
+      "meaning": "Внутренний пустой снимок сборки с полным ожидаемым набором позиций до добавления provisional payload",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyInitialState v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + captured state_generation + ordered expected position_id + record_id pairs",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "exactly 1 per ranked bundle",
+      "creation_condition": "INIT copies bundle identity and expected positions before any per-record work",
+      "lineage": ["TR-INIT-ANCHOR-ASSEMBLY"],
+      "constraints": ["completed provisional payload count is zero", "empty ranked bundle is valid", "captured generation equals IN-SEARCH-GENERATION and IN-RANKED-CANONICAL-BUNDLE"]
+    },
+    {
+      "id": "OUT-ANCHOR-ASSEMBLY-STATE",
+      "meaning": "Внутренний полный снимок сборки перед запросом publication lease: ожидаемые позиции и построенные provisional payload",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyState v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + captured state_generation + ordered expected position_id + record_id pairs + ordered completed provisional payload identities",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "exactly 1 latest immutable state per response_assembly_id at finalization or abort decision",
+      "creation_condition": "Completion transform receives initial state and exactly one provisional payload per expected position; zero provisional payloads complete an empty bundle",
+      "lineage": ["TR-ACCUMULATE-ANCHOR-ASSEMBLY"],
+      "constraints": ["expected positions equal IN-RANKED-CANONICAL-BUNDLE", "completed payload identities are unique by response_assembly_id + position_id + record_id + state_generation", "state never invents a missing payload"]
+    },
+    {
+      "id": "OUT-GENERATION-PUBLICATION-LEASE-REQUEST",
+      "meaning": "Запрос generation coordinator на линейризуемую проверку captured generation и удержание writer lease до terminal commit",
+      "producer": "application::public_search",
+      "format": "GenerationPublicationLeaseRequest v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + captured state_generation + owner_process_identity",
+      "units": "unsigned generation",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 per response_assembly_id after provisional assembly reaches a terminal decision point",
+      "creation_condition": "AnchorAssemblyState exists and belongs to one ranked bundle",
+      "lineage": ["TR-REQUEST-GENERATION-PUBLICATION-LEASE"],
+      "constraints": ["assembly and captured generation exactly equal OUT-ANCHOR-ASSEMBLY-STATE", "owner_process_identity exactly equals IN-OWNER-PROCESS-IDENTITY", "PID without process_start_time is forbidden"]
+    },
+    {
+      "id": "OUT-ANCHOR-LIFECYCLE-ASSEMBLING",
+      "meaning": "Начальное CAS-состояние response assembly до acquire request",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyLifecycleAssembling v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + lifecycle_revision 1 + ASSEMBLING",
+      "units": "unsigned lifecycle revision",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 per initialized response assembly",
+      "creation_condition": "Lifecycle is initialized from the ranked bundle",
+      "lineage": ["TR-INIT-ANCHOR-ASSEMBLY"],
+      "constraints": ["no acquire request exists", "no terminal exists"]
+    },
+    {
+      "id": "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING",
+      "meaning": "CAS-состояние после единственного acquire request и до authoritative outcome",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyLifecycleLeasePending v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + next lifecycle_revision + LEASE_PENDING + acquire request identity",
+      "units": "unsigned lifecycle revision",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 per emitted acquire request",
+      "creation_condition": "CAS consumes ASSEMBLING before request emission",
+      "lineage": ["TR-REQUEST-GENERATION-PUBLICATION-LEASE"],
+      "constraints": ["pending termination is absent", "only finalize, abort, failure or pending capture may consume this state"]
+    },
+    {
+      "id": "OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION",
+      "meaning": "Отдельное CAS-состояние LEASE_PENDING с сохранённым CANCELLED либо TIMEOUT",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyLifecyclePendingTermination v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Входные-данные-и-авторитетные-источники",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + next lifecycle_revision + LEASE_PENDING + acquire request identity + pending termination",
+      "units": "unsigned lifecycle revision",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1 per response assembly",
+      "creation_condition": "Termination CAS consumes an unmodified LEASE_PENDING state",
+      "lineage": ["TR-TERMINATE-ANCHOR-ASSEMBLY-BEFORE-ACQUIRE"],
+      "constraints": ["abort, failure and ordinary finalize cannot consume this state", "pending domain resolution or terminal recovery/access transition may consume it", "RETRY_REQUIRED and READBACK_REQUIRED observe without consuming and preserve the exact pending event under the same acquire identity", "terminal recovery/access block consumes the pending event without emitting a no-lease terminal", "at most one pending event is retained"]
+    },
+    {
+      "id": "OUT-ANCHOR-PUBLICATION-PERMIT",
+      "meaning": "Внутреннее разрешение ThinSearchCoordinator фиксировать immutable v2 response/error под удерживаемым generation lease",
+      "producer": "application::public_search",
+      "format": "AnchorPublicationPermit v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Выходные-данные-и-формат",
+      "version": "1",
+      "identity": "workspace identity + permit_id + response_assembly_id + captured state_generation + lease_id + finalized outcome count",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 for ACTIVE_ACQUIRED complete assembly, including zero-result success; otherwise 0",
+      "creation_condition": "Lease outcome is ACTIVE_ACQUIRED and state is complete",
+      "lineage": ["TR-FINALIZE-ANCHOR-ASSEMBLY", "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["permit_id is a stable opaque derivation of contract namespace + response_assembly_id + lease_id", "exact ACTIVE_ACQUIRED acquire replay recreates the same permit_id, never a new capability", "lease remains held until authoritative RELEASED or exact ALREADY_RELEASED readback", "outcome count equals expected positions", "abort and failure are absent"]
+    },
+    {
+      "id": "OUT-FINALIZED-ANCHOR-ASSEMBLY",
+      "meaning": "Единый typed success handoff, сохраняющий assembly/position correlation, finalized outcomes и live publication permit до outer wire projection",
+      "producer": "application::public_search",
+      "format": "FinalizedAnchorAssembly v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-PUBLIC-SEARCH-V2.md#Входные-данные-и-источники-истины",
+      "version": "1",
+      "identity": "workspace identity + permit_id + response_assembly_id + captured state_generation + lease_id + ordered position_id + record_id + SearchSourceAnchorOutcome entries",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "ORDERED",
+      "cardinality": "exactly 1 for ACTIVE_ACQUIRED complete assembly, including empty results; otherwise 0",
+      "creation_condition": "TR-FINALIZE-ANCHOR-ASSEMBLY creates outcomes, permit and this wrapper atomically",
+      "lineage": ["TR-FINALIZE-ANCHOR-ASSEMBLY", "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["position_id is unique and retained until outer wire projection", "outcome count equals expected positions", "permit assembly/generation/lease exactly match wrapper"]
+    },
+    {
+      "id": "OUT-ANCHOR-ASSEMBLY-ABORT",
+      "meaning": "Внутренний отказ завершить полный набор outcomes после смены поколения; per-result outcome и частичный публичный ответ не создаются",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyAbort v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + STALE_INDEX + captured state_generation + observed state_generation",
+      "units": "unsigned generation",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 when publication lease outcome is CHANGED for a response_assembly_id; otherwise 0",
+      "creation_condition": "После complete assembly generation coordinator возвращает CHANGED и pending pre-permit termination отсутствует",
+      "lineage": ["TR-ABORT-ANCHOR-ASSEMBLY"],
+      "constraints": ["error code is STALE_INDEX", "pending pre-permit termination owns CHANGED resolution instead of abort", "partial outcomes, permit and PublicSearchResponse v2 are forbidden", "OUT-SOURCE-ANCHOR-OUTCOME is 0 for the same response_assembly_id"]
+    },
+    {
+      "id": "OUT-ANCHOR-ASSEMBLY-FAILURE",
+      "meaning": "Внутренний pre-lease terminal failure generation correlation mismatch либо недоступного/повреждённого generation coordinator без частичного ответа",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyFailure v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + SEARCH_FAILED + captured state_generation + exact stage + cause",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 when bundle/search generation mismatch occurs before lookup or acquire outcome is FAILED; otherwise 0",
+      "creation_condition": "Bundle/search generation mismatch before lookup or generation coordinator returns FAILED while pending pre-permit termination is absent",
+      "lineage": ["TR-REJECT-ANCHOR-ASSEMBLY-CORRELATION", "TR-FAIL-ANCHOR-ASSEMBLY"],
+      "constraints": ["error code is SEARCH_FAILED", "correlation mismatch and coordinator FAILED are mutually exclusive causes", "pending pre-permit termination owns FAILED resolution instead of failure", "partial outcomes, permit and public response are forbidden", "no generation lease exists"]
+    },
+    {
+      "id": "OUT-ANCHOR-ASSEMBLY-TERMINAL-REPLAY",
+      "meaning": "Readback ранее committed terminal для exact acquire replay после release без нового permit или envelope",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyTerminalReplay v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + lease_id + committed_terminal_identity + terminal_journal_ref + terminal_record_digest + released_revision",
+      "units": "unsigned revision",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 for REPLAYED_TERMINAL; otherwise 0",
+      "creation_condition": "Coordinator returns exact retained terminal replay for the acquire identity",
+      "lineage": ["TR-REPLAY-ANCHOR-ASSEMBLY-TERMINAL", "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["new FinalizedAnchorAssembly is forbidden", "application::public_search creates no new public envelope or release identity", "when released_revision exists but the response outbox still proves RELEASE_PENDING|RECOVERY_REQUIRED, downstream thin_search may retransmit only the original same-key logical release to obtain ALREADY_RELEASED and durably close that outbox", "terminal_journal_ref and terminal_record_digest address one immutable authoritative terminal record", "thin_search must read back and verify that record before replay delivery or closure continuation", "generation coordinator retains the replay pointer no longer than the response lifecycle outbox retains the addressed terminal"]
+    },
+    {
+      "id": "OUT-ANCHOR-ASSEMBLY-OWNER-DIED",
+      "meaning": "Recovery-only исход exact acquire replay после PROCESS_DIED без действующего permit",
+      "producer": "application::public_search",
+      "format": "AnchorAssemblyOwnerDied v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + lease_id + owner_process_identity + cleanup_revision + PROCESS_DIED",
+      "units": "unsigned revision",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 for REPLAYED_PROCESS_DIED; otherwise 0",
+      "creation_condition": "Coordinator returns exact tagged process-death replay",
+      "lineage": ["TR-REJECT-DEAD-ANCHOR-ASSEMBLY", "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["no publication permit exists", "no public envelope or new release is created", "caller must start a new search if still needed"]
+    },
+    {
+      "id": "OUT-PRE-PERMIT-ASSEMBLY-TERMINATION",
+      "meaning": "Correlated CANCELLED либо TIMEOUT, которое завершило anchor assembly без generation lease",
+      "producer": "application::public_search",
+      "format": "PrePermitAssemblyTermination v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + CANCELLED|TIMEOUT + lifecycle_phase + exact stage + cause",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 when termination wins before acquire request or LEASE_PENDING resolves CHANGED|FAILED; otherwise 0",
+      "creation_condition": "Lifecycle CAS proves that no ACTIVE_ACQUIRED lease or FinalizedAnchorAssembly exists",
+      "lineage": ["TR-TERMINATE-ANCHOR-ASSEMBLY-BEFORE-ACQUIRE", "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["provisional payload is discarded", "acquire request is absent or authoritative non-ACTIVE_ACQUIRED", "no release request is allowed because no lease exists", "CANCELLED suppresses public envelope", "TIMEOUT permits one public TIMEOUT error"]
+    },
+    {
+      "id": "OUT-POST-PERMIT-ASSEMBLY-TERMINATION",
+      "meaning": "Pending CANCELLED либо TIMEOUT, машинно коррелированный с ACTIVE_ACQUIRED lease для post-permit terminal lifecycle",
+      "producer": "application::public_search",
+      "format": "ResponseAssemblyTermination v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + permit_id + response_assembly_id + lease_id + CANCELLED|TIMEOUT + exact stage + cause",
+      "units": "NOT_APPLICABLE",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "exactly 1 when a pending termination meets exact ACTIVE_ACQUIRED outcome; otherwise 0",
+      "creation_condition": "One lifecycle CAS correlates pending response_assembly_id with the lease_id returned by ACTIVE_ACQUIRED",
+      "lineage": ["TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"],
+      "constraints": ["FinalizedAnchorAssembly for the same permit and lease exists", "permit_id, response_assembly_id and lease_id are copied in the same lifecycle CAS", "event enters post-permit terminal CAS", "pre-permit termination, abort and failure are absent"]
+    },
+    {
+      "id": "OUT-ANCHOR-LEASE-COMMIT-RECOVERY",
+      "meaning": "Наблюдаемый control state response assembly, ожидающего или исчерпавшего recovery записи ACQUIRE",
+      "producer": "application::public_search",
+      "format": "AnchorLeaseCommitRecoveryState v1 NOT_IMPLEMENTED",
+      "schema_ref": "BC-FS-SEARCH-SOURCE-ANCHOR.md#Отказы-и-восстановление",
+      "version": "1",
+      "identity": "workspace identity + response_assembly_id + captured_generation + owner_process_identity + acquire operation identity + optional proposal revision/digest + RETRY_REQUIRED|READBACK_REQUIRED|RECOVERY_BLOCKED + optional lookup attempt/deadline + exact evidence",
+      "units": "unsigned attempt and deadline",
+      "precision": "EXACT",
+      "order": "NOT_APPLICABLE",
+      "cardinality": "0..1 current state per response assembly; exactly 1 for a current acquire commit-recovery status or state-access block",
+      "creation_condition": "Acquire coordinator emitted commit-recovery status or state-access block instead of a domain outcome",
+      "lineage": ["TR-OBSERVE-ANCHOR-LEASE-COMMIT-RECOVERY", "TR-OBSERVE-ANCHOR-LEASE-STATE-ACCESS-BLOCK", "TR-ADVANCE-PENDING-ANCHOR-LEASE-COMMIT-RECOVERY", "TR-OBSERVE-PENDING-ANCHOR-LEASE-STATE-ACCESS-BLOCK"],
+      "constraints": ["RETRY_REQUIRED and READBACK_REQUIRED preserve LEASE_PENDING and provisional payload", "RECOVERY_BLOCKED moves only this assembly to an operation-level blocked state", "never emits FinalizedAnchorAssembly, permit, public envelope, public terminal or release", "blocked acquire does not claim that a lease is absent"]
+    }
+  ],
+  "transformations": [
+    {
+      "id": "TR-BUILD-SEARCH-SOURCE-ANCHOR",
+      "owner": "application::public_search",
+      "kind": "DERIVE",
+      "input_ids": ["IN-SEARCH-RECORD", "IN-SEARCH-GENERATION", "IN-WORKSPACE-PROFILE", "IN-SOURCE-ANCHOR-PROVENANCE", "IN-RANKED-CANONICAL-BUNDLE", "OUT-ANCHOR-ASSEMBLY-INITIAL-STATE"],
+      "output_ids": ["OUT-SEARCH-SOURCE-ANCHOR", "OUT-PROVISIONAL-ANCHOR-PAYLOAD"],
+      "rule": "Для ожидаемой position_id атомарно получить provenance по record_id + captured state_generation, сверить locator/selector и root, затем создать anchor и READY provisional wrapper с точными response_assembly_id + position_id; последующий выбор не повторяет lookup",
+      "loss": "DECLARED",
+      "lost_data": ["absolute machine path", "normalized SourceSnapshot FileHash", "search projection keys", "model scores", "FastSearch storage row IDs"],
+      "loss_justification": "Эти поля не участвуют в независимом допуске и raw-byte разрешении источника; логический корень, точный локатор, record content hash, raw source hash и поколение сохраняются",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    },
+    {
+      "id": "TR-REJECT-SEARCH-SOURCE-ANCHOR",
+      "owner": "application::public_search",
+      "kind": "DERIVE",
+      "input_ids": ["IN-SEARCH-RECORD", "IN-SEARCH-GENERATION", "IN-WORKSPACE-PROFILE", "IN-SOURCE-ANCHOR-PROVENANCE", "IN-RANKED-CANONICAL-BUNDLE", "OUT-ANCHOR-ASSEMBLY-INITIAL-STATE"],
+      "output_ids": ["OUT-SOURCE-ANCHOR-ERROR", "OUT-PROVISIONAL-ANCHOR-PAYLOAD"],
+      "rule": "Для ожидаемой position_id отклонить отсутствие или расхождение typed root/locator/full-selector/raw hash, неизвестный selector/version или абсолютный путь; создать error и BLOCKED provisional wrapper с теми же response_assembly_id + position_id + record_id + generation",
+      "loss": "NONE"
+    },
+    {
+      "id": "TR-INIT-ANCHOR-ASSEMBLY",
+      "owner": "application::public_search outcome accumulator",
+      "kind": "DERIVE",
+      "input_ids": ["IN-RANKED-CANONICAL-BUNDLE", "IN-SEARCH-GENERATION"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-INITIAL-STATE", "OUT-ANCHOR-LIFECYCLE-ASSEMBLING"],
+      "rule": "Только если IN-SEARCH-GENERATION точно равен bundle captured generation, создать пустой initial state и lifecycle ASSEMBLING revision 1 с expected positions; для нулевой выдачи он допускает немедленное completion",
+      "loss": "NONE"
+    },
+    {
+      "id": "TR-REJECT-ANCHOR-ASSEMBLY-CORRELATION",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["IN-RANKED-CANONICAL-BUNDLE", "IN-SEARCH-GENERATION"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-FAILURE"],
+      "rule": "До INIT, provenance lookup и lease request отклонить несовпадение captured generation как один SEARCH_FAILED / ASSEMBLY_CORRELATION_FAILED без provisional state",
+      "loss": "DECLARED",
+      "lost_data": ["ranked display fields and ordered positions"],
+      "loss_justification": "Несогласованный внутренний bundle нельзя безопасно использовать; публичный partial result запрещён, exact mismatch сохраняется во внутренней диагностике",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    },
+    {
+      "id": "TR-ACCUMULATE-ANCHOR-ASSEMBLY",
+      "owner": "application::public_search outcome accumulator",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-INITIAL-STATE", "OUT-PROVISIONAL-ANCHOR-PAYLOAD"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-STATE"],
+      "rule": "Собрать ровно один provisional payload на каждую expected position по response_assembly_id + position_id + record_id + captured generation; для empty bundle собрать zero payloads; выпустить один complete state без path/rank correlation",
+      "loss": "NONE"
+    },
+    {
+      "id": "TR-REQUEST-GENERATION-PUBLICATION-LEASE",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-ASSEMBLING", "IN-OWNER-PROCESS-IDENTITY"],
+      "output_ids": ["OUT-GENERATION-PUBLICATION-LEASE-REQUEST", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING"],
+      "rule": "CAS ASSEMBLING -> LEASE_PENDING; скопировать response_assembly_id, captured generation и exact PID + process_start_time в один lease request без чтения current generation внутри public_search",
+      "loss": "NONE"
+    },
+    {
+      "id": "TR-FINALIZE-ANCHOR-ASSEMBLY",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-GENERATION-PUBLICATION-LEASE-OUTCOME"],
+      "output_ids": ["OUT-SOURCE-ANCHOR-OUTCOME", "OUT-ANCHOR-PUBLICATION-PERMIT", "OUT-FINALIZED-ANCHOR-ASSEMBLY"],
+      "rule": "Единым lifecycle CAS при ACTIVE_ACQUIRED и полном state перейти LEASE_PENDING -> FINALIZED, выпустить ordered mapping и стабильный opaque permit_id, однозначно производный от contract namespace + response_assembly_id + lease_id; exact active acquire replay даёт тот же permit; FinalizedAnchorAssembly несёт тот же permit/assembly/generation/lease; pending termination разрешается только TR-RESOLVE, empty state даёт empty mapping plus permit",
+      "loss": "DECLARED",
+      "lost_data": ["mutable accumulator representation and provisional completion flags"],
+      "loss_justification": "FinalizedAnchorAssembly сохраняет response assembly, ordered position identity, outcomes и active lease permit; теряется только более не нужное изменяемое состояние накопителя",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    },
+    {
+      "id": "TR-ABORT-ANCHOR-ASSEMBLY",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-GENERATION-PUBLICATION-LEASE-OUTCOME"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-ABORT"],
+      "rule": "Единым lifecycle CAS только из LEASE_PENDING без pending termination при CHANGED перейти в TERMINAL и выпустить один abort; прекратить сборку и удалить provisional payload; другие terminal outputs недостижимы",
+      "loss": "DECLARED",
+      "lost_data": ["all completed provisional SearchSourceAnchor and SearchSourceAnchorError payloads", "ordered expected position set"],
+      "loss_justification": "Атомарный внешний ответ не может содержать данные разных поколений; provisional payload не являются публичными и намеренно уничтожаются вместо частичной публикации",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    },
+    {
+      "id": "TR-FAIL-ANCHOR-ASSEMBLY",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-GENERATION-PUBLICATION-LEASE-OUTCOME"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-FAILURE"],
+      "rule": "Единым lifecycle CAS только из LEASE_PENDING без pending termination при coordinator FAILED перейти в TERMINAL, выпустить один SEARCH_FAILED, удалить provisional payload и не создавать permit/outcomes",
+      "loss": "DECLARED",
+      "lost_data": ["all completed provisional payloads", "ordered expected position set not needed for safe public error"],
+      "loss_justification": "Недостоверный coordinator outcome запрещает публикацию результата; наружу сохраняются assembly, captured generation и точная диагностическая причина, но не partial response",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    },
+    {
+      "id": "TR-REPLAY-ANCHOR-ASSEMBLY-TERMINAL",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-GENERATION-PUBLICATION-LEASE-OUTCOME"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-TERMINAL-REPLAY"],
+      "rule": "Единым CAS только для REPLAYED_TERMINAL завершить текущую duplicate assembly authoritative readback старым terminal identity и exact terminal_journal_ref + terminal_record_digest + released_revision; application::public_search не создаёт permit, FinalizedAnchorAssembly, envelope или новую release identity; thin_search после authoritative outbox readback может продолжить только исходный same-key release для durable closure",
+      "loss": "NONE"
+    },
+    {
+      "id": "TR-REJECT-DEAD-ANCHOR-ASSEMBLY",
+      "owner": "application::public_search response finalizer",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-GENERATION-PUBLICATION-LEASE-OUTCOME"],
+      "output_ids": ["OUT-ANCHOR-ASSEMBLY-OWNER-DIED"],
+      "rule": "Единым CAS только для REPLAYED_PROCESS_DIED завершить duplicate assembly recovery-only исходом без permit/envelope/release и потребовать новый search intent",
+      "loss": "NONE"
+    },
+    {
+      "id": "TR-TERMINATE-ANCHOR-ASSEMBLY-BEFORE-ACQUIRE",
+      "owner": "application::public_search response lifecycle",
+      "kind": "DERIVE",
+      "input_ids": ["IN-RANKED-CANONICAL-BUNDLE", "OUT-ANCHOR-LIFECYCLE-ASSEMBLING", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-ASSEMBLY-TERMINATION-REQUEST"],
+      "output_ids": ["OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION", "OUT-PRE-PERMIT-ASSEMBLY-TERMINATION"],
+      "rule": "CAS по exact response_assembly_id: ASSEMBLING -> TERMINAL выпускает no-lease termination; LEASE_PENDING -> LEASE_PENDING записывает pending termination без terminal output; FINALIZED не потреблять",
+      "loss": "DECLARED",
+      "lost_data": ["all provisional anchor payloads and ordered display fields for the terminated assembly"],
+      "loss_justification": "До внешнего terminal provisional state не является публичным; cancellation не создаёт envelope, timeout создаёт только безопасную public error без partial results",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    },
+    {
+      "id": "TR-OBSERVE-ANCHOR-LEASE-COMMIT-RECOVERY",
+      "owner": "application::public_search response lifecycle",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS"],
+      "output_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"],
+      "rule": "Только при отсутствии OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION для exact unmodified LEASE_PENDING применить ACQUIRE status: сохранить исходную operation/proposal identity; NOT_COMMITTED_RETRY либо COMMIT_READBACK_REQUIRED оставляет assembly в LEASE_PENDING без нового request identity; COMMIT_RECOVERY_BLOCKED переводит только assembly в RECOVERY_BLOCKED, не доказывает отсутствие lease и не создаёт domain outcome, permit, public terminal или release",
+      "loss": "DECLARED",
+      "lost_data": ["provisional payload only after terminal RECOVERY_BLOCKED"],
+      "loss_justification": "После исчерпания recovery assembly не может быть опубликована, но потенциально записанный lease запрещает выдавать безопасный no-lease terminal",
+      "loss_evidence_refs": [{"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}]
+    },
+    {
+      "id": "TR-OBSERVE-ANCHOR-LEASE-STATE-ACCESS-BLOCK",
+      "owner": "application::public_search response lifecycle",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-LEASE-PENDING", "IN-ACQUIRE-GENERATION-LEASE-STATE-ACCESS-BLOCKED"],
+      "output_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"],
+      "rule": "Только при отсутствии OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION для exact unmodified LEASE_PENDING применить ACQUIRE access block: сохранить operation, lookup evidence и optional retained proposal identity byte-for-byte; перевести только эту assembly в RECOVERY_BLOCKED, уничтожить provisional payload и не создавать domain outcome, permit, public terminal, release либо новый acquire identity",
+      "loss": "DECLARED",
+      "lost_data": ["provisional payload after terminal RECOVERY_BLOCKED"],
+      "loss_justification": "Недоступный authoritative ledger не позволяет публиковать assembly и не доказывает отсутствие потенциального lease",
+      "loss_evidence_refs": [{"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}]
+    },
+    {
+      "id": "TR-ADVANCE-PENDING-ANCHOR-LEASE-COMMIT-RECOVERY",
+      "owner": "application::public_search response lifecycle",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION", "IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS"],
+      "output_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"],
+      "rule": "Для exact pending CANCELLED|TIMEOUT и той же ACQUIRE operation/proposal identity: NOT_COMMITTED_RETRY|COMMIT_READBACK_REQUIRED наблюдает pending state без потребления, сохраняет тот же event в LEASE_PENDING и выпускает recovery state без нового acquire; COMMIT_RECOVERY_BLOCKED потребляет pending state, переводит assembly в RECOVERY_BLOCKED и не создаёт no-lease terminal, permit или release",
+      "loss": "DECLARED",
+      "lost_data": ["provisional payload and pending CANCELLED|TIMEOUT only after terminal COMMIT_RECOVERY_BLOCKED"],
+      "loss_justification": "При terminal commit ambiguity потенциально записанный lease запрещает выдавать pending event как доказанно no-lease terminal; для RETRY_REQUIRED|READBACK_REQUIRED данные сохраняются полностью",
+      "loss_evidence_refs": [{"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}]
+    },
+    {
+      "id": "TR-OBSERVE-PENDING-ANCHOR-LEASE-STATE-ACCESS-BLOCK",
+      "owner": "application::public_search response lifecycle",
+      "kind": "DERIVE",
+      "input_ids": ["OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION", "IN-ACQUIRE-GENERATION-LEASE-STATE-ACCESS-BLOCKED"],
+      "output_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"],
+      "rule": "Для exact pending CANCELLED|TIMEOUT и той же ACQUIRE access-block identity потребить pending state, сохранить workspace/operation/lookup/optional proposal evidence byte-for-byte и перевести assembly в RECOVERY_BLOCKED без no-lease terminal, permit, release либо нового acquire",
+      "loss": "DECLARED",
+      "lost_data": ["provisional payload and pending CANCELLED|TIMEOUT after terminal state-access block"],
+      "loss_justification": "Недоступный authoritative ledger не доказывает отсутствие потенциального lease, поэтому pending event не может стать безопасным public terminal",
+      "loss_evidence_refs": [{"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}]
+    },
+    {
+      "id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION",
+      "owner": "application::public_search response lifecycle",
+      "kind": "DERIVE",
+      "input_ids": ["IN-RANKED-CANONICAL-BUNDLE", "OUT-ANCHOR-ASSEMBLY-STATE", "OUT-ANCHOR-LIFECYCLE-PENDING-TERMINATION", "IN-GENERATION-PUBLICATION-LEASE-OUTCOME"],
+      "output_ids": ["OUT-PRE-PERMIT-ASSEMBLY-TERMINATION", "OUT-SOURCE-ANCHOR-OUTCOME", "OUT-ANCHOR-PUBLICATION-PERMIT", "OUT-FINALIZED-ANCHOR-ASSEMBLY", "OUT-POST-PERMIT-ASSEMBLY-TERMINATION", "OUT-ANCHOR-ASSEMBLY-TERMINAL-REPLAY", "OUT-ANCHOR-ASSEMBLY-OWNER-DIED"],
+      "rule": "Единым CAS из LEASE_PENDING с pending termination: CHANGED или FAILED -> один no-lease termination; ACTIVE_ACQUIRED -> FinalizedAnchorAssembly, стабильный permit_id и correlated post-permit event с exact permit_id + response_assembly_id + lease_id; REPLAYED_TERMINAL -> prior terminal readback; REPLAYED_PROCESS_DIED -> recovery-only outcome; ветви не создаются совместно",
+      "loss": "DECLARED",
+      "lost_data": ["all provisional anchor payloads and ordered display fields only when outcome is CHANGED or FAILED"],
+      "loss_justification": "Pending cancellation/timeout уже владеет assembly terminal; authoritative non-ACTIVE_ACQUIRED доказывает отсутствие lease и разрешает безопасно уничтожить provisional state",
+      "loss_evidence_refs": [
+        {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+      ]
+    }
+  ],
+  "handoffs": [
+    {
+      "id": "HO-GENERATION-PUBLICATION-LEASE-REQUEST",
+      "from": "application::public_search",
+      "to": "FastSearch source/state generation coordinator",
+      "through": [],
+      "surface": "GenerationPublicationLeaseRequest v1 + exactly one of GenerationPublicationLeaseOutcome v1 | GenerationLeaseCommitRecoveryStatus v1 | GenerationLeaseStateAccessBlocked v1",
+      "data_ids": ["OUT-GENERATION-PUBLICATION-LEASE-REQUEST"],
+      "preconditions": ["one ranked bundle and assembly state exist", "request copies assembly, captured generation and exact owner PID plus process start time"],
+      "consumer_obligations": ["apply BC-FS-GENERATION-PUBLICATION-LEASE acquire semantics", "return exactly one correlated domain outcome XOR GenerationLeaseCommitRecoveryStatus XOR GenerationLeaseStateAccessBlocked", "preserve workspace, operation, lookup and optional retained proposal evidence in access block", "never invent observed generation on FAILED", "route unresolved commit status through the runtime supervisor without changing operation identity", "route terminal access block to application::public_search, thin_search, request owner and diagnostics without a new acquire identity"],
+      "success": "Authoritative coordinator receives the exact correlation identity it attests",
+      "failures": ["REPLAYED_PROCESS_DIED", "CHANGED", "FAILED", "MISSING_PREVIOUS|CORRUPT|UNAVAILABLE -> GenerationLeaseStateAccessBlocked"],
+      "acceptance_refs": ["DT13-A generation lease coordinator three-way outcome oracle"],
+      "unblocks": ["linearizable v2 response publication"]
+    },
+    {
+      "id": "HO-ANCHOR-LEASE-COMMIT-RECOVERY-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "AnchorLeaseCommitRecoveryState v1",
+      "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"],
+      "preconditions": ["acquire domain outcome is absent and exact commit-recovery status or state-access block exists for the same coordinator decision"],
+      "consumer_obligations": ["wait without public envelope for RETRY_REQUIRED or READBACK_REQUIRED", "on RECOVERY_BLOCKED end the request as an operation-level block, not PublicSearchError v2 or PublicResponseAssemblyTerminal", "never infer lease absence"],
+      "success": "Resolved exact acquire later returns through the ordinary lease domain-outcome path",
+      "failures": ["RECOVERY_BLOCKED remains explicit and operator-owned"],
+      "acceptance_refs": ["DT13-A acquire NOT_COMMITTED, UNKNOWN-to-resolution, UNKNOWN-to-block, ledger-access-block and pending CANCELLED|TIMEOUT recovery fixtures"],
+      "unblocks": ["bounded acquire commit recovery"]
+    },
+    {
+      "id": "HO-ANCHOR-LEASE-COMMIT-RECOVERY-TO-SUPERVISOR",
+      "from": "application::public_search",
+      "to": "FastSearch runtime supervisor",
+      "through": [],
+      "surface": "AnchorLeaseCommitRecoveryState v1",
+      "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"],
+      "preconditions": ["same acquire operation identity is retained"],
+      "consumer_obligations": ["schedule only bounded same-operation lookup/readback for RETRY_REQUIRED or READBACK_REQUIRED", "for RECOVERY_BLOCKED preserve the terminal stop without a new retry identity", "never start a new acquire identity", "preserve terminal block evidence"],
+      "success": "Commit ambiguity resolves or reaches one explicit operation-level block",
+      "failures": ["no public terminal is fabricated"],
+      "acceptance_refs": ["DT13-A bounded acquire recovery fixture"],
+      "unblocks": ["acquire recovery observation"]
+    },
+    {
+      "id": "HO-ANCHOR-ASSEMBLY-PERMIT-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "FinalizedAnchorAssembly v1 + AnchorPublicationPermit v1",
+      "data_ids": ["OUT-FINALIZED-ANCHOR-ASSEMBLY", "OUT-ANCHOR-PUBLICATION-PERMIT"],
+      "preconditions": ["lease outcome is ACTIVE_ACQUIRED", "assembly state is complete, including empty bundle"],
+      "consumer_obligations": ["consume permit once into response, safe error or suppressed terminal", "send one logical idempotent release identity after terminal", "retry/read back until authoritative CLOSED", "never publish provisional wrapper fields"],
+      "success": "Sole outer producer receives complete outcomes and a live publication permit",
+      "failures": ["CANCELLED", "TIMEOUT", "RESPONSE_TOO_LARGE", "SEARCH_FAILED", "COMMIT_FAILED", "RELEASE_FAILED"],
+      "acceptance_refs": ["DT13-A zero-result, consume-once terminal, active A+B leases, lost ACK, retry/readback and process-crash fixtures"],
+      "unblocks": ["BC-FS-PUBLIC-SEARCH-V2 success assembly"]
+    },
+    {
+      "id": "HO-ANCHOR-ASSEMBLY-ABORT-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "AnchorAssemblyAbort v1",
+      "data_ids": ["OUT-ANCHOR-ASSEMBLY-ABORT"],
+      "preconditions": ["explicit-v2 assembly state is complete", "generation coordinator observed generation differs from captured, including a change before or after provisional completion"],
+      "consumer_obligations": ["suppress partial outcomes and PublicSearchResponse v2", "produce one outer PublicSearchError v2 with STALE_INDEX", "do not downgrade to per-result BLOCKED"],
+      "success": "Late generation change is machine-reachable to the sole producer of the external response",
+      "failures": ["STALE_INDEX"],
+      "acceptance_refs": ["DT13-A late G1 to G2 generation fixture"],
+      "unblocks": ["BC-FS-PUBLIC-SEARCH-V2 outer failure assembly"]
+    },
+    {
+      "id": "HO-ANCHOR-ASSEMBLY-FAILURE-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "AnchorAssemblyFailure v1",
+      "data_ids": ["OUT-ANCHOR-ASSEMBLY-FAILURE"],
+      "preconditions": ["bundle/search generation mismatch before lookup or coordinator returned correlated FAILED", "no lease or permit exists"],
+      "consumer_obligations": ["suppress partial outcomes and response", "produce one outer SEARCH_FAILED", "retain exact internal stage/cause for diagnostics"],
+      "success": "Correlation/coordinator failure reaches the sole outer producer as one terminal branch",
+      "failures": ["SEARCH_FAILED"],
+      "acceptance_refs": ["DT13-A generation mismatch and coordinator unavailable/corrupt fixtures"],
+      "unblocks": ["BC-FS-PUBLIC-SEARCH-V2 post-bundle terminal failure"]
+    },
+    {
+      "id": "HO-PRE-PERMIT-TERMINATION-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "PrePermitAssemblyTermination v1",
+      "data_ids": ["OUT-PRE-PERMIT-ASSEMBLY-TERMINATION"],
+      "preconditions": ["lifecycle CAS proved that no ACTIVE_ACQUIRED lease exists"],
+      "consumer_obligations": ["commit TIMEOUT as one public error", "commit CANCELLED as suppressed no-envelope terminal", "never create release request without lease_id"],
+      "success": "Early termination reaches the sole outer producer without provisional leak or orphan lease",
+      "failures": ["CANCELLED", "TIMEOUT"],
+      "acceptance_refs": ["DT13-A ASSEMBLING and LEASE_PENDING cancellation/timeout fixtures"],
+      "unblocks": ["BC-FS-PUBLIC-SEARCH-V2 pre-permit terminal branches"]
+    },
+    {
+      "id": "HO-TERMINAL-REPLAY-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "AnchorAssemblyTerminalReplay v1",
+      "data_ids": ["OUT-ANCHOR-ASSEMBLY-TERMINAL-REPLAY"],
+      "preconditions": ["coordinator returned REPLAYED_TERMINAL", "no active permit exists"],
+      "consumer_obligations": ["read back the immutable terminal by exact terminal_journal_ref", "verify terminal_record_digest and committed_terminal_identity before delivery", "preserve the original response or error bytes, including SUPPRESSED outcome", "surface typed lifecycle corruption instead of synthesizing a terminal when readback is absent or mismatched", "do not create a second envelope, FinalizedAnchorAssembly or new release identity", "if released_revision is authoritative while response outbox is still RELEASE_PENDING|RECOVERY_REQUIRED, create only a replay continuation of the original same-key release until exact ALREADY_RELEASED closes the outbox"],
+      "success": "Duplicate acquire after terminal release remains observationally idempotent",
+      "failures": ["missing prior terminal is a typed lifecycle corruption"],
+      "acceptance_refs": ["DT13-A duplicate acquire after release and after generation advance fixture"],
+      "unblocks": ["idempotent acquire completion"]
+    },
+    {
+      "id": "HO-OWNER-DIED-REPLAY-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "AnchorAssemblyOwnerDied v1",
+      "data_ids": ["OUT-ANCHOR-ASSEMBLY-OWNER-DIED"],
+      "preconditions": ["coordinator returned REPLAYED_PROCESS_DIED", "no active permit exists"],
+      "consumer_obligations": ["return recovery-only internal outcome", "start a new search for new user intent", "never synthesize public success"],
+      "success": "Dead-owner replay cannot resurrect a lease",
+      "failures": ["PROCESS_DIED"],
+      "acceptance_refs": ["DT13-A acquire replay after process cleanup fixture"],
+      "unblocks": ["safe retry decision"]
+    },
+    {
+      "id": "HO-POST-PERMIT-TERMINATION-TO-THIN-SEARCH",
+      "from": "application::public_search",
+      "to": "application::thin_search response assembler",
+      "through": [],
+      "surface": "ResponseAssemblyTermination v1",
+      "data_ids": ["OUT-POST-PERMIT-ASSEMBLY-TERMINATION"],
+      "preconditions": ["pending termination and ACTIVE_ACQUIRED outcome share exact response_assembly_id", "event and FinalizedAnchorAssembly contain the same permit_id, response_assembly_id and lease_id"],
+      "consumer_obligations": ["correlate all three identity fields before applying the post-permit terminal CAS", "release the exact lease after terminal", "never reinterpret it as no-lease termination"],
+      "success": "Pending termination reaches a machine-visible post-permit branch without orphaning the acquired lease",
+      "failures": ["correlation mismatch enters typed lifecycle recovery"],
+      "acceptance_refs": ["DT13-A pending plus ACTIVE_ACQUIRED transition fixture"],
+      "unblocks": ["BC-FS-PUBLIC-SEARCH-V2 post-permit terminal branches"]
+    }
+  ],
+  "flow_edges": [
+    {"from": "FastSearch canonical source pipeline", "to": "application::public_search", "data_ids": ["IN-SEARCH-RECORD"]},
+    {"from": "application::thin_search", "to": "application::public_search", "data_ids": ["IN-SEARCH-GENERATION"]},
+    {"from": "application::workspace", "to": "application::public_search", "data_ids": ["IN-WORKSPACE-PROFILE"]},
+    {"from": "FastSearch source/state provenance lookup", "to": "application::public_search", "data_ids": ["IN-SOURCE-ANCHOR-PROVENANCE"]},
+    {"from": "application::thin_search ranking pipeline", "to": "application::public_search", "data_ids": ["IN-RANKED-CANONICAL-BUNDLE"]},
+    {"from": "FastSearch Windows process identity provider", "to": "application::public_search", "data_ids": ["IN-OWNER-PROCESS-IDENTITY"]},
+    {"from": "application::thin_search response lifecycle", "to": "application::public_search", "data_ids": ["IN-ASSEMBLY-TERMINATION-REQUEST"]},
+    {"from": "application::public_search", "to": "FastSearch source/state generation coordinator", "data_ids": ["OUT-GENERATION-PUBLICATION-LEASE-REQUEST"], "transformation_id": "TR-REQUEST-GENERATION-PUBLICATION-LEASE"},
+    {"from": "FastSearch source/state generation coordinator", "to": "application::public_search", "data_ids": ["IN-GENERATION-PUBLICATION-LEASE-OUTCOME"]},
+    {"from": "FastSearch source/state generation coordinator", "to": "FastSearch runtime supervisor", "data_ids": ["IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS"]},
+    {"from": "FastSearch runtime supervisor", "to": "application::public_search", "data_ids": ["IN-ACQUIRE-GENERATION-LEASE-COMMIT-RECOVERY-STATUS"]},
+    {"from": "FastSearch source/state generation coordinator", "to": "application::public_search", "data_ids": ["IN-ACQUIRE-GENERATION-LEASE-STATE-ACCESS-BLOCKED"]},
+    {"from": "application::public_search", "to": "application::public_search outcome accumulator", "data_ids": ["OUT-PROVISIONAL-ANCHOR-PAYLOAD"], "transformation_id": "TR-BUILD-SEARCH-SOURCE-ANCHOR"},
+    {"from": "application::public_search", "to": "application::public_search outcome accumulator", "data_ids": ["OUT-PROVISIONAL-ANCHOR-PAYLOAD"], "transformation_id": "TR-REJECT-SEARCH-SOURCE-ANCHOR"},
+    {"from": "application::public_search", "to": "application::public_search outcome accumulator", "data_ids": ["OUT-ANCHOR-ASSEMBLY-INITIAL-STATE"], "transformation_id": "TR-INIT-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search outcome accumulator", "to": "application::public_search response finalizer", "data_ids": ["OUT-ANCHOR-ASSEMBLY-STATE"], "transformation_id": "TR-ACCUMULATE-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-FINALIZED-ANCHOR-ASSEMBLY"], "transformation_id": "TR-FINALIZE-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-FINALIZED-ANCHOR-ASSEMBLY"], "transformation_id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-PUBLICATION-PERMIT"], "transformation_id": "TR-FINALIZE-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-PUBLICATION-PERMIT"], "transformation_id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-ABORT"], "transformation_id": "TR-ABORT-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-FAILURE"], "transformation_id": "TR-FAIL-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-FAILURE"], "transformation_id": "TR-REJECT-ANCHOR-ASSEMBLY-CORRELATION"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-TERMINAL-REPLAY"], "transformation_id": "TR-REPLAY-ANCHOR-ASSEMBLY-TERMINAL"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-OWNER-DIED"], "transformation_id": "TR-REJECT-DEAD-ANCHOR-ASSEMBLY"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-TERMINAL-REPLAY"], "transformation_id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-ASSEMBLY-OWNER-DIED"], "transformation_id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-PRE-PERMIT-ASSEMBLY-TERMINATION"], "transformation_id": "TR-TERMINATE-ANCHOR-ASSEMBLY-BEFORE-ACQUIRE"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-PRE-PERMIT-ASSEMBLY-TERMINATION"], "transformation_id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"},
+    {"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-POST-PERMIT-ASSEMBLY-TERMINATION"], "transformation_id": "TR-RESOLVE-PENDING-ANCHOR-ASSEMBLY-TERMINATION"}
+    ,{"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-OBSERVE-ANCHOR-LEASE-COMMIT-RECOVERY"}
+    ,{"from": "application::public_search", "to": "FastSearch runtime supervisor", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-OBSERVE-ANCHOR-LEASE-COMMIT-RECOVERY"}
+    ,{"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-OBSERVE-ANCHOR-LEASE-STATE-ACCESS-BLOCK"}
+    ,{"from": "application::public_search", "to": "FastSearch runtime supervisor", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-OBSERVE-ANCHOR-LEASE-STATE-ACCESS-BLOCK"}
+    ,{"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-ADVANCE-PENDING-ANCHOR-LEASE-COMMIT-RECOVERY"}
+    ,{"from": "application::public_search", "to": "FastSearch runtime supervisor", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-ADVANCE-PENDING-ANCHOR-LEASE-COMMIT-RECOVERY"}
+    ,{"from": "application::public_search", "to": "application::thin_search response assembler", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-OBSERVE-PENDING-ANCHOR-LEASE-STATE-ACCESS-BLOCK"}
+    ,{"from": "application::public_search", "to": "FastSearch runtime supervisor", "data_ids": ["OUT-ANCHOR-LEASE-COMMIT-RECOVERY"], "transformation_id": "TR-OBSERVE-PENDING-ANCHOR-LEASE-STATE-ACCESS-BLOCK"}
+  ],
+  "evidence": {
+    "integration_decision": {
+      "status": "BLOCKED",
+      "reason": "Производящий формат можно согласовать сейчас, но реальная интеграция требует атомарного typed-root/locator/raw-hash lineage, публичной схемы, выпускаемого клиента и канонической потребляющей пары FastGraph",
+      "authority_ref": {"path": "BC-FS-SEARCH-SOURCE-ANCHOR.md", "sha256": "0d6acd2e4956ec96554604e1ec47c83869c8ba8098a6d2d5d2284bc24373bcb0"}
+    },
+    "contract_tests": [
+      {"path": "BLOCKED: DT13-A SearchSourceAnchor contract suite", "status": "BLOCKED"}
+    ],
+    "integration_tests": [
+      {"path": "DT13-B planned FastSearch -> client -> FastGraph acceptance", "status": "BLOCKED"}
+    ]
+  },
+  "blockers": [
+    {
+      "id": "BL-FS-PUBLIC-SOURCE-ANCHOR",
+      "unknown": "PublicSearchResult v1 не содержит SearchSourceAnchor; PublicSearchResult v2 с assembly correlation, generation publication lease, атомарно созданной привязкой и полным selector payload не реализован",
+      "owner": "FastSearch application::public_search",
+      "required_evidence": "Закрытые схемы SearchSourceAnchor v1, provisional wrapper, assembly state, lease request/outcome/permit/release и PublicSearchResult v2; отчёт линейризуемого формирования ответа",
+      "resolution_condition": "MCP и JSON передают одинаковый immutable envelope; lease удерживается до terminal commit и освобождается один раз; выбор не повторяет lookup",
+      "blocked_consumers": ["DT13-A independent reference consumer", "DT13-B"]
+    },
+    {
+      "id": "BL-FS-SOURCE-ANCHOR-PROVENANCE",
+      "unknown": "Не реализован атомарный lookup record_id + state_generation -> contour + root_id + locator + raw_source_sha256; CanonicalRecord не содержит типизированный root, а текущий SourceSnapshot file_hash вычисляется после нормализации",
+      "owner": "FastSearch source/state pipeline and application::public_search",
+      "required_evidence": "Обратная трассировка typed root/locator/full-selector/raw_source_sha256 от PublicSearchResult v2 до одного захваченного поколения; fixtures collision selector, одинакового path в двух roots, G1->G2 и BOM/LF/CRLF/CR",
+      "resolution_condition": "Каждый anchor атомарно содержит согласованный typed root/locator/full selector и raw SHA-256 исходных байтов того же поколения либо возвращает SOURCE_PROVENANCE_UNAVAILABLE/MISMATCH; изменение после ответа обнаруживает потребитель как STALE_SOURCE_ANCHOR",
+      "blocked_consumers": ["BC-FS-SEARCH-SOURCE-ANCHOR", "DT13-A", "DT13-B"]
+    },
+    {
+      "id": "BL-FS-SOURCE-ANCHOR-SCHEMA",
+      "unknown": "Сериализуемая JSON Schema SearchSourceAnchor v1 и штатный валидатор не реализованы",
+      "owner": "FastSearch application::public_search",
+      "required_evidence": "Закрытая версионированная схема с contract discriminator, закреплённый алгоритм record_content_hash, штатный валидатор, отрицательные selector fixtures и машинный отчёт",
+      "resolution_condition": "Независимый потребитель различает payload всех вариантов селектора и отклоняет неизвестные или лишние поля, версии, абсолютные пути и неверные хэши по принятой политике совместимости",
+      "blocked_consumers": ["DT13-A independent reference consumer", "FastGraph source-anchor resolver"]
+    },
+    {
+      "id": "BL-FS-SOURCE-ANCHOR-STATE-UPGRADE",
+      "unknown": "Disposable local state DT4 не содержит атомарный provenance-индекс DT13-A и не имеет новой schema version или отдельного source/provenance rebuild route",
+      "owner": "FastSearch source/state pipeline",
+      "required_evidence": "Schema bump; FS_SOURCE_PROVENANCE_REBUILD под writer lock атомарно публикует schema_marker + canonical generation + records + provenance index; затем проекции перестраиваются для того же поколения; crash fixtures не допускают частичный импорт или synthetic raw hash",
+      "resolution_condition": "До source/provenance commit действует старый bundle; после commit поиск остаётся NOT_READY до согласованных проекций; смешанное поколение не принимается",
+      "blocked_consumers": ["BC-FS-SEARCH-SOURCE-ANCHOR", "DT13-A"]
+    },
+    {
+      "id": "BL-FG-SOURCE-ANCHOR-CONSUMER",
+      "unknown": "FastGraph не опубликовал каноническую текстовую и машинную пару потребителя SearchSourceAnchor v1",
+      "owner": "FastGraph GraphProvider/source resolver",
+      "required_evidence": "Пара FastGraph с root mapping, проверкой raw_source_sha256, собственным выходом, отказами и интеграционным отчётом",
+      "resolution_condition": "FastSearch перепроверил совместимость точной версии, а независимый клиент отличает root/hash/version/node failures",
+      "blocked_consumers": ["DT13-B composition client", "USR-FS-05"]
+    },
+    {
+      "id": "BL-DT13-COMPOSITION-CLIENT",
+      "unknown": "Не выбран владелец и выпускаемая поверхность композиционного клиента DT13-B",
+      "owner": "Владелец пользовательской композиции dtree или отдельного клиента",
+      "required_evidence": "TDR клиентской последовательности, публичная точка входа и выпускной сквозной отчёт двух продуктов",
+      "resolution_condition": "Клиент передаёт anchor без изменения, называет владельца отказа и не читает физические хранилища",
+      "blocked_consumers": ["USR-FS-05", "DT13-B"]
+    },
+    {
+      "id": "BL-DTREE-GRAPH-OWNERSHIP-ALIGNMENT",
+      "unknown": "Активная парадигма dtree всё ещё назначает документальный и кодовый граф FastSearch вопреки принятому разделению RetrievalProvider/GraphProvider",
+      "owner": "dtree architecture documentation owner",
+      "required_evidence": "Принятая редакция active dtree authority: RetrievalProvider = FastSearch, GraphProvider = FastGraph, composition = dtree",
+      "resolution_condition": "Дальняя парадигма больше не создаёт вторую графовую ответственность FastSearch и может быть проверена как основание клиента",
+      "blocked_consumers": ["dtree as DT13-B composition client"]
+    }
+  ]
+}

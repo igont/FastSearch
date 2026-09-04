@@ -163,7 +163,7 @@
     "integration_decision": {
       "status": "REQUIRED",
       "reason": "Публичный DTO физически передаётся действующему MCP-адаптеру; CLI/JSON остаётся целевым потребителем DT4-D",
-      "authority_ref": {"path": "BC-FS-PUBLIC-SEARCH.md", "sha256": "9a60c0b2aa18875e4662d71339b6b9f9c9ca516793c92cf04e62add58327ba0a"}
+      "authority_ref": {"path": "BC-FS-PUBLIC-SEARCH.md", "sha256": "6975979180639f273d292f72a2b0c4e0358f75104d9cc1e29864d11f708593e9"}
     },
     "contract_tests": [
       {"path": "../../../tests/dt4_public_search_contract.rs", "status": "PLANNED"}

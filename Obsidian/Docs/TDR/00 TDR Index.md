@@ -21,7 +21,9 @@ updated: "2026-08-22"
 
 - [TDR-FS-1 - Graph knowledge plane](<TDR-FS-1 Graph knowledge plane.md>) передан [FastGraph](<../FastGraph.md>).
 
-## Механизмы
+### Исторические неавторитетные механизмы TDR-FS-1
+
+Следующие документы имеют состояние `заменено` и сохраняются только для происхождения решений. Они не являются действующим основанием, зависимостью, готовностью или контрактом FastSearch.
 
 1. [TDR-FS-1.1 - Документальный граф](<TDR-FS-1.1 Документальный граф.md>)
 2. [TDR-FS-1.2 - Иерархический граф кода и identity](<TDR-FS-1.2 Иерархический граф кода и identity.md>)
@@ -30,14 +32,18 @@ updated: "2026-08-22"
 5. [TDR-FS-1.5 - Межграфовые связи и impact](<TDR-FS-1.5 Межграфовые связи и impact.md>)
 6. [TDR-FS-1.6 - Graph query surface и dtree adapter](<TDR-FS-1.6 Graph query surface и dtree adapter.md>)
 7. [TDR-FS-1.7 - Quality qualification](<TDR-FS-1.7 Quality qualification.md>)
-8. [TDR-FS-2.1 - Каталог и admission рабочей области](<TDR-FS-2.1 Каталог и admission рабочей области.md>)
-9. [TDR-FS-2.2 - Namespace `.fastsearch` и migration](<TDR-FS-2.2 Namespace .fastsearch и migration.md>)
-10. [TDR-FS-2.3 - Terminal routing и `terminal-dialogue`](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>)
-11. [TDR-FS-2.4 - Автоматическая подготовка моделей](<TDR-FS-2.4 Automatic model provisioning.md>)
-12. [TDR-FS-2.5 - Режим сравнения embedding-моделей](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>)
-13. [TDR-FS-2.6 - Единый поиск и переранжирование](<TDR-FS-2.6 Единый поиск и переранжирование.md>)
-14. [TDR-FS-2.7 - MCP через stdio и владение средой исполнения](<TDR-FS-2.7 MCP stdio и runtime.md>)
-15. [TDR-FS-2.8 - Модульные границы и граничные контракты](<TDR-FS-2.8 Модульные границы и контракты.md>)
+
+## Действующие механизмы TDR-FS-2
+
+1. [TDR-FS-2.1 - Каталог и admission рабочей области](<TDR-FS-2.1 Каталог и admission рабочей области.md>)
+2. [TDR-FS-2.2 - Namespace `.fastsearch` и migration](<TDR-FS-2.2 Namespace .fastsearch и migration.md>)
+3. [TDR-FS-2.3 - Terminal routing и `terminal-dialogue`](<TDR-FS-2.3 Terminal routing и terminal-dialogue.md>)
+4. [TDR-FS-2.4 - Автоматическая подготовка моделей](<TDR-FS-2.4 Automatic model provisioning.md>)
+5. [TDR-FS-2.5 - Режим сравнения embedding-моделей](<TDR-FS-2.5 Режим сравнения embedding-моделей.md>)
+6. [TDR-FS-2.6 - Единый поиск и переранжирование](<TDR-FS-2.6 Единый поиск и переранжирование.md>)
+7. [TDR-FS-2.7 - MCP через stdio и владение средой исполнения](<TDR-FS-2.7 MCP stdio и runtime.md>)
+8. [TDR-FS-2.8 - Модульные границы и граничные контракты](<TDR-FS-2.8 Модульные границы и контракты.md>)
+9. [TDR-FS-2.9 - Поисковая привязка к FastGraph](<TDR-FS-2.9 Поисковая привязка к FastGraph.md>)
 
 ## Граничные контракты
 

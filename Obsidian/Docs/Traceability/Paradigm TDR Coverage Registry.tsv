@@ -11,4 +11,4 @@ PAR-FS-009	TDR-FS-2.2,TDR-FS-2.8	прямое	Paradigms/Архитектура/�
 PAR-FS-010	TDR-FS-2.4,TDR-FS-2.5,TDR-FS-2.6,TDR-FS-2.8	прямое	Paradigms/Архитектура/Сопровождение графа/05 Evidence-first выбор моделей.md
 PAR-FS-011	TDR-FS-2.1,TDR-FS-2.8	прямое	Paradigms/Архитектура/Рабочие области и интерфейс/01 Рабочая область и два контура источников.md
 PAR-FS-012	TDR-FS-2.3,TDR-FS-2.6,TDR-FS-2.7,TDR-FS-2.8	прямое	Paradigms/Архитектура/Рабочие области и интерфейс/02 Terminal-first интерфейс.md
-PAR-FS-013	TDR-FS-2.1,TDR-FS-2.6,TDR-FS-2.7,TDR-FS-2.8,TDR-FS-3	прямое	Paradigms/Архитектура/02 FastSearch как поисковый контур.md
+PAR-FS-013	TDR-FS-2.1,TDR-FS-2.6,TDR-FS-2.7,TDR-FS-2.8,TDR-FS-2.9,TDR-FS-3	прямое	Paradigms/Архитектура/02 FastSearch как поисковый контур.md
