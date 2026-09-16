@@ -1,6 +1,6 @@
 use super::{
-    contour_summary, device_assignment_cell, display_path, display_relative_path, full_trigger,
-    help_text, relative_match_percent, ui_guidance, workspace_catalog, workspace_help_catalog,
+    contour_summary, device_assignment_cell, display_path, display_relative_path, help_text,
+    ui_guidance, workspace_catalog, workspace_help_catalog,
 };
 use crate::domain::{DeviceCapabilityStatus, ExecutionDevice};
 use std::path::Path;
@@ -75,20 +75,6 @@ fn root_help_omits_navigation_and_model_device_uses_the_longest_command_match() 
         commands.iter().all(|command| !command.contains(" N")),
         "ambiguous numeric placeholder: {commands:?}"
     );
-}
-
-#[test]
-fn result_percent_is_relative_and_bounded() {
-    assert_eq!(relative_match_percent(0.0156, 0.0156), 100);
-    assert_eq!(relative_match_percent(0.0153, 0.0156), 98);
-    assert_eq!(relative_match_percent(-1.0, 0.0156), 0);
-    assert_eq!(relative_match_percent(f64::NAN, 0.0156), 0);
-}
-
-#[test]
-fn full_trigger_keeps_every_word_in_a_single_terminal_row() {
-    let trigger = full_trigger("Первый абзац.\n\nВторой абзац.");
-    assert_eq!(trigger, "Первый абзац. Второй абзац.");
 }
 
 #[test]

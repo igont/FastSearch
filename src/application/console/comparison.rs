@@ -411,7 +411,6 @@ fn show_comparison_run<R: BufRead>(
     run: &ComparisonRun,
 ) -> io::Result<ComparisonSearchSession> {
     let mut results = Vec::new();
-    let lexical_best_score = run.lexical_hits().first().map_or(0.0, SearchHit::score);
     let lexical = run.lexical_hits().iter().enumerate().fold(
         ResultDocument::new(
             "Лексическая база",
@@ -424,7 +423,7 @@ fn show_comparison_run<R: BufRead>(
                 source: "Лексическая база".to_owned(),
                 hit: hit.clone(),
             });
-            document.with_item(comparison_result_item(&code, hit, lexical_best_score))
+            document.with_item(comparison_result_item(&code, hit))
         },
     );
     chat.show_typed(&lexical)?;
@@ -441,7 +440,6 @@ fn show_comparison_run<R: BufRead>(
             )?;
             continue;
         }
-        let best_score = model.hits().first().map_or(0.0, SearchHit::score);
         let document = model.hits().iter().enumerate().fold(
             ResultDocument::new(
                 model.model().display_name(),
@@ -457,7 +455,7 @@ fn show_comparison_run<R: BufRead>(
                     source: model.model().display_name().to_owned(),
                     hit: hit.clone(),
                 });
-                document.with_item(comparison_result_item(&code, hit, best_score))
+                document.with_item(comparison_result_item(&code, hit))
             },
         );
         chat.show_typed(&document)?;
@@ -475,7 +473,7 @@ fn show_comparison_run<R: BufRead>(
     })
 }
 
-fn comparison_result_item(code: &str, hit: &SearchHit, best_score: f64) -> ResultItem {
+fn comparison_result_item(code: &str, hit: &SearchHit) -> ResultItem {
     ResultItem::new(
         format!(
             "[{code}] [{}] {}",
@@ -484,8 +482,9 @@ fn comparison_result_item(code: &str, hit: &SearchHit, best_score: f64) -> Resul
         ),
         hit.record().locator().path(),
     )
-    .with_excerpt(full_trigger(hit.record().searchable_content()))
-    .with_match_percent(relative_match_percent(hit.score(), best_score))
+    .with_excerpt(super::super::search_ui::preview(
+        hit.record().searchable_content(),
+    ))
     .with_result_code(code)
 }
 

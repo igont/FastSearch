@@ -14,10 +14,16 @@
       {"environment": "Windows GPU", "architecture_status": "EXTENSION_POINT_DEFINED", "implementation_status": "NOT_IMPLEMENTED"}
     ],
     "ports": [
-      {"id": "PORT-MODEL-ARTIFACT-STORE", "owner": "application::model_provisioning", "capabilities": ["получить закреплённые артефакты", "проверить SHA-256", "заблокировать публикацию", "атомарно записать JSON"], "required_now": true, "implementation_status": "IMPLEMENTED"}
+      {
+        "id": "PORT-MODEL-ARTIFACT-STORE",
+        "owner": "application::model_provisioning",
+        "capabilities": ["получить закреплённые артефакты", "проверить SHA-256", "заблокировать публикацию", "атомарно записать JSON"],
+        "required_now": true,
+        "implementation_status": "IMPLEMENTED"
+      }
     ]
   },
-  "consumers": ["application::model_provisioning::production_model_set_status", "application::thin_search (NOT_IMPLEMENTED; DT4-C)"],
+  "consumers": ["application::model_provisioning::production_model_set_status", "application::thin_search"],
   "machine_contracts": [
     {"kind": "source-interface", "path": "../../../src/application/model_readiness.rs", "symbol": "PRODUCTION_MODEL_CATALOG, ModelSetReadySnapshot"},
     {"kind": "source-interface", "path": "../../../src/application/model_provisioning.rs", "symbol": "prepare_production_model_set, production_model_set_status"}
@@ -28,7 +34,7 @@
       "meaning": "Закрытый набор четырёх ролей, редакций, файлов и вычислительных договоров",
       "required": true,
       "producer": "application::model_readiness",
-      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "../../../src/application/model_readiness.rs#PRODUCTION_MODEL_CATALOG", "sha256": "6bc13a45a5cdb6b71e7a57e30d1ff4a4fc3fe776d58c399ee68baf64467b0fcd"},
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "../../../src/application/model_readiness.rs#PRODUCTION_MODEL_CATALOG", "sha256": "bc0917c91d7b508b6abdac5994011959554772de041d2261a8ab3971d1ecc1f8"},
       "format": "ProductionModelDescriptor[4]",
       "schema_ref": "../../../src/application/model_readiness.rs#ProductionModelDescriptor",
       "version": "1",
@@ -43,7 +49,7 @@
       "meaning": "Четыре проверенных маркера артефактов и среды выполнения",
       "required": true,
       "producer": "model role qualification",
-      "authority": {"kind": "DERIVED", "source_ref": "../../../src/application/model_provisioning.rs#prepare_production_model_set", "sha256": "1dd766eccdc8ea66c831b8ef46bffb5067b61a833007e56eccf6c817b4a6cfbb"},
+      "authority": {"kind": "DERIVED", "source_ref": "../../../src/application/model_provisioning.rs#prepare_production_model_set", "sha256": "18a759319b2b9b9e66bfb02f77a51abbc3f7f70a7c294c7c050ff65b4e8764c5"},
       "format": "RoleReadinessMarker[4]",
       "schema_ref": "../../../src/application/model_readiness.rs#RoleReadinessMarker",
       "version": "1",
@@ -83,7 +89,7 @@
       "lost_data": ["перечень и размер каждого файла модели"],
       "loss_justification": "Потребитель проверяет снимок вместе с тем же закреплённым каталогом; выход сохраняет хэши вычислительного договора и маркера роли, а файловая детализация не дублируется",
       "loss_evidence_refs": [
-        {"path": "../../../src/application/model_readiness.rs", "sha256": "6bc13a45a5cdb6b71e7a57e30d1ff4a4fc3fe776d58c399ee68baf64467b0fcd"}
+        {"path": "../../../src/application/model_readiness.rs", "sha256": "bc0917c91d7b508b6abdac5994011959554772de041d2261a8ab3971d1ecc1f8"}
       ]
     }
   ],
@@ -105,11 +111,11 @@
     {
       "id": "HO-MODEL-SET-TO-SEARCH-DT4C",
       "from": "application::model_provisioning",
-      "to": "application::thin_search (NOT_IMPLEMENTED; DT4-C)",
-      "through": ["model-set.ready.json", "ModelSetReadySnapshot verification"],
+      "to": "application::thin_search",
+      "through": ["model-set.ready.json", "read_model_set_snapshot_with_artifacts", "application::model_provisioning::production_model_set_status"],
       "surface": "src/application/model_readiness.rs#ModelSetReadySnapshot",
       "data_ids": ["OUT-MODEL-SET-READY"],
-      "preconditions": ["DT4-C реализовал чтение снимка координатором"],
+      "preconditions": ["Снимок опубликован атомарно", "Все артефакты доступны в штатном корне моделей"],
       "consumer_obligations": ["Проверять снимок и артефакты перед каждым принятым запросом", "Повторять проверку после восстановления"],
       "success": "Координатор допускает поиск только по единому готовому поколению",
       "failures": ["NOT_READY при отсутствующем, повреждённом или смешанном снимке"],
@@ -118,23 +124,55 @@
     }
   ],
   "flow_edges": [
-    {"from": "application::model_readiness", "to": "application::model_provisioning", "data_ids": ["IN-PRODUCTION-MODEL-CATALOG"]},
-    {"from": "model role qualification", "to": "application::model_provisioning", "data_ids": ["IN-QUALIFIED-ROLE-MARKERS"]},
-    {"from": "application::model_provisioning", "to": "model-set.ready.json", "data_ids": ["OUT-MODEL-SET-READY"], "transformation_id": "TR-PUBLISH-MODEL-SET"},
-    {"from": "model-set.ready.json", "to": "read_model_set_snapshot_with_artifacts", "data_ids": ["OUT-MODEL-SET-READY"]},
-    {"from": "read_model_set_snapshot_with_artifacts", "to": "application::model_provisioning::production_model_set_status", "data_ids": ["OUT-MODEL-SET-READY"]},
-    {"from": "model-set.ready.json", "to": "ModelSetReadySnapshot verification", "data_ids": ["OUT-MODEL-SET-READY"]},
-    {"from": "ModelSetReadySnapshot verification", "to": "application::thin_search (NOT_IMPLEMENTED; DT4-C)", "data_ids": ["OUT-MODEL-SET-READY"]}
+    {
+      "from": "application::model_readiness",
+      "to": "application::model_provisioning",
+      "data_ids": ["IN-PRODUCTION-MODEL-CATALOG"]
+    },
+    {
+      "from": "model role qualification",
+      "to": "application::model_provisioning",
+      "data_ids": ["IN-QUALIFIED-ROLE-MARKERS"]
+    },
+    {
+      "from": "application::model_provisioning",
+      "to": "model-set.ready.json",
+      "data_ids": ["OUT-MODEL-SET-READY"],
+      "transformation_id": "TR-PUBLISH-MODEL-SET"
+    },
+    {
+      "from": "model-set.ready.json",
+      "to": "read_model_set_snapshot_with_artifacts",
+      "data_ids": ["OUT-MODEL-SET-READY"]
+    },
+    {
+      "from": "read_model_set_snapshot_with_artifacts",
+      "to": "application::model_provisioning::production_model_set_status",
+      "data_ids": ["OUT-MODEL-SET-READY"]
+    },
+    {
+      "from": "application::model_provisioning::production_model_set_status",
+      "to": "application::thin_search",
+      "data_ids": ["OUT-MODEL-SET-READY"]
+    }
   ],
   "evidence": {
-    "integration_decision": {"status": "BLOCKED", "reason": "Публикация и команда состояния реализованы, но обязательное чтение снимка поисковым координатором отсутствует до DT4-C", "authority_ref": {"path": "BC-FS-MODEL-READINESS.md", "sha256": "a584ca4c5718cafd525366217404fdd49320a41d81e40306996f6179df0ecc13"}},
-    "contract_tests": [{"path": "../../../src/application/model_readiness.rs", "status": "PLANNED"}],
-    "integration_tests": [{"path": "../../../evidence/dt4/release-receipt.json", "status": "PLANNED"}]
+    "integration_decision": {
+      "status": "BLOCKED",
+      "reason": "Публикация и чтение снимка координатором реализованы; полная матрица отказов и восстановления ещё требует отчёта одной точной редакции для DT4-C",
+      "authority_ref": {"path": "BC-FS-MODEL-READINESS.md", "sha256": "862ff1dd9836970baa56e1cc13855ccbca95a9f9ec1a69e45783237e36417f54"}
+    },
+    "contract_tests": [
+      {"path": "../../../src/application/model_readiness.rs", "status": "PLANNED"}
+    ],
+    "integration_tests": [
+      {"path": "../../../evidence/dt4/release-receipt.json", "status": "PLANNED"}
+    ]
   },
   "blockers": [
     {
       "id": "BL-DT4C-MODEL-ADMISSION",
-      "unknown": "ThinSearchCoordinator не читает и не проверяет ModelSetReadySnapshot перед поиском",
+      "unknown": "Не завершена проверка полной матрицы отказов и восстановления модельного набора через ThinSearchCoordinator",
       "owner": "DT4-C",
       "required_evidence": "Контрактный тест координатора для готового, отсутствующего, повреждённого и восстановленного снимка",
       "resolution_condition": "ThinSearchCoordinator проверяет снимок и его артефакты перед каждым принятым запросом и видит восстановление на следующем вызове",

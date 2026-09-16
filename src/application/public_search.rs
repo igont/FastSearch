@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::domain::{CanonicalRecord, SearchMode, SearchQuery, SearchResponse};
 
 pub const MAX_PUBLIC_QUERY_CHARS: usize = 1024;
-pub const MAX_PUBLIC_RESULTS: usize = 6;
+pub const MAX_PUBLIC_RESULTS: usize = 5;
 pub const MAX_SERIALIZED_RESPONSE_BYTES: usize = 131_072;
 
 /// Public project-state filter. These are the only values accepted at the boundary.
@@ -260,7 +260,7 @@ impl PublicSearchResult {
     }
 }
 
-/// Public response with the canonical six-result and byte-size limits applied atomically.
+/// Public response with the canonical five-result and byte-size limits applied atomically.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PublicSearchResponse {
     query: String,

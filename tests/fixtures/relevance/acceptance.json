@@ -1,0 +1,44 @@
+{
+  "date": "2026-09-16",
+  "binary_sha256": "b980bb898229b4df6a9c122ee6558eab324faa75f5c16c4542399754f691df59",
+  "automated_checks": {
+    "all_targets": {
+      "passed": 246,
+      "failed": 0,
+      "ignored": 18
+    },
+    "calibration_script_tests": 3,
+    "real_model_console_json_mcp": "PASS",
+    "mcp_projection_recovery_same_process": "PASS",
+    "clippy_warnings_denied": "PASS",
+    "format": "PASS",
+    "boundary_descriptors": "VALID"
+  },
+  "main_workspace": {
+    "fragments": 5403,
+    "queries": [
+      {
+        "query": "Что происходит с ручным решением, если его цель удалена?",
+        "seconds": 22.99,
+        "count": 4,
+        "titles": [
+          "Инварианты",
+          "Целевой продуктовый смысл",
+          "Проверка соблюдения",
+          "Инварианты"
+        ]
+      },
+      {
+        "query": "Какая стоимость лицензии ЛИРА для ста рабочих мест?",
+        "seconds": 24.18,
+        "count": 0,
+        "titles": []
+      }
+    ]
+  },
+  "manual_review": {
+    "positive_query": "The relevant document is ranked first. The full direct answer is in result 2; result 1 is partial, result 3 gives related checks, and result 4 is contextual rather than a direct answer.",
+    "limitation": "The cutoff still admits related but incomplete passages on the full corpus. It does not establish answer accuracy or guarantee that the most complete answer ranks first. The full-corpus observations were not used to tune the frozen training cutoff."
+  },
+  "scope": "Local implementation check, not formal acceptance of all DT4 gates. The exact final binary was used for the main-workspace queries; focused tests and Clippy followed the final code cleanup."
+}

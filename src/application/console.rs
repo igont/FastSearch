@@ -20,8 +20,8 @@ use terminal_dialogue::{
     ActionItem, ChatSession, ColorPolicy, CommandResolution, NavigationAction, NextStep,
     NoticeDocument, ProgressDashboard, ProgressDocument, ProgressPhase, ProgressPort,
     ProgressState, ProgressTaskSpec, ProgressUnit, PromptFeedback, PromptOutcome, ReportDocument,
-    ReportSection, ResultDocument, ResultItem, ResultPager, SectionDocument, SessionConfig,
-    TableColumn, TableDocument, TableRow, TerminalDocument, TextStyle, UserErrorDocument,
+    ReportSection, ResultDocument, ResultItem, SectionDocument, SessionConfig, TableColumn,
+    TableDocument, TableRow, TerminalDocument, TextStyle, UserErrorDocument,
     run_progress_dashboard,
 };
 
@@ -47,9 +47,9 @@ use super::{
 
 #[derive(Debug)]
 struct SearchSession {
-    pager: ResultPager<SearchHit>,
+    response: super::PublicSearchResponse,
+    result_ids: Vec<String>,
     query: String,
-    model: String,
     latency_ms: u128,
 }
 
@@ -702,13 +702,7 @@ fn run_workspace<R: BufRead>(
         };
 
         if matches!(name.as_str(), "open" | "next" | "prev" | "page" | "repeat") {
-            handle_navigation(
-                chat,
-                runtime.as_ref(),
-                last_search.as_mut(),
-                &name,
-                &arguments,
-            )?;
+            handle_navigation(chat, last_search.as_ref(), &name, &arguments)?;
             continue;
         }
 
@@ -800,7 +794,7 @@ fn run_workspace<R: BufRead>(
                 }
                 match store.record_embedding_experiment(
                     &search.query,
-                    search.pager.total_items(),
+                    search.response.count(),
                     search.latency_ms,
                     &arguments,
                 ) {
@@ -817,11 +811,13 @@ fn run_workspace<R: BufRead>(
                 }
             }
             "index update" => {
+                runtime = open_workspace_runtime(chat, &store)?;
                 run_index(chat, runtime.as_mut(), false)?;
                 last_search = None;
             }
             "index inspect" => run_index_inspect(chat, runtime.as_ref(), &arguments)?,
             "index rebuild" => {
+                runtime = open_workspace_runtime(chat, &store)?;
                 if let Some(runtime) = runtime.as_mut() {
                     run_index(chat, Some(runtime), true)?;
                     last_search = None;
@@ -871,15 +867,6 @@ fn run_workspace<R: BufRead>(
                 runtime = open_workspace_runtime(chat, &store)?;
             }
             "search" => {
-                let Some(runtime) = runtime.as_ref() else {
-                    show_no_sources(chat)?;
-                    continue;
-                };
-                let freshness = runtime.index_status().freshness();
-                if freshness != IndexFreshness::Current {
-                    show_search_unavailable(chat, freshness)?;
-                    continue;
-                }
                 let query = arguments.trim().to_owned();
                 if query.is_empty() {
                     show_error(
@@ -893,32 +880,35 @@ fn run_workspace<R: BufRead>(
                 chat.show_typed(&ProgressDocument::new(
                     "Поиск",
                     ProgressState::Running,
-                    "FastSearch выполняет запрос…",
+                    format!("Запрос: «{query}». FastSearch выполняет поиск…"),
                 ))?;
                 let query_text = query.clone();
                 let started = Instant::now();
-                match SearchQuery::new(query, SearchMode::Balanced)
-                    .and_then(|query| runtime.search(&query))
-                {
-                    Ok(response) => {
+                let result =
+                    super::PublicSearchRequest::new(query, None, None).and_then(|request| {
+                        super::ThinSearchCoordinator::open(store.root())?.search(
+                            &request,
+                            &std::sync::atomic::AtomicBool::new(false),
+                            started,
+                        )
+                    });
+                match result {
+                    Ok((response, audit)) => {
                         last_search = Some(SearchSession {
-                            pager: ResultPager::new(response.hits().to_vec(), 5)
-                                .expect("FastSearch page size is non-zero"),
+                            response,
+                            result_ids: audit.result_ids,
                             query: query_text,
-                            model: store.profile().embedding_model().display_name().to_owned(),
                             latency_ms: started.elapsed().as_millis(),
                         });
-                        show_search_page(
-                            chat,
-                            last_search.as_ref().expect("search session stored"),
-                        )?;
+                        if let Some(search) = last_search.as_ref() {
+                            show_search_page(chat, search)?;
+                        }
                     }
-                    Err(error) => show_error(
-                        chat,
-                        "SEARCH_FAILED",
-                        error.message(),
-                        "Проверьте /status или обновите индекс командой /index update.",
-                    )?,
+                    Err(error) => {
+                        last_search = None;
+                        let (message, hint) = super::describe_search_error(&error);
+                        show_error(chat, "SEARCH_UNAVAILABLE", message, hint)?;
+                    }
                 }
             }
             "related" => {
@@ -929,8 +919,8 @@ fn run_workspace<R: BufRead>(
                 let selected_result_id = arguments
                     .parse::<usize>()
                     .ok()
-                    .and_then(|number| last_search.as_ref()?.pager.select(number))
-                    .map(|hit| hit.record().id().clone());
+                    .and_then(|number| last_search.as_ref()?.result_ids.get(number.checked_sub(1)?))
+                    .and_then(|id| StableId::parse(id).ok());
                 let id = match selected_result_id
                     .map(Ok)
                     .unwrap_or_else(|| StableId::parse(arguments.clone()))
@@ -1214,17 +1204,7 @@ fn open_workspace_runtime<R: BufRead>(
     if store.profile().contour_count() == 0 {
         return Ok(None);
     }
-    let selected = store.profile().embedding_model();
-    let model = if cfg!(debug_assertions)
-        && std::env::var_os("FASTSEARCH_TEST_DISABLE_MODEL_AUTO_DOWNLOAD").is_some()
-    {
-        None
-    } else {
-        provision_model_with_ui(chat, selected)?
-    };
-    let runtime = compose_workspace_runtime(chat, store, model.as_ref())?;
-    show_embedding_models(chat, selected, runtime.as_ref())?;
-    Ok(runtime)
+    compose_workspace_runtime(chat, store, None)
 }
 
 fn compose_workspace_runtime<R: BufRead>(
@@ -1274,8 +1254,7 @@ fn compose_workspace_runtime<R: BufRead>(
 
 fn handle_navigation<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
-    runtime: Option<&ProductionRuntime>,
-    search: Option<&mut SearchSession>,
+    search: Option<&SearchSession>,
     name: &str,
     arguments: &str,
 ) -> io::Result<()> {
@@ -1301,7 +1280,10 @@ fn handle_navigation<R: BufRead>(
         );
     };
     if let NavigationAction::Open(number) = action {
-        let Some(hit) = search.pager.select(number) else {
+        let Some(result) = number
+            .checked_sub(1)
+            .and_then(|index| search.response.results().get(index))
+        else {
             return show_error(
                 chat,
                 "RESULT_NUMBER",
@@ -1309,50 +1291,19 @@ fn handle_navigation<R: BufRead>(
                 "Выберите номер из текущей выдачи.",
             );
         };
-        let Some(runtime) = runtime else {
-            return show_no_sources(chat);
-        };
-        match runtime.get(hit.record().id()) {
-            Ok(Some(record)) => {
-                let summary = ReportSection::new("Запись")
-                    .with_line(format!("Заголовок: {}", record.title()))
-                    .with_line(format!("Тип: {}", record_label(record.kind())))
-                    .with_line(format!("Файл: {}", record.locator().path()));
-                chat.show_typed(
-                    &ReportDocument::new()
-                        .with_section(summary)
-                        .with_section(
-                            ReportSection::new("Контекст поиска")
-                                .with_line(format!("Запрос: {}", search.query))
-                                .with_line(format!("Канал: {:?}", hit.channel()))
-                                .with_line(format!("Оценка: {:.4}", hit.score())),
-                        )
-                        .with_section(
-                            ReportSection::new("Содержимое").with_line(record.searchable_content()),
-                        )
-                        .with_next_step(ui_guidance::result_detail()),
-                )
-            }
-            Ok(None) => show_error(
-                chat,
-                "RESULT_MISSING",
-                "Запись больше не находится в текущем индексе.",
-                "Обновите индекс и повторите поиск.",
-            ),
-            Err(error) => show_error(
-                chat,
-                "RESULT_OPEN",
-                error.message(),
-                "Обновите индекс и повторите поиск.",
-            ),
-        }
+        chat.show_typed(
+            &ReportDocument::new()
+                .with_section(ReportSection::new(result.title()).with_line(result.path()))
+                .with_section(ReportSection::new("Содержимое").with_line(result.content()))
+                .with_next_step(ui_guidance::result_detail()),
+        )
     } else {
-        if let Err(error) = search.pager.navigate(action) {
+        if !matches!(action, NavigationAction::Repeat | NavigationAction::Page(1)) {
             return show_error(
                 chat,
                 "RESULT_NAVIGATION",
-                &error.to_string(),
-                "Проверьте номер страницы.",
+                "Выдача содержит одну страницу — до пяти фрагментов.",
+                "Используйте /open <номер> или введите новый запрос.",
             );
         }
         show_search_page(chat, search)
@@ -1365,7 +1316,7 @@ fn show_workspace<R: BufRead>(
     runtime: Option<&ProductionRuntime>,
 ) -> io::Result<()> {
     let profile = store.profile();
-    let freshness = runtime.map(|runtime| runtime.index_status().freshness());
+    let freshness = runtime.map(super::search_ui::search_index_freshness);
     let status = freshness.map_or("не настроен", human_freshness);
     let next_step = ui_guidance::workspace(freshness);
     chat.show_typed(
@@ -1382,23 +1333,14 @@ fn show_workspace<R: BufRead>(
                         )
                     ))
                     .with_line(format!(
-                        "Модель: {}",
+                        "Модель для экспериментов: {}",
                         profile.embedding_model().display_name()
                     ))
+                    .with_line("Поиск: Arctic + E5 Large + Nomic → Qwen")
                     .with_line(format!("Индекс: {status}")),
             )
             .with_next_step(next_step),
     )
-}
-
-fn show_search_unavailable<R: BufRead>(
-    chat: &mut ChatSession<'_, R>,
-    freshness: IndexFreshness,
-) -> io::Result<()> {
-    let Some(error) = ui_guidance::search_unavailable(freshness) else {
-        return Ok(());
-    };
-    chat.show_typed(&error)
 }
 
 fn show_sources<R: BufRead>(
@@ -1487,14 +1429,27 @@ fn show_index_status<R: BufRead>(
     let Some(runtime) = runtime else {
         return show_no_sources(chat);
     };
-    let status = runtime.index_status();
-    let freshness = status.freshness();
+    let freshness = super::search_ui::search_index_freshness(runtime);
+    let mut section = ReportSection::new("Состояние индекса")
+        .with_line(format!(
+            "Индекс общего поиска: {}",
+            human_freshness(freshness)
+        ))
+        .with_line(format!(
+            "Корпус и полнотекстовый индекс: {}",
+            human_freshness(runtime.index_status().freshness())
+        ));
+    for model in super::thin_search::MODELS {
+        section = section.with_line(format!(
+            "{}: {}",
+            model.display_name(),
+            human_freshness(runtime.model_partition_status(model).freshness())
+        ));
+    }
     chat.show_typed(
-        &human_outcome_document(&CommandOutcome::Status {
-            status,
-            capabilities: runtime.status(),
-        })
-        .with_next_step(ui_guidance::index_status(freshness)),
+        &ReportDocument::new()
+            .with_section(section)
+            .with_next_step(ui_guidance::index_status(freshness)),
     )
 }
 
@@ -1512,56 +1467,10 @@ fn show_search_page<R: BufRead>(
     chat: &mut ChatSession<'_, R>,
     search: &SearchSession,
 ) -> io::Result<()> {
-    if search.pager.is_empty() {
-        return chat.show_typed(&terminal_dialogue::EmptyStateDocument {
-            heading: "Ничего не найдено".to_owned(),
-            explanation: "Совпадений в доступных источниках нет.".to_owned(),
-            next_step: NextStep::instruction("Сократите запрос или проверьте /status."),
-        });
-    }
-    let start_index = search.pager.absolute_number(1).unwrap_or(1);
-    let best_score = search.pager.select(1).map_or(0.0, SearchHit::score);
-    let document = search.pager.visible().iter().fold(
-        ResultDocument::new(
-            "Результаты",
-            format!(
-                "Модель: {}\nЗапрос: «{}»\nНайдено: {} · Страница {} из {}",
-                search.model,
-                search.query,
-                search.pager.total_items(),
-                search.pager.page_number(),
-                search.pager.total_pages(),
-            ),
-        )
-        .with_start_index(start_index),
-        |document, hit| {
-            document.with_item(
-                ResultItem::new(hit.record().title(), hit.record().locator().path())
-                    .with_excerpt(full_trigger(hit.record().searchable_content()))
-                    .with_match_percent(relative_match_percent(hit.score(), best_score)),
-            )
-        },
-    );
-    chat.show_typed(&document.with_next_step(ui_guidance::search_results()))
-}
-
-fn relative_match_percent(score: f64, best_score: f64) -> u8 {
-    if !score.is_finite() || !best_score.is_finite() || best_score <= 0.0 {
-        return 0;
-    }
-    ((score.max(0.0) / best_score * 100.0)
-        .round()
-        .clamp(0.0, 100.0)) as u8
-}
-
-/// Keeps every searchable character while making the trigger one terminal row.
-fn full_trigger(content: &str) -> String {
-    let trigger = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if trigger.is_empty() {
-        "нет текстового фрагмента".to_owned()
-    } else {
-        trigger
-    }
+    chat.show_typed(
+        &super::search_ui::search_document(&search.response, false)
+            .with_next_step(ui_guidance::search_results()),
+    )
 }
 
 fn display_path(path: &Path) -> String {

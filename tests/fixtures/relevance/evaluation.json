@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "accepted": true,
+  "threshold": 0.8879920840263367,
+  "selection": "midpoint between highest negative and lowest positive training score",
+  "model_revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+  "instruction": "Given a web search query, retrieve relevant passages that answer the query",
+  "max_tokens": 8192,
+  "cases_sha256": "bcbc774327638027ba38b33f47f094bac2c38fb3650add04fb3ecdba8651732a",
+  "training": {
+    "true_positive": 6,
+    "false_positive": 0,
+    "true_negative": 18,
+    "false_negative": 0,
+    "pairs": 24,
+    "queries": 8,
+    "no_answer_queries": 2,
+    "correct_abstentions": 2
+  },
+  "validation": {
+    "true_positive": 6,
+    "false_positive": 0,
+    "true_negative": 18,
+    "false_negative": 0,
+    "pairs": 24,
+    "queries": 8,
+    "no_answer_queries": 2,
+    "correct_abstentions": 2
+  },
+  "limitation": "Small author-labelled passage benchmark. Not a probability calibration or a guarantee for arbitrary queries; retrieval recall is tested separately."
+}

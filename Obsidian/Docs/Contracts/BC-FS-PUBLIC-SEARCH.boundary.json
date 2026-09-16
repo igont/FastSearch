@@ -5,28 +5,17 @@
   "contract_version": "1",
   "status": "DRAFT",
   "human_contract": "BC-FS-PUBLIC-SEARCH.md",
-  "producer": {
-    "module": "application::thin_search",
-    "responsibility": "Проверить публичный запрос, выполнить поиск и через схему application::public_search создать ограниченный безопасный результат или типизированную ошибку"
-  },
+  "producer": {"module": "application::thin_search", "responsibility": "Проверить публичный запрос, выполнить поиск и через схему application::public_search создать ограниченный безопасный результат или типизированную ошибку"},
   "execution_scope": {
     "platform_strategy": "NOT_APPLICABLE",
     "current_environments": ["FastSearch process"],
     "deferred_environments": [],
     "ports": []
   },
-  "consumers": ["adapters::mcp"],
+  "consumers": ["adapters::mcp", "application::search_ui", "application::console"],
   "machine_contracts": [
-    {
-      "kind": "source-interface",
-      "path": "../../../src/application/public_search.rs",
-      "symbol": "PublicSearchRequest, PublicSearchResponse, PublicSearchError"
-    },
-    {
-      "kind": "source-interface",
-      "path": "../../../src/application/thin_search.rs",
-      "symbol": "ThinSearchCoordinator::search"
-    }
+    {"kind": "source-interface", "path": "../../../src/application/public_search.rs", "symbol": "PublicSearchRequest, PublicSearchResponse, PublicSearchError"},
+    {"kind": "source-interface", "path": "../../../src/application/thin_search.rs", "symbol": "ThinSearchCoordinator::search"}
   ],
   "inputs": [
     {
@@ -34,11 +23,7 @@
       "meaning": "Публичный текст запроса и необязательные фильтры",
       "required": true,
       "producer": "machine-facing caller",
-      "authority": {
-        "kind": "SOURCE_OF_TRUTH",
-        "source_ref": "../../../src/application/public_search.rs#PublicSearchRequest",
-        "sha256": "1c105e14197c5e0a51efe6a446de20982e20821cbaba9dc726f52e9d78097c45"
-      },
+      "authority": {"kind": "SOURCE_OF_TRUTH", "source_ref": "../../../src/application/public_search.rs#PublicSearchRequest", "sha256": "a05571e3b59c1116063167931ed14e14627108ad20412ba07d53143c2b86ccfa"},
       "format": "PublicSearchRequest v1",
       "schema_ref": "../../../src/application/public_search.rs#PublicSearchRequest",
       "version": "1",
@@ -54,11 +39,7 @@
       "meaning": "Внутренний порядок кандидатов и разрешённые безопасные пути внутри ThinSearchCoordinator",
       "required": true,
       "producer": "application::thin_search",
-      "authority": {
-        "kind": "DERIVED",
-        "source_ref": "../../../src/application/thin_search.rs#ThinSearchCoordinator::search",
-        "sha256": "7c55cd35768d19beb11d17a9d25a4c0b1d32b74d04c590efc1582afa2a370be1"
-      },
+      "authority": {"kind": "DERIVED", "source_ref": "../../../src/application/thin_search.rs#ThinSearchCoordinator::search", "sha256": "8d90f3a70ce980581584d8efdab333923dc51abcb5927c5b7c9bbe6108e6e7c3"},
       "format": "ranked canonical candidates or PublicSearchError",
       "schema_ref": "../../../src/application/thin_search.rs#ThinSearchCoordinator::search",
       "version": "1",
@@ -72,7 +53,7 @@
   "outputs": [
     {
       "id": "OUT-PUBLIC-RESPONSE",
-      "meaning": "Безопасный публичный поисковый ответ до шести результатов",
+      "meaning": "Публичный поисковый ответ до пяти результатов, прошедших отбор по релевантности",
       "producer": "application::thin_search",
       "format": "PublicSearchResponse v1",
       "schema_ref": "../../../src/application/public_search.rs#PublicSearchResponse",
@@ -81,7 +62,7 @@
       "units": "bytes for serialized limit",
       "precision": "EXACT",
       "order": "ORDERED",
-      "cardinality": "0..6 results",
+      "cardinality": "0..5 results",
       "creation_condition": "Запрос и внутренний результат прошли полную проверку, а JSON не превышает 131072 байта",
       "lineage": ["TR-BUILD-PUBLIC-RESPONSE"]
     },
@@ -108,15 +89,12 @@
       "kind": "FILTER",
       "input_ids": ["IN-PUBLIC-REQUEST", "IN-RANKED-SEARCH"],
       "output_ids": ["OUT-PUBLIC-RESPONSE"],
-      "rule": "Применить явные фильтры, разрешить безопасные пути и вызвать PublicSearchResponse::from_ranked_results с итоговым порядком",
+      "rule": "Применить явные фильтры до отбора кандидатов, исключить оценки ниже проверенного порога релевантности, разрешить безопасные пути и ограничить общий ответ пятью фрагментами",
       "loss": "DECLARED",
-      "lost_data": ["модельные оценки", "исходные позиции кандидатов", "результаты после шестой позиции"],
-      "loss_justification": "Публичное обещание содержит только общий итоговый порядок до шести результатов",
+      "lost_data": ["модельные оценки", "исходные позиции кандидатов", "кандидаты ниже проверенного порога", "результаты после пятой позиции"],
+      "loss_justification": "Публичное обещание — до пяти отобранных фрагментов, включая ноль; порог проверяется отдельно и не является вероятностью правильного ответа",
       "loss_evidence_refs": [
-        {
-          "path": "../../../tests/dt4_public_search_contract.rs",
-          "sha256": "8618d17b0d4f3713befbf05e31635975a3ae1329eeab3c00ae6ed25c9fb8edcd"
-        }
+        {"path": "../../../tests/dt4_public_search_contract.rs", "sha256": "74edf288c2a8ee1cb0a3f0a6990143ed4f2696c8d63df126f7f1974d59aba858"}
       ]
     },
     {
@@ -130,10 +108,7 @@
       "lost_data": ["внутренняя причина", "служебные пути", "стек и соседние записи"],
       "loss_justification": "Диагностические сведения не входят в публичный договор и могут раскрыть локальное состояние",
       "loss_evidence_refs": [
-        {
-          "path": "../../../tests/dt4_public_search_contract.rs",
-          "sha256": "8618d17b0d4f3713befbf05e31635975a3ae1329eeab3c00ae6ed25c9fb8edcd"
-        }
+        {"path": "../../../tests/dt4_public_search_contract.rs", "sha256": "74edf288c2a8ee1cb0a3f0a6990143ed4f2696c8d63df126f7f1974d59aba858"}
       ]
     }
   ],
@@ -151,25 +126,96 @@
       "failures": ["Сериализация не должна раскрывать domain_cause"],
       "acceptance_refs": ["tests/dt4_public_search_contract.rs", "tests/dt4_mcp_thin_slice.rs"],
       "unblocks": ["BC-FS-MCP-STDIO"]
+    },
+    {
+      "id": "HO-PUBLIC-TO-CLI",
+      "from": "application::thin_search",
+      "to": "application::search_ui",
+      "through": [],
+      "surface": "src/application/public_search.rs#PublicSearchResponse",
+      "data_ids": ["OUT-PUBLIC-RESPONSE", "OUT-PUBLIC-ERROR"],
+      "preconditions": ["Результат создан публичным конструктором"],
+      "consumer_obligations": ["Не менять поля, порядок и смысл ошибок"],
+      "success": "Потребитель получает общий DTO или безопасный отказ",
+      "failures": ["Сериализация не должна раскрывать domain_cause"],
+      "acceptance_refs": ["tests/dt4_public_search_contract.rs", "tests/relevance_workspace.rs"],
+      "unblocks": ["Общий поиск рабочей области через публичную выдачу"]
+    },
+    {
+      "id": "HO-PUBLIC-TO-CONSOLE",
+      "from": "application::thin_search",
+      "to": "application::console",
+      "through": [],
+      "surface": "src/application/public_search.rs#PublicSearchResponse",
+      "data_ids": ["OUT-PUBLIC-RESPONSE", "OUT-PUBLIC-ERROR"],
+      "preconditions": ["Результат создан публичным конструктором"],
+      "consumer_obligations": ["Сохранить полный ответ для раскрытия; явно обозначить сокращённое превью; не менять порядок или смысл ошибок"],
+      "success": "Потребитель получает общий DTO или безопасный отказ",
+      "failures": ["Сериализация не должна раскрывать domain_cause"],
+      "acceptance_refs": ["tests/dt4_public_search_contract.rs", "tests/relevance_workspace.rs"],
+      "unblocks": ["Общий поиск рабочей области через публичную выдачу"]
     }
   ],
   "flow_edges": [
-    {"from": "machine-facing caller", "to": "application::thin_search", "data_ids": ["IN-PUBLIC-REQUEST"]},
-    {"from": "ranked candidates within application::thin_search", "to": "application::thin_search", "data_ids": ["IN-RANKED-SEARCH"]},
-    {"from": "application::thin_search", "to": "adapters::mcp", "data_ids": ["OUT-PUBLIC-RESPONSE"], "transformation_id": "TR-BUILD-PUBLIC-RESPONSE"},
-    {"from": "application::thin_search", "to": "adapters::mcp", "data_ids": ["OUT-PUBLIC-ERROR"], "transformation_id": "TR-BUILD-PUBLIC-ERROR"}
+    {
+      "from": "machine-facing caller",
+      "to": "application::thin_search",
+      "data_ids": ["IN-PUBLIC-REQUEST"]
+    },
+    {
+      "from": "ranked candidates within application::thin_search",
+      "to": "application::thin_search",
+      "data_ids": ["IN-RANKED-SEARCH"]
+    },
+    {
+      "from": "application::thin_search",
+      "to": "adapters::mcp",
+      "data_ids": ["OUT-PUBLIC-RESPONSE"],
+      "transformation_id": "TR-BUILD-PUBLIC-RESPONSE"
+    },
+    {
+      "from": "application::thin_search",
+      "to": "adapters::mcp",
+      "data_ids": ["OUT-PUBLIC-ERROR"],
+      "transformation_id": "TR-BUILD-PUBLIC-ERROR"
+    },
+    {
+      "from": "application::thin_search",
+      "to": "application::search_ui",
+      "data_ids": ["OUT-PUBLIC-RESPONSE"],
+      "transformation_id": "TR-BUILD-PUBLIC-RESPONSE"
+    },
+    {
+      "from": "application::thin_search",
+      "to": "application::search_ui",
+      "data_ids": ["OUT-PUBLIC-ERROR"],
+      "transformation_id": "TR-BUILD-PUBLIC-ERROR"
+    },
+    {
+      "from": "application::thin_search",
+      "to": "application::console",
+      "data_ids": ["OUT-PUBLIC-RESPONSE"],
+      "transformation_id": "TR-BUILD-PUBLIC-RESPONSE"
+    },
+    {
+      "from": "application::thin_search",
+      "to": "application::console",
+      "data_ids": ["OUT-PUBLIC-ERROR"],
+      "transformation_id": "TR-BUILD-PUBLIC-ERROR"
+    }
   ],
   "evidence": {
     "integration_decision": {
       "status": "REQUIRED",
-      "reason": "Публичный DTO физически передаётся действующему MCP-адаптеру; CLI/JSON остаётся целевым потребителем DT4-D",
-      "authority_ref": {"path": "BC-FS-PUBLIC-SEARCH.md", "sha256": "6975979180639f273d292f72a2b0c4e0358f75104d9cc1e29864d11f708593e9"}
+      "reason": "Общий ответ передаётся MCP, CLI/JSON и консоли; согласованность и отказ от слабой выдачи требуют сквозной проверки",
+      "authority_ref": {"path": "BC-FS-PUBLIC-SEARCH.md", "sha256": "55a1dfa4b8528d44d9e6a1704892c9d561e17ee3f8df5669d430228c5a73d895"}
     },
     "contract_tests": [
       {"path": "../../../tests/dt4_public_search_contract.rs", "status": "PLANNED"}
     ],
     "integration_tests": [
-      {"path": "../../../tests/dt4_mcp_thin_slice.rs", "status": "PLANNED"}
+      {"path": "../../../tests/dt4_mcp_thin_slice.rs", "status": "PLANNED"},
+      {"path": "../../../tests/relevance_workspace.rs", "status": "PLANNED"}
     ]
   },
   "blockers": []

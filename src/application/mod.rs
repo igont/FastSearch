@@ -12,7 +12,9 @@ mod model_provisioning;
 mod model_readiness;
 mod production;
 mod public_search;
+mod relevance;
 mod retrieval_projection;
+mod search_ui;
 mod thin_search;
 #[cfg(test)]
 mod unified_search;
@@ -49,6 +51,9 @@ pub use public_search::{
     DocumentStatus, MAX_PUBLIC_QUERY_CHARS, MAX_PUBLIC_RESULTS, MAX_SERIALIZED_RESPONSE_BYTES,
     ProjectScope, PublicSearchError, PublicSearchErrorCode, PublicSearchRequest,
     PublicSearchResponse, PublicSearchResult,
+};
+pub use search_ui::{
+    describe_search_error, execute_workspace_search, prepare_workspace_search_index,
 };
 pub use thin_search::{SEARCH_DEADLINE, ThinSearchAudit, ThinSearchCoordinator};
 pub use workspace::{

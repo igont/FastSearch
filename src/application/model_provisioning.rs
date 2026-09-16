@@ -210,6 +210,11 @@ pub fn prepare_production_model_set() -> Result<ModelSetCommandReport, FastSearc
 pub fn production_model_set_status() -> Result<ModelSetCommandReport, FastSearchError> {
     let started = Instant::now();
     let model_root = model_root()?;
+    if !model_root.join(super::MODEL_SET_READY_FILE).is_file() {
+        return Err(model_set_not_ready(readiness_error(
+            "production model set has not been prepared",
+        )));
+    }
     let snapshot = read_model_set_snapshot_with_artifacts(&model_root, |role| {
         verify_cached_artifacts(&model_root, role)
     })
@@ -904,6 +909,28 @@ fn runtime_environment_sha256(role: ProductionModelRole) -> String {
 
 fn model_root() -> Result<PathBuf, FastSearchError> {
     Ok(product_home()?.join("models").join("production"))
+}
+
+pub(super) fn production_role_cache_root(
+    role: ProductionModelRole,
+) -> Result<PathBuf, FastSearchError> {
+    Ok(model_root()?
+        .join("artifacts")
+        .join(role.slug())
+        .join("hub"))
+}
+
+pub(super) fn production_role_snapshot_root(
+    role: ProductionModelRole,
+) -> Result<PathBuf, FastSearchError> {
+    let descriptor = production_model_descriptor(role);
+    Ok(production_role_cache_root(role)?
+        .join(format!(
+            "models--{}",
+            descriptor.repository.replace('/', "--")
+        ))
+        .join("snapshots")
+        .join(descriptor.revision))
 }
 
 fn readiness_error(error: impl std::fmt::Display) -> FastSearchError {

@@ -235,7 +235,19 @@ fn assert_oracle(actual: &Value) -> Result<(), Box<dyn std::error::Error>> {
     let expected = oracle["results"]
         .as_array()
         .ok_or("oracle results missing")?;
-    assert_eq!(actual["count"], 6);
+    let cutoff: Value =
+        serde_json::from_str(include_str!("../tests/fixtures/relevance/evaluation.json")).unwrap();
+    let expected = expected
+        .iter()
+        .filter(|row| {
+            oracle["qwen_probabilities"][row["stable_id"].as_str().unwrap()]
+                .as_f64()
+                .unwrap()
+                >= cutoff["threshold"].as_f64().unwrap()
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    assert_eq!(actual["count"], expected.len());
     assert_eq!(actual_results.len(), expected.len());
     for (actual, expected) in actual_results.iter().zip(expected) {
         assert_eq!(actual["rank"], expected["rank"]);

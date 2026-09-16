@@ -13,7 +13,7 @@ mod tests {
     use crate::{
         application::{
             ProductionRuntime, PublicSearchRequest, ThinSearchCoordinator, WorkspaceStore,
-            embedding_model_cache_status,
+            production_model_set_status,
         },
         domain::EmbeddingModelId,
     };
@@ -44,8 +44,7 @@ mod tests {
             let runtime = ProductionRuntime::open(store.production_config())
                 .expect("production runtime opens");
             for model in MODELS {
-                let cache = embedding_model_cache_status(model).expect("model cache status");
-                assert!(cache.ready(), "{} is not ready", model.slug());
+                production_model_set_status().expect("production model set is ready");
                 let status = runtime.model_partition_status(model);
                 assert_eq!(status.state_generation(), 1);
                 assert_eq!(status.projection_generation(), Some(1));
@@ -109,7 +108,21 @@ mod tests {
             let public = serde_json::to_value(response).expect("public response");
             let actual_results = public["results"].as_array().expect("public results");
             let expected_results = oracle["results"].as_array().expect("oracle results");
-            assert_eq!(actual_results.len(), 6);
+            let cutoff: Value = serde_json::from_str(include_str!(
+                "../../tests/fixtures/relevance/evaluation.json"
+            ))
+            .unwrap();
+            let expected_results = expected_results
+                .iter()
+                .filter(|row| {
+                    oracle["qwen_probabilities"][row["stable_id"].as_str().unwrap()]
+                        .as_f64()
+                        .unwrap()
+                        >= cutoff["threshold"].as_f64().unwrap()
+                })
+                .take(5)
+                .collect::<Vec<_>>();
+            assert!(actual_results.len() <= 5);
             assert_eq!(actual_results.len(), expected_results.len());
             for (actual, expected) in actual_results.iter().zip(expected_results) {
                 assert_eq!(actual["rank"], expected["rank"]);
@@ -215,23 +228,14 @@ mod tests {
             let repository = model["repository"].as_str().expect("repository");
             let revision = model["revision"].as_str().expect("revision");
             let repository_dir = format!("models--{}", repository.replace('/', "--"));
-            let snapshot = if slug == "qwen3-reranker-0.6b" {
-                product_home.join("models").join(slug).join(revision)
-            } else if slug == "nomic-embed-text-v2-moe" {
-                product_home
-                    .join("models/huggingface/hub")
-                    .join(repository_dir)
-                    .join("snapshots")
-                    .join(revision)
-            } else {
-                product_home
-                    .join("models")
-                    .join(slug)
-                    .join("runtime")
-                    .join(repository_dir)
-                    .join("snapshots")
-                    .join(revision)
-            };
+            let snapshot = product_home
+                .join("models/production/artifacts")
+                .join(slug)
+                .join("hub")
+                .join(repository_dir)
+                .join("snapshots")
+                .join(revision);
+
             for asset in model["assets"].as_array().expect("model assets") {
                 let path = snapshot.join(asset["path"].as_str().expect("asset path"));
                 assert_eq!(

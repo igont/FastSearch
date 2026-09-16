@@ -1,8 +1,7 @@
-//! Thin DT4 application coordinator shared by the MCP adapter and acceptance probes.
+//! Workspace search coordinator shared by the console, CLI, MCP and acceptance probes.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
     path::{Path, PathBuf},
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
@@ -11,13 +10,13 @@ use std::{
 };
 
 use crate::{
-    adapters::qwen_reranker::{QWEN_REVISION, QwenReranker},
-    domain::{EmbeddingModelId, IndexFreshness},
+    adapters::qwen_reranker::QwenReranker,
+    domain::{EmbeddingModelId, IndexFreshness, ProductionModelRole},
 };
 
 use super::{
     ProductionRuntime, PublicSearchError, PublicSearchRequest, PublicSearchResponse,
-    PublicSearchResult, WorkspaceStore, embedding_model_cache_status,
+    PublicSearchResult, WorkspaceStore, production_model_set_status,
 };
 
 pub const EMBEDDING_CANDIDATES_PER_MODEL: usize = 5;
@@ -28,7 +27,7 @@ pub const MAX_WORKING_SET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const REQUIRED_MEMORY_RESERVE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const REQUIRED_FREE_MEMORY_BYTES: u64 = MAX_WORKING_SET_BYTES + REQUIRED_MEMORY_RESERVE_BYTES;
 
-const MODELS: [EmbeddingModelId; 3] = [
+pub(super) const MODELS: [EmbeddingModelId; 3] = [
     EmbeddingModelId::SnowflakeArcticEmbedLV2,
     EmbeddingModelId::MultilingualE5Large,
     EmbeddingModelId::NomicEmbedTextV2Moe,
@@ -37,6 +36,8 @@ const MODELS: [EmbeddingModelId; 3] = [
 /// Non-public acceptance facts. The MCP adapter never serializes this value.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ThinSearchAudit {
+    /// Maps the public rows to canonical identities for local navigation only.
+    pub result_ids: Vec<String>,
     pub candidates_by_model: BTreeMap<String, Vec<String>>,
     pub candidate_slots: usize,
     pub unique_candidates: usize,
@@ -55,7 +56,6 @@ pub struct ThinSearchAudit {
 
 pub struct ThinSearchCoordinator {
     workspace: WorkspaceStore,
-    runtime: Option<ProductionRuntime>,
     model_roots: Vec<(EmbeddingModelId, PathBuf)>,
     qwen_root: PathBuf,
     model_manifest: PathBuf,
@@ -69,31 +69,22 @@ impl ThinSearchCoordinator {
             ));
         }
         let workspace = WorkspaceStore::open(workspace_root).map_err(not_ready)?;
-        let local = workspace.local_root();
-        let state_ready = local.join("state.sqlite").is_file()
-            && local.join("index").join("cross").join("lexical").is_dir()
-            && MODELS.into_iter().all(|model| {
-                local
-                    .join("index")
-                    .join("vector")
-                    .join(model.slug())
-                    .join(super::model_cache::model_descriptor(model).revision)
-                    .is_dir()
-            });
-        let runtime = if state_ready {
-            Some(ProductionRuntime::open(workspace.production_config()).map_err(not_ready)?)
-        } else {
-            None
-        };
         let mut model_roots = Vec::new();
         for model in MODELS {
-            let status = embedding_model_cache_status(model).map_err(not_ready)?;
-            model_roots.push((model, status.root().to_path_buf()));
+            let role = ProductionModelRole::ALL
+                .into_iter()
+                .find(|role| role.embedding_model() == Some(model))
+                .ok_or_else(|| {
+                    PublicSearchError::not_ready("embedding role is not in the production set")
+                })?;
+            model_roots.push((
+                model,
+                super::model_provisioning::production_role_cache_root(role).map_err(not_ready)?,
+            ));
         }
         let (model_manifest, qwen_root) = qwen_catalog_paths()?;
         Ok(Self {
             workspace,
-            runtime,
             model_roots,
             qwen_root,
             model_manifest,
@@ -111,20 +102,37 @@ impl ThinSearchCoordinator {
         let free_physical_memory_before_bytes = ensure_memory_admission()?;
         ensure_active(cancelled)?;
         let query = request.to_search_query()?;
-        let runtime = self.runtime.as_ref().ok_or_else(|| {
-            PublicSearchError::not_ready("required workspace state and projections are not ready")
-        })?;
+        // Reopen the published state for every request, so an MCP process can
+        // recover after an explicit index update without retaining a stale reader.
+        self.workspace = WorkspaceStore::open(self.workspace.root()).map_err(not_ready)?;
+        let local = self.workspace.local_root();
+        if !local.join("state.sqlite").is_file()
+            || !local.join("index/cross/lexical").is_dir()
+            || MODELS.into_iter().any(|model| {
+                !local
+                    .join("index/vector")
+                    .join(model.slug())
+                    .join(super::model_cache::model_descriptor(model).revision)
+                    .is_dir()
+            })
+        {
+            return Err(PublicSearchError::not_ready(
+                "required workspace state and projections are not ready",
+            ));
+        }
+        let runtime =
+            ProductionRuntime::open(self.workspace.production_config()).map_err(not_ready)?;
+        let mut generation = None;
+        production_model_set_status().map_err(not_ready)?;
         for model in MODELS {
-            if !embedding_model_cache_status(model)
-                .map_err(not_ready)?
-                .ready()
-            {
-                return Err(PublicSearchError::not_ready(format!(
-                    "required model role {} is not ready",
-                    model.slug()
-                )));
+            let status = runtime.model_partition_status(model);
+            if generation.is_some_and(|value| value != status.state_generation()) {
+                return Err(PublicSearchError::stale_index(
+                    "model projections refer to different generations",
+                ));
             }
-            match runtime.model_partition_status(model).freshness() {
+            generation = Some(status.state_generation());
+            match status.freshness() {
                 IndexFreshness::Current => {}
                 IndexFreshness::Stale | IndexFreshness::Degraded => {
                     return Err(PublicSearchError::stale_index(format!(
@@ -174,7 +182,13 @@ impl ThinSearchCoordinator {
                 )));
             }
             let mut ids = Vec::new();
-            for hit in response.hits().iter().take(EMBEDDING_CANDIDATES_PER_MODEL) {
+            for hit in response.hits() {
+                if !request.admits(hit.record())? {
+                    continue;
+                }
+                if ids.len() == EMBEDDING_CANDIDATES_PER_MODEL {
+                    break;
+                }
                 let id = hit.record().id().as_str().to_owned();
                 ids.push(id.clone());
                 #[cfg(test)]
@@ -228,11 +242,24 @@ impl ThinSearchCoordinator {
                 .then_with(|| left.0.cmp(&right.0))
         });
 
+        for model in MODELS {
+            let status = runtime.model_partition_status(model);
+            if status.freshness() != IndexFreshness::Current
+                || Some(status.state_generation()) != generation
+            {
+                return Err(PublicSearchError::stale_index(
+                    "published generation changed during search",
+                ));
+            }
+        }
+        ensure_deadline(admitted_at)?;
         let roots = source_roots(&self.workspace);
         let mut public = Vec::new();
         let mut seen = BTreeSet::new();
-        for (_, _, record) in ranked {
-            if !request.admits(&record)? || !seen.insert(record.id().as_str().to_owned()) {
+        let unique_candidates = ranked.len();
+        let mut result_ids = Vec::new();
+        for (id, score, record) in ranked {
+            if !super::relevance::admits(score)? || !seen.insert(id.clone()) {
                 continue;
             }
             let path = absolute_source_path(&roots, &record)?;
@@ -241,14 +268,19 @@ impl ThinSearchCoordinator {
                 &record,
                 path,
             )?);
+            result_ids.push(id);
+            if public.len() == super::MAX_PUBLIC_RESULTS {
+                break;
+            }
         }
         let response = PublicSearchResponse::from_ranked_results(request, public)?;
         let serialized_response_bytes = response.serialize_bounded()?.len();
         let peak = monitor.peak();
         let audit = ThinSearchAudit {
+            result_ids,
             candidates_by_model,
             candidate_slots,
-            unique_candidates: seen.len(),
+            unique_candidates,
             embedding_adapters_released_before_qwen,
             elapsed_ms: admitted_at.elapsed().as_millis(),
             peak_observed_working_set_bytes: peak,
@@ -302,35 +334,11 @@ fn absolute_source_path(
 }
 
 fn qwen_catalog_paths() -> Result<(PathBuf, PathBuf), PublicSearchError> {
-    let product_home = match env::var_os("FASTSEARCH_HOME") {
-        Some(value) => PathBuf::from(value),
-        None => env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|root| root.join("FastSearch"))
-            .ok_or_else(|| {
-                PublicSearchError::not_ready("FastSearch product home is unavailable")
-            })?,
-    };
-    let manifest = product_home.join("models").join("model-manifest.json");
-    let qwen_root = if env::var_os("FASTSEARCH_HOME").is_some() {
-        product_home
-            .join("models")
-            .join("qwen3-reranker-0.6b")
-            .join(QWEN_REVISION)
-    } else {
-        env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|root| {
-                root.join(".cache")
-                    .join("huggingface")
-                    .join("hub")
-                    .join("models--Qwen--Qwen3-Reranker-0.6B")
-                    .join("snapshots")
-                    .join(QWEN_REVISION)
-            })
-            .ok_or_else(|| PublicSearchError::not_ready("Qwen cache root is unavailable"))?
-    };
-    Ok((manifest, qwen_root))
+    let root = super::model_provisioning::production_role_snapshot_root(
+        ProductionModelRole::Qwen3Reranker06B,
+    )
+    .map_err(not_ready)?;
+    Ok((root.join("model-manifest.json"), root))
 }
 
 fn ensure_active(cancelled: &AtomicBool) -> Result<(), PublicSearchError> {
@@ -480,12 +488,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn candidate_contract_is_three_times_five_with_six_public_results() {
+    fn candidate_contract_is_three_times_five_with_five_public_results() {
         assert_eq!(MODELS.len(), 3);
         assert_eq!(EMBEDDING_CANDIDATES_PER_MODEL, 5);
         assert_eq!(EMBEDDING_CANDIDATE_CAPACITY, 15);
         assert_eq!(EMBEDDING_PARALLELISM, 2);
-        assert_eq!(super::super::MAX_PUBLIC_RESULTS, 6);
+        assert_eq!(super::super::MAX_PUBLIC_RESULTS, 5);
         assert_eq!(
             REQUIRED_FREE_MEMORY_BYTES,
             MAX_WORKING_SET_BYTES + REQUIRED_MEMORY_RESERVE_BYTES

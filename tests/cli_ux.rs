@@ -465,7 +465,10 @@ fn model_catalog_accepts_plain_number_as_the_next_selection() {
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
     assert!(text.contains("МОДЕЛЬ: Arctic Embed L v2"), "{text}");
-    assert!(text.contains("Модель: Arctic Embed L v2"), "{text}");
+    assert!(
+        text.contains("Модель для экспериментов: Arctic Embed L v2"),
+        "{text}"
+    );
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
     assert!(profile.contains("arctic-embed-l-v2"), "{profile}");
 }
@@ -482,8 +485,8 @@ fn model_command_accepts_a_number_without_opening_the_catalog_first() {
     assert!(text.contains("МОДЕЛЬ: Arctic Embed L v2"), "{text}");
     assert_eq!(
         text.matches("МОДЕЛЬ ПОИСКА").count(),
-        2,
-        "workspace open and one model selection must render one catalog each: {text}"
+        1,
+        "only explicit model selection renders the experimental catalog: {text}"
     );
     let profile = fs::read_to_string(fixture.root().join(".fastsearch/workspace.toml")).unwrap();
     assert!(profile.contains("arctic-embed-l-v2"), "{profile}");
@@ -492,8 +495,10 @@ fn model_command_accepts_a_number_without_opening_the_catalog_first() {
 #[test]
 fn index_status_and_inspection_offer_actions_and_hide_internal_windows_prefixes() {
     let fixture = Fixture::new();
-    let input = create_workspace_then("/index update\n/index\n/index inspect\n/exit\n");
-    let output = run_workspace_input(&fixture, &input, true);
+    let created = run_workspace_input(&fixture, &create_workspace_then("/exit\n"), true);
+    assert!(created.status.success());
+    publish_shared_index(&fixture);
+    let output = run_workspace_input(&fixture, "/index\n/index inspect\n/exit\n", true);
 
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
@@ -501,6 +506,13 @@ fn index_status_and_inspection_offer_actions_and_hide_internal_windows_prefixes(
         .split_once("СОСТОЯНИЕ ИНДЕКСА")
         .map(|(_, tail)| tail)
         .expect("index status is rendered");
+    for model in ["Arctic", "E5 Large", "Nomic"] {
+        assert!(after_status.contains(model), "{text}");
+    }
+    assert!(
+        !after_status.contains("local E5 root is not configured"),
+        "{text}"
+    );
     for action in ["/index update", "/index rebuild", "/index inspect"] {
         assert!(after_status.contains(action), "missing {action}: {text}");
     }
@@ -515,32 +527,26 @@ fn index_status_and_inspection_offer_actions_and_hide_internal_windows_prefixes(
 }
 
 #[test]
-fn index_rebuild_starts_without_a_confirmation_preview() {
+fn index_rebuild_requires_prepared_models_without_a_confirmation_prompt() {
     let fixture = Fixture::new();
     let input = create_workspace_then("/index rebuild\n/exit\n");
     let output = run_workspace_input(&fixture, &input, true);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
+    assert!(text.contains("MODELS_NOT_READY"), "{text}");
+    assert!(text.contains("fastsearch models prepare"), "{text}");
     assert!(!text.contains("Подтверждение"), "{text}");
-    assert!(!text.contains("Введите да — выполнить действие"), "{text}");
-    assert!(fixture.root().join(".fastsearch/workspace.toml").is_file());
-}
-
-#[test]
-fn index_rebuild_shows_progress_for_the_active_model() {
-    let fixture = Fixture::new();
-    let input = create_workspace_then("/index rebuild\n/exit\n");
-    let output = run_workspace_input(&fixture, &input, true);
-    assert!(output.status.success(), "{}", stderr(&output));
-    let text = stdout(&output);
-    assert!(text.contains("ПЕРЕСТРОЕНИЕ ИНДЕКСА — ГОТОВО"), "{text}");
-    assert!(text.contains("Готово: 1/1"), "{text}");
-    assert!(
-        text.contains("Индекс рабочей области · E5 Small · CPU"),
-        "{text}"
-    );
-    assert!(!text.contains("этапов"), "{text}");
+    let store = fastsearch::application::WorkspaceStore::open(fixture.root()).unwrap();
+    let runtime =
+        fastsearch::application::ProductionRuntime::open(store.production_config()).unwrap();
+    for role in fastsearch::domain::ProductionModelRole::ALL {
+        if let Some(model) = role.embedding_model() {
+            assert_ne!(
+                runtime.model_partition_status(model).freshness(),
+                fastsearch::domain::IndexFreshness::Current
+            );
+        }
+    }
 }
 
 #[test]
@@ -594,10 +600,7 @@ fn model_device_assignment_is_applied_and_survives_a_restart() {
         first_text.contains("назначено GPU · DirectML"),
         "{first_text}"
     );
-    assert!(
-        first_text.contains("Индекс рабочей области · E5 Small · GPU · DirectML"),
-        "{first_text}"
-    );
+    assert!(first_text.contains("MODELS_NOT_READY"), "{first_text}");
     let preferences =
         fs::read_to_string(fixture.catalog_home.join("device-preferences.toml")).unwrap();
     assert!(
@@ -627,33 +630,6 @@ fn result_navigation_before_search_has_actionable_error_and_chat_recovers() {
 }
 
 #[test]
-fn search_results_can_be_repeated_and_opened_by_stable_number() {
-    let fixture = Fixture::new();
-    let input = create_workspace_then("/index update\nFastSearch\n/repeat\n/open 1\n/exit\n");
-    let output = run_workspace_input(&fixture, &input, true);
-    assert!(output.status.success(), "{}", stderr(&output));
-    let text = stdout(&output);
-    assert!(
-        text.matches("РЕЗУЛЬТАТЫ").count() >= 2,
-        "repeat did not render the stored search page: {text}"
-    );
-    assert!(text.contains("Страница 1 из 1"), "{text}");
-    assert!(
-        text.contains("ЗАПИСЬ"),
-        "open did not render a record: {text}"
-    );
-    assert!(text.contains("КОНТЕКСТ ПОИСКА"), "{text}");
-    assert!(text.contains("№  ТОЧН"), "{text}");
-    assert!(text.contains("1  100%"), "{text}");
-    assert!(text.contains("guide.md"), "{text}");
-    assert!(text.contains("Удобный интерактивный поиск."), "{text}");
-    assert!(
-        text.contains("1  100%  guide.md\n           Удобный интерактивный поиск."),
-        "result card must keep source and excerpt aligned without labels: {text}"
-    );
-}
-
-#[test]
 fn bare_console_text_is_a_balanced_search_query() {
     let fixture = Fixture::new();
     let input =
@@ -664,7 +640,7 @@ fn bare_console_text_is_a_balanced_search_query() {
     let text = stdout(&output);
     assert!(!text.contains("UNKNOWN_COMMAND"), "{text}");
     assert!(text.contains("ПОИСК — ВЫПОЛНЯЕТСЯ"), "{text}");
-    assert!(text.contains("НИЧЕГО НЕ НАЙДЕНО"), "{text}");
+    assert!(text.contains("SEARCH_UNAVAILABLE"), "{text}");
 }
 
 #[test]
@@ -680,7 +656,12 @@ fn interactive_search_treats_ranking_mode_words_as_query_text() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Запрос: «current»"), "{text}");
+    assert!(
+        text.contains("current")
+            && !text.contains("UNKNOWN_COMMAND")
+            && text.contains("SEARCH_UNAVAILABLE"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -774,7 +755,7 @@ fn one_contour_workspace_does_not_require_the_other_contour() {
         text.contains("Источники: документация · 1 корней"),
         "{text}"
     );
-    assert!(text.contains("РЕЗУЛЬТАТЫ"), "{text}");
+    assert!(text.contains("SEARCH_UNAVAILABLE"), "{text}");
     assert!(!text.contains("Папка исходного кода"), "{text}");
 }
 
@@ -801,7 +782,7 @@ fn opening_a_workspace_never_updates_the_index_implicitly() {
 }
 
 #[test]
-fn current_workspace_shows_the_primary_step_and_vertical_navigation() {
+fn shared_index_without_model_projections_does_not_claim_search_is_ready() {
     let fixture = Fixture::new();
     let indexed = run_workspace_input(
         &fixture,
@@ -810,14 +791,14 @@ fn current_workspace_shows_the_primary_step_and_vertical_navigation() {
     );
     assert!(indexed.status.success(), "{}", stderr(&indexed));
 
+    publish_shared_index(&fixture);
     let output = run_workspace_input(&fixture, "/exit\n", true);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Индекс: актуален"), "{text}");
+    assert!(text.contains("Индекс: устарел"), "{text}");
     for action in [
-        "<текст запроса>",
+        "/index update",
         "/model",
-        "/model <номер|slug>",
         "/compare",
         "/index",
         "/sources",
@@ -829,7 +810,7 @@ fn current_workspace_shows_the_primary_step_and_vertical_navigation() {
 }
 
 #[test]
-fn stale_workspace_rejects_bare_search_before_starting_search_progress() {
+fn stale_workspace_rejects_bare_search_without_fake_results() {
     let fixture = Fixture::new();
     let output = run_workspace_input(
         &fixture,
@@ -838,9 +819,9 @@ fn stale_workspace_rejects_bare_search_before_starting_search_progress() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("SEARCH_NOT_READY"), "{text}");
-    assert!(text.contains("индекс требует обновления"), "{text}");
-    assert!(!text.contains("ПОИСК — ВЫПОЛНЯЕТСЯ"), "{text}");
+    assert!(text.contains("SEARCH_UNAVAILABLE"), "{text}");
+    assert!(text.contains("/index update"), "{text}");
+    assert!(!text.contains("РЕЗУЛЬТАТЫ ПОИСКА"), "{text}");
 }
 
 #[test]
@@ -890,4 +871,11 @@ fn redirected_output_and_no_color_never_emit_ansi() {
     assert!(onboarding.status.success());
     assert_no_ansi(&stdout(&onboarding));
     assert_no_ansi(&stderr(&onboarding));
+}
+
+fn publish_shared_index(fixture: &Fixture) {
+    let store = fastsearch::application::WorkspaceStore::open(fixture.root()).unwrap();
+    let mut runtime =
+        fastsearch::application::ProductionRuntime::open(store.production_config()).unwrap();
+    runtime.index().unwrap();
 }

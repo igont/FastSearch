@@ -38,6 +38,23 @@ fn main() -> ExitCode {
         return run_direct_inspection(&arguments[2..]);
     }
     let (arguments, json) = parse_global_format(arguments);
+    if let Some(result) = workspace_command(&arguments, json) {
+        return match result {
+            Ok(output) => emit_stdout(&output),
+            Err(error) => {
+                if json {
+                    emit_stderr(
+                        &serde_json::to_string(&serde_json::json!({"error": error}))
+                            .expect("public error is serializable"),
+                    );
+                } else {
+                    let (message, hint) = fastsearch::application::describe_search_error(&error);
+                    emit_stderr(&format!("{message}\n{hint}"));
+                }
+                ExitCode::from(1)
+            }
+        };
+    }
     let format = if json {
         OutputFormat::Json
     } else {
@@ -64,6 +81,72 @@ fn main() -> ExitCode {
             }
             ExitCode::from(error.exit_code())
         }
+    }
+}
+
+fn workspace_command(
+    arguments: &[String],
+    json: bool,
+) -> Option<Result<String, fastsearch::application::PublicSearchError>> {
+    use fastsearch::application::{
+        PublicSearchError, PublicSearchRequest, execute_workspace_search,
+        prepare_workspace_search_index,
+    };
+    match arguments {
+        [command, action, flag, root]
+            if command == "index"
+                && flag == "--workspace"
+                && matches!(action.as_str(), "update" | "rebuild") =>
+        {
+            Some(
+                prepare_workspace_search_index(std::path::Path::new(root), action == "rebuild")
+                    .map(|()| {
+                        if json {
+                            "{\"ready\":true}".to_owned()
+                        } else {
+                            "Индекс общего поиска готов: три поисковые модели.".to_owned()
+                        }
+                    }),
+            )
+        }
+        [command, flag, root, query, filters @ ..]
+            if command == "search" && flag == "--workspace" =>
+        {
+            let result = (|| {
+                let mut scope = None;
+                let mut status = None;
+                for pair in filters.chunks(2) {
+                    match pair {
+                        [flag, value] if flag == "--project-scope" && scope.is_none() => {
+                            scope = Some(value.as_str())
+                        }
+                        [flag, value] if flag == "--document-status" && status.is_none() => {
+                            status = Some(value.as_str())
+                        }
+                        _ => {
+                            return Err(PublicSearchError::invalid_request(
+                                "unknown, repeated or incomplete search option",
+                            ));
+                        }
+                    }
+                }
+                let request = PublicSearchRequest::from_wire_values(query, scope, status)?;
+                execute_workspace_search(std::path::Path::new(root), &request, json)
+            })();
+            Some(result)
+        }
+        [command, query] if command == "search" && !query.starts_with("--") => Some((|| {
+            let root = std::env::current_dir()
+                .map_err(|error| PublicSearchError::not_ready(error.to_string()))?;
+            let request = PublicSearchRequest::new(query, None, None)?;
+            execute_workspace_search(&root, &request, json)
+        })()),
+        _ if arguments.iter().any(|argument| argument == "--workspace") => {
+            Some(Err(PublicSearchError::invalid_request(
+                "expected search --workspace <root> <query> or index update --workspace <root>",
+            )))
+        }
+        _ => None,
     }
 }
 

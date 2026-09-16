@@ -1,0 +1,201 @@
+{
+  "cases_sha256": "bcbc774327638027ba38b33f47f094bac2c38fb3650add04fb3ecdba8651732a",
+  "instruction": "Given a web search query, retrieve relevant passages that answer the query",
+  "max_tokens": 8192,
+  "model_revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+  "schema": 1,
+  "scores": [
+    {
+      "id": "train-1-1",
+      "score": 0.9994372725486755
+    },
+    {
+      "id": "train-1-2",
+      "score": 6.307616786216386e-6
+    },
+    {
+      "id": "train-1-3",
+      "score": 0.807563841342926
+    },
+    {
+      "id": "train-2-1",
+      "score": 0.999431312084198
+    },
+    {
+      "id": "train-2-2",
+      "score": 0.0008221124880947173
+    },
+    {
+      "id": "train-2-3",
+      "score": 0.0015858625993132591
+    },
+    {
+      "id": "train-3-1",
+      "score": 0.9684203267097473
+    },
+    {
+      "id": "train-3-2",
+      "score": 0.13049131631851196
+    },
+    {
+      "id": "train-3-3",
+      "score": 0.0027826603036373854
+    },
+    {
+      "id": "train-4-1",
+      "score": 0.9991990923881531
+    },
+    {
+      "id": "train-4-2",
+      "score": 0.00003164161535096355
+    },
+    {
+      "id": "train-4-3",
+      "score": 7.2143598117691e-6
+    },
+    {
+      "id": "train-5-1",
+      "score": 0.999699592590332
+    },
+    {
+      "id": "train-5-2",
+      "score": 0.08780238777399063
+    },
+    {
+      "id": "train-5-3",
+      "score": 0.0003301917458884418
+    },
+    {
+      "id": "train-6-1",
+      "score": 0.9967021346092224
+    },
+    {
+      "id": "train-6-2",
+      "score": 0.0575539730489254
+    },
+    {
+      "id": "train-6-3",
+      "score": 0.0008368167909793556
+    },
+    {
+      "id": "train-absent-1-1",
+      "score": 0.11632852256298065
+    },
+    {
+      "id": "train-absent-1-2",
+      "score": 0.03729643672704697
+    },
+    {
+      "id": "train-absent-1-3",
+      "score": 9.396966561325826e-6
+    },
+    {
+      "id": "train-absent-2-1",
+      "score": 8.422385917583597e-7
+    },
+    {
+      "id": "train-absent-2-2",
+      "score": 0.0016785762272775173
+    },
+    {
+      "id": "train-absent-2-3",
+      "score": 8.234650522354059e-6
+    },
+    {
+      "id": "validation-1-1",
+      "score": 0.9958716034889221
+    },
+    {
+      "id": "validation-1-2",
+      "score": 0.1388114094734192
+    },
+    {
+      "id": "validation-1-3",
+      "score": 0.0005915126530453563
+    },
+    {
+      "id": "validation-2-1",
+      "score": 0.999853253364563
+    },
+    {
+      "id": "validation-2-2",
+      "score": 0.000015357474694610573
+    },
+    {
+      "id": "validation-2-3",
+      "score": 0.000012455534488253761
+    },
+    {
+      "id": "validation-3-1",
+      "score": 0.9998082518577576
+    },
+    {
+      "id": "validation-3-2",
+      "score": 0.000048342320951633155
+    },
+    {
+      "id": "validation-3-3",
+      "score": 0.010881917551159859
+    },
+    {
+      "id": "validation-4-1",
+      "score": 0.9997871518135071
+    },
+    {
+      "id": "validation-4-2",
+      "score": 0.8436083197593689
+    },
+    {
+      "id": "validation-4-3",
+      "score": 0.00010562458919594064
+    },
+    {
+      "id": "validation-5-1",
+      "score": 0.9999089241027832
+    },
+    {
+      "id": "validation-5-2",
+      "score": 0.00006166224920889363
+    },
+    {
+      "id": "validation-5-3",
+      "score": 0.0007781445747241378
+    },
+    {
+      "id": "validation-6-1",
+      "score": 0.9999672174453735
+    },
+    {
+      "id": "validation-6-2",
+      "score": 0.000021588193703792058
+    },
+    {
+      "id": "validation-6-3",
+      "score": 0.000020839692297158763
+    },
+    {
+      "id": "validation-absent-1-1",
+      "score": 3.3461349175922805e-6
+    },
+    {
+      "id": "validation-absent-1-2",
+      "score": 3.1178349217952928e-6
+    },
+    {
+      "id": "validation-absent-1-3",
+      "score": 0.00007949594873934984
+    },
+    {
+      "id": "validation-absent-2-1",
+      "score": 2.2017190985934576e-6
+    },
+    {
+      "id": "validation-absent-2-2",
+      "score": 0.000013761229638475925
+    },
+    {
+      "id": "validation-absent-2-3",
+      "score": 6.200258212629706e-6
+    }
+  ]
+}

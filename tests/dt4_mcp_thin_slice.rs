@@ -116,7 +116,7 @@ async fn mcp_search_crosses_three_projections_and_qwen() -> Result<(), Box<dyn s
             "models": run.revisions,
             "corpus_generation": 1,
             "candidate_slots": 15,
-            "public_results": 6,
+            "public_results": public["count"],
             "elapsed_ms": elapsed.as_millis(),
             "serialized_response_bytes": serialized_response_bytes,
             "peak_working_set_bytes": peak_working_set_bytes,
@@ -498,10 +498,6 @@ fn verify_fixture(root: &Path, oracle: &Value) -> Result<(), Box<dyn std::error:
 
 fn verify_model_cache(fixture: &Path, home: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let manifest: Value = serde_json::from_slice(&fs::read(fixture.join("model-manifest.json"))?)?;
-    assert_eq!(
-        sha256(&home.join("models/model-manifest.json"))?,
-        sha256(&fixture.join("model-manifest.json"))?
-    );
     for model in manifest["models"].as_array().ok_or("models")? {
         let slug = model["slug"].as_str().ok_or("slug")?;
         let repo = format!(
@@ -512,21 +508,21 @@ fn verify_model_cache(fixture: &Path, home: &Path) -> Result<(), Box<dyn std::er
                 .replace('/', "--")
         );
         let revision = model["revision"].as_str().ok_or("revision")?;
-        let snapshot = if slug == "qwen3-reranker-0.6b" {
-            home.join("models").join(slug).join(revision)
-        } else if slug == "nomic-embed-text-v2-moe" {
-            home.join("models/huggingface/hub")
-                .join(repo)
-                .join("snapshots")
-                .join(revision)
-        } else {
-            home.join("models")
-                .join(slug)
-                .join("runtime")
-                .join(repo)
-                .join("snapshots")
-                .join(revision)
-        };
+        let snapshot = home
+            .join("models/production/artifacts")
+            .join(slug)
+            .join("hub")
+            .join(repo)
+            .join("snapshots")
+            .join(revision);
+
+        if slug == "qwen3-reranker-0.6b" {
+            assert_eq!(
+                sha256(&snapshot.join("model-manifest.json"))?,
+                sha256(&fixture.join("model-manifest.json"))?
+            );
+        }
+
         for asset in model["assets"].as_array().ok_or("assets")? {
             let path = snapshot.join(asset["path"].as_str().ok_or("asset path")?);
             assert_eq!(
@@ -723,7 +719,19 @@ fn control_plane_windows_are_bounded_without_shortening_heavy_search() {
 fn assert_public_oracle(actual: &Value, oracle: &Value) -> Result<(), Box<dyn std::error::Error>> {
     let actual = actual["results"].as_array().ok_or("actual results")?;
     let expected = oracle["results"].as_array().ok_or("oracle results")?;
-    assert_eq!(actual.len(), 6);
+    let cutoff: Value =
+        serde_json::from_str(include_str!("../tests/fixtures/relevance/evaluation.json")).unwrap();
+    let expected = expected
+        .iter()
+        .filter(|row| {
+            oracle["qwen_probabilities"][row["stable_id"].as_str().unwrap()]
+                .as_f64()
+                .unwrap()
+                >= cutoff["threshold"].as_f64().unwrap()
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), expected.len());
     for (actual, expected) in actual.iter().zip(expected) {
         assert_eq!(actual["rank"], expected["rank"]);
         assert_eq!(actual["title"], expected["title"]);

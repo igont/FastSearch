@@ -200,22 +200,22 @@ fn internal_response_maps_to_exact_public_fields_filters_and_sequential_ranks() 
 }
 
 #[test]
-fn response_returns_only_first_six_and_reassigns_ranks() {
+fn response_returns_only_first_five_and_reassigns_ranks() {
     let response = PublicSearchResponse::from_ranked_results(
         &request(),
         (0..8).map(|index| result(99, &index.to_string(), "content")),
     )
     .unwrap();
-    assert_eq!(response.count(), 6);
+    assert_eq!(response.count(), 5);
     assert_eq!(
         response
             .results()
             .iter()
             .map(PublicSearchResult::rank)
             .collect::<Vec<_>>(),
-        [1, 2, 3, 4, 5, 6]
+        [1, 2, 3, 4, 5]
     );
-    assert_eq!(response.results()[5].title(), "Title 5");
+    assert_eq!(response.results()[4].title(), "Title 4");
 }
 
 #[test]

@@ -758,7 +758,6 @@ pub struct ProductionRuntime {
     vector_configured: bool,
     workspace_layout: bool,
     embedding_model: EmbeddingModelId,
-    execution_device: ExecutionDevice,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -783,12 +782,22 @@ pub(super) enum IndexingWorkStage {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct IndexingProgress {
+    pub(super) sources: Option<IndexingSources>,
     pub(super) completed: u64,
     pub(super) total: u64,
     pub(super) stage: IndexingStage,
     pub(super) work_completed: Option<u64>,
     pub(super) work_total: Option<u64>,
     pub(super) work_stage: Option<IndexingWorkStage>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct IndexingSources {
+    pub(super) total: usize,
+    pub(super) added: usize,
+    pub(super) changed: usize,
+    pub(super) unchanged: usize,
+    pub(super) deleted: usize,
 }
 
 impl ModelPartitionMetrics {
@@ -833,6 +842,7 @@ impl IndexingCoordinator<'_> {
         let vector_enabled = include_active_vector && self.vector_configured;
         let total = if vector_enabled { 4 } else { 3 };
         progress(IndexingProgress {
+            sources: None,
             completed: 0,
             total,
             stage: IndexingStage::Sources,
@@ -872,7 +882,30 @@ impl IndexingCoordinator<'_> {
             );
             snapshots.extend(source_snapshots);
         }
+        let added = snapshots
+            .iter()
+            .filter(|snapshot| !known_hashes.contains_key(&snapshot.storage_key()))
+            .count();
+        let changed = snapshots
+            .iter()
+            .filter(|snapshot| {
+                known_hashes
+                    .get(&snapshot.storage_key())
+                    .is_some_and(|hash| hash != snapshot.file_hash().as_str())
+            })
+            .count();
+        let source_counts = IndexingSources {
+            total: seen_source_keys.len(),
+            added,
+            changed,
+            unchanged: seen_source_keys.len().saturating_sub(added + changed),
+            deleted: known_hashes
+                .keys()
+                .filter(|key| !seen_source_keys.contains(*key))
+                .count(),
+        };
         progress(IndexingProgress {
+            sources: Some(source_counts),
             completed: 1,
             total,
             stage: IndexingStage::State,
@@ -886,6 +919,7 @@ impl IndexingCoordinator<'_> {
         let records = self.state.all_records()?;
         let projected = project_records(&records, self.embedding_model)?;
         progress(IndexingProgress {
+            sources: None,
             completed: 2,
             total,
             stage: IndexingStage::Lexical,
@@ -914,6 +948,7 @@ impl IndexingCoordinator<'_> {
         };
         if vector_enabled {
             progress(IndexingProgress {
+                sources: None,
                 completed: 3,
                 total,
                 stage: IndexingStage::Vector,
@@ -937,6 +972,7 @@ impl IndexingCoordinator<'_> {
                         VectorBuildProgress::Saving => (None, None, IndexingWorkStage::Saving),
                     };
                     progress(IndexingProgress {
+                        sources: None,
                         completed: 3,
                         total,
                         stage: IndexingStage::Vector,
@@ -1201,18 +1237,7 @@ impl ProductionRuntime {
             vector_configured,
             workspace_layout,
             embedding_model,
-            execution_device,
         })
-    }
-
-    #[must_use]
-    pub(super) const fn embedding_model(&self) -> EmbeddingModelId {
-        self.embedding_model
-    }
-
-    #[must_use]
-    pub(super) const fn execution_device(&self) -> ExecutionDevice {
-        self.execution_device
     }
 
     pub fn index(&mut self) -> Result<LifecycleStatus, FastSearchError> {

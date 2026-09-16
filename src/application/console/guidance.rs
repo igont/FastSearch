@@ -1,4 +1,4 @@
-use terminal_dialogue::{ActionItem, NextStep, UserErrorDocument};
+use terminal_dialogue::{ActionItem, NextStep};
 
 use crate::domain::{EmbeddingModelId, IndexFreshness};
 
@@ -106,32 +106,6 @@ pub(super) fn workspace(freshness: Option<IndexFreshness>) -> NextStep {
     }
 }
 
-pub(super) fn search_unavailable(freshness: IndexFreshness) -> Option<UserErrorDocument> {
-    match freshness {
-        IndexFreshness::Stale => Some(
-            UserErrorDocument::new("Поиск пока недоступен: индекс требует обновления.")
-                .with_code("SEARCH_NOT_READY")
-                .with_hint("Исходные документы и код при актуализации не изменяются.")
-                .with_action(ActionItem::new("/index update", "актуализировать индекс")),
-        ),
-        IndexFreshness::Degraded => Some(
-            UserErrorDocument::new("Поиск недоступен: индекс находится в состоянии ошибки.")
-                .with_code("SEARCH_NOT_READY")
-                .with_hint("Сначала проверьте состояние, затем восстановите индекс.")
-                .with_action(ActionItem::new("/status", "посмотреть подробности"))
-                .with_action(ActionItem::new("/index rebuild", "восстановить индекс")),
-        ),
-        IndexFreshness::NotConfigured => Some(
-            UserErrorDocument::new("Поиск недоступен: индекс ещё не настроен.")
-                .with_code("SEARCH_NOT_READY")
-                .with_hint("Сначала подключите источники, затем подготовьте индекс.")
-                .with_action(ActionItem::new("/sources set", "подключить источники"))
-                .with_action(ActionItem::new("/index update", "подготовить индекс")),
-        ),
-        IndexFreshness::Current => None,
-    }
-}
-
 pub(super) fn sources() -> NextStep {
     NextStep::instruction("Это справочный экран; отдельный режим не открыт.")
         .with_action(ActionItem::new(
@@ -189,6 +163,4 @@ pub(super) fn search_results() -> NextStep {
     NextStep::instruction("Введите новый запрос обычным текстом или выберите действие:")
         .with_action(ActionItem::new("/open <номер>", "открыть результат"))
         .with_action(ActionItem::new("/related <номер>", "показать связи"))
-        .with_action(ActionItem::new("/next", "следующая страница"))
-        .with_action(ActionItem::new("/prev", "предыдущая страница"))
 }
